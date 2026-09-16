@@ -4,19 +4,34 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
+from pathlib import Path
 
+import httpx
 import polars as pl
 import pytest
 
+from costco_gas.capture import run_capture
 from costco_gas.config import load_config
+from costco_gas.http import Client
 from costco_gas.rebuild import rebuild
 from costco_gas.rollup import read_month_manifest
-from costco_gas.schema import read_rows_csv_gz
+from costco_gas.schema import (
+    FX_SCHEMA,
+    FX_SORT,
+    STATION_SCHEMA,
+    STATION_SORT,
+    read_rows_csv_gz,
+    write_csv,
+)
 from costco_gas.store import open_store
 from helpers_rebuild import (
+    REPO_ROOT,
+    au_body,
     checkout_with_config,
     drop_au_e10,
     make_bundle,
+    previous_fx,
+    previous_stations,
     restore_config,
     seed_month,
 )
@@ -331,3 +346,105 @@ def test_rebuild_interrupted_mid_month_lets_close_periods_close_cleanly_after_re
 
     assert close_result.closed_months == ["2026-09"]
     assert close_result.blocked_months == []
+
+
+# --------------------------------------------------------------- producer/consumer
+
+CAPTURE_NOW = datetime(2026, 9, 1, 18, 17, 40, tzinfo=UTC)
+CAPTURE_ID = "2026-09-01T1817Z"
+FX_BODY = (REPO_ROOT / "tests" / "fixtures" / "fx" / "frankfurter_v2.json").read_bytes()
+
+
+def _capture_transport():
+    """Serve the AU stores fixture and the Frankfurter rates; 404 everything else."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        host = request.url.host
+        if host == "api.frankfurter.dev":
+            return httpx.Response(
+                200, content=FX_BODY, headers={"Content-Type": "application/json"}
+            )
+        if host == "www.costco.com.au":
+            return httpx.Response(
+                200, content=au_body(), headers={"Content-Type": "application/json"}
+            )
+        return httpx.Response(404, content=b"{}")
+
+    return httpx.MockTransport(handler)
+
+
+def _seed_current_previous_state(store, work: Path, capture_id: str) -> None:
+    """`current/stations.csv` and `current/fx.csv`, written the way publish writes them."""
+    store.ensure_release("current", "current", "", False, "true")
+    work.mkdir(parents=True, exist_ok=True)
+    stations = work / "stations.csv"
+    write_csv(previous_stations(capture_id), stations, schema=STATION_SCHEMA, sort_by=STATION_SORT)
+    store.upload_new("current", stations, "stations.csv")
+    fx = work / "fx.csv"
+    write_csv(previous_fx(capture_id), fx, schema=FX_SCHEMA, sort_by=FX_SORT)
+    store.upload_new("current", fx, "fx.csv")
+
+
+@pytest.mark.parametrize("with_previous_state", [True, False])
+def test_rebuild_reads_a_bundle_written_by_the_real_capture_path(
+    tmp_path, monkeypatch, with_previous_state
+):
+    """§8.7 end to end: `capture._write_bundle` is the producer, `rebuild` the consumer.
+
+    Every other test here hands `rebuild` a bundle the helpers built. This one
+    runs `run_capture` for real, takes the `bundle.tar.gz` it wrote, and rebuilds
+    from that -- the only shape of test in which a format break between the two
+    shows up at all.
+
+    Both previous-state cases have to round-trip. Without a readable `current`
+    -- the very first capture -- `ctx.previous_stations` is a frame with no
+    columns at all, and `write_csv` turns that into a bare newline: one byte, so
+    a `st_size == 0` guard does not see it as empty and the reader gets handed a
+    file with no header to match its schema against.
+    """
+    monkeypatch.setenv("GITHUB_SHA", "sha-round-trip")
+    monkeypatch.delenv("GITHUB_RUN_ID", raising=False)
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    checkout = checkout_with_config(tmp_path)
+    (checkout / "status").mkdir(exist_ok=True)
+    monkeypatch.chdir(checkout)
+    store = open_store(f"local:{tmp_path / 'releases'}")
+    if with_previous_state:
+        _seed_current_previous_state(store, tmp_path / "seed-current", CAPTURE_ID)
+    cfg = load_config(checkout)
+
+    result = run_capture(
+        cfg,
+        store,
+        tmp_path / "out",
+        countries=["AU"],
+        force_fallback=set(),
+        now=CAPTURE_NOW,
+        client=Client(cfg.http, transport=_capture_transport()),
+    )
+
+    assert result.capture_id == CAPTURE_ID
+    assert result.status["countries"]["AU"]["rows"] == 3
+    unavailable = "previous_state_unavailable" in {w["code"] for w in result.status["warnings"]}
+    assert unavailable is not with_previous_state
+    stored = result.out.parent / "bundle" / "inputs" / "stations_used.csv"
+    assert stored.read_bytes() != b"" and (stored.stat().st_size == 1) is not with_previous_state
+
+    seed_month(
+        store,
+        "2026-09",
+        bundles={CAPTURE_ID: result.out / "bundle.tar.gz"},
+        work=tmp_path / "seed",
+    )
+
+    rebuilt = rebuild(store, cfg, scope="month", value="2026-09", now=NOW)
+
+    assert rebuilt.months == ["2026-09"]
+    assert rebuilt.captures == 1
+    rows = _daily(store, "data-2026-09", "2026-09-01", tmp_path, "round-trip.csv.gz")
+    assert rows.height == 3
+    assert rows["capture_id"].unique().to_list() == [CAPTURE_ID]
+    e10 = rows.filter(pl.col("grade_raw") == "E10").row(0, named=True)
+    assert e10["station_key"] == "AU-109"
+    assert e10["price"] == 2.127
+    assert e10["currency"] == "AUD"

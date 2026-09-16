@@ -2,17 +2,17 @@
 
 from __future__ import annotations
 
-import gzip
 import hashlib
 import json
 import shutil
 import tarfile
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import polars as pl
 
-from costco_gas.schema import ROW_SCHEMA, write_rows_csv_gz
+from costco_gas.capture import US_ID_SET_SCHEMA
+from costco_gas.schema import FX_SCHEMA, ROW_SCHEMA, STATION_SCHEMA, write_rows_csv_gz
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 REPO_CONFIG = REPO_ROOT / "config"
@@ -46,6 +46,55 @@ def fx_rows(capture_id: str) -> list[dict]:
             "fx_fetched_at_utc": stamp.strftime("%Y-%m-%dT%H:%M:%SZ"),
         }
     ]
+
+
+def previous_stations(capture_id: str) -> pl.DataFrame:
+    """`current/stations.csv` as the capture read it, for `inputs/stations_used.csv`."""
+    seen = datetime.strptime(capture_id, "%Y-%m-%dT%H%MZ").replace(tzinfo=UTC) - timedelta(days=1)
+    return pl.DataFrame(
+        [
+            {
+                "station_key": "AU-109",
+                "country": "AU",
+                "source_station_id": "109",
+                "alt_id": None,
+                "name": "Marsden Park",
+                "name_local": None,
+                "address": "8 Elara Boulevard",
+                "city": "Marsden Park",
+                "region": "NSW",
+                "postcode": "2765",
+                "lat": -33.6926,
+                "lon": 150.8407,
+                "timezone": "Australia/Sydney",
+                "grades_seen": "E10|Premium Unleaded|Unleaded",
+                "first_seen_utc": seen,
+                "last_seen_utc": seen,
+                "status": "active",
+                "superseded_by": None,
+            }
+        ],
+        schema=STATION_SCHEMA,
+    )
+
+
+def previous_fx(capture_id: str) -> pl.DataFrame:
+    """`current/fx.csv` as the capture read it, for `inputs/fx_used.csv`."""
+    stamp = datetime.strptime(capture_id, "%Y-%m-%dT%H%MZ").replace(tzinfo=UTC) - timedelta(days=1)
+    return pl.DataFrame(
+        [
+            {
+                "capture_id": stamp.strftime("%Y-%m-%dT%H%MZ"),
+                "currency": "AUD",
+                "units_per_usd": 1.4012,
+                "fx_usd_per_unit": 1.0 / 1.4012,
+                "fx_rate_date": stamp.date(),
+                "fx_source": "frankfurter-v2",
+                "fx_fetched_at_utc": stamp,
+            }
+        ],
+        schema=FX_SCHEMA,
+    )
 
 
 def capture_status(capture_id: str) -> dict:
@@ -104,11 +153,16 @@ def make_bundle(
         json.dumps(capture_status(capture_id), indent=1, sort_keys=True), "utf-8"
     )
     (root / "inputs" / "status_previous.json").write_text("null", "utf-8")
-    for name in ("stations_used.csv", "fx_used.csv", "us_id_set.csv"):
-        (root / "inputs" / name).write_text("", "utf-8")
-    (root / "stations.csv").write_text("", "utf-8")
-    with gzip.open(root / "rows.csv.gz", "wb") as fh:
-        fh.write(b"")
+    # Written the way `capture._write_bundle` writes them: real frames through a
+    # bare `DataFrame.write_csv`, whose datetime text is Polars' own
+    # `2026-09-14T18:17:40.000000+0000`, not `schema.CSV_DATETIME_FORMAT`. Empty
+    # strings here would leave `rebuild`'s reader untested against what the
+    # producer actually emits.
+    previous_stations(capture_id).write_csv(root / "inputs" / "stations_used.csv")
+    previous_fx(capture_id).write_csv(root / "inputs" / "fx_used.csv")
+    pl.DataFrame(schema=US_ID_SET_SCHEMA).write_csv(root / "inputs" / "us_id_set.csv")
+    pl.DataFrame(schema=STATION_SCHEMA).write_csv(root / "stations.csv")
+    write_rows_csv_gz(pl.DataFrame(schema=ROW_SCHEMA), root / "rows.csv.gz")
     archive = dest / f"capture-{capture_id}.tar.gz"
     with tarfile.open(archive, "w:gz") as tar:
         for path in sorted(root.rglob("*")):
