@@ -229,8 +229,19 @@ class OccSource:
         formatted = clean(address.get("formattedAddress"))
         geo = store.get("geoPoint") or {}
 
-        source_id = code if self.country == "AU" else name
-        alt_id = name if self.country == "AU" else code
+        number = _warehouse_number(code)
+        if self.country in NUMERIC_ID_COUNTRIES:
+            # Prefer the warehouse number: a store can be renamed, and the name
+            # is the key every row of history is filed under.
+            source_id = number or name
+            alt_id = name
+            if not number:
+                warnings.append(
+                    Warning(code="missing_warehouse_code", detail=display_name or name or "")
+                )
+        else:
+            source_id = name
+            alt_id = code
         if not source_id:
             warnings.append(Warning(code="missing_station_id", detail=display_name or code or ""))
             return None
@@ -278,6 +289,22 @@ class OccSource:
             has_hours=None,
             prices=prices,
         )
+
+
+# AU exposes the warehouse number bare ("109"); MX and TW bury it in a prefix
+# ("costcoMexicoWharehouse750" -- Costco's own spelling). GB and JP are excluded
+# on purpose: their codes are built from the store name ("coventry",
+# "costcoJapanTomiyaWarehouse"), so a rename moves the code with it and keying
+# on it would buy nothing.
+NUMERIC_ID_COUNTRIES = ("AU", "MX", "TW")
+
+
+def _warehouse_number(code: str | None) -> str | None:
+    """The trailing warehouse number in an OCC `warehouseCode`, if it has one."""
+    if not code:
+        return None
+    match = re.search(r"(\d+)$", code)
+    return match.group(1) if match else None
 
 
 def _as_float(value: Any) -> float | None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import date
 from pathlib import Path
 
@@ -147,14 +148,18 @@ def test_gb_uses_display_name_as_city_and_keeps_county_towns_out():
 def test_mx_region_drops_the_iso_prefix_and_uses_the_timezone_table():
     result, _ = run("MX", [(FIXTURES / "mx_stores.json").read_bytes()])
 
+    # Keyed on the warehouse number, not the branch name: Mexican branch names
+    # are the ones most likely to be edited ("León" and "León Campestre" in the
+    # same city), and the key is what every row of history is filed under.
     assert sorted(s.source_station_id for s in result.stations) == [
-        "Arboledas",
-        "Chihuahua",
-        "Culiacán",
-        "Mexicali",
+        "5309",
+        "726",
+        "750",
+        "756",
     ]
-    mexicali = station(result, "Mexicali")
-    assert mexicali.alt_id == "costcoMexicoWharehouse750"
+    mexicali = station(result, "750")
+    assert mexicali.name == "Mexicali"
+    assert mexicali.alt_id == "Mexicali"
     assert mexicali.city == "Mexicali"
     assert mexicali.region == "BCN"
     assert mexicali.timezone == "America/Tijuana"
@@ -162,10 +167,10 @@ def test_mx_region_drops_the_iso_prefix_and_uses_the_timezone_table():
         ("Regular", "$20.89"),
         ("Premium", "$25.39"),
     ]
-    assert station(result, "Culiacán").timezone == "America/Mazatlan"
-    assert station(result, "Chihuahua").timezone == "America/Chihuahua"
+    assert station(result, "5309").timezone == "America/Mazatlan"
+    assert station(result, "756").timezone == "America/Chihuahua"
     # MEX has no entry of its own, so the table's "*" default applies.
-    arboledas = station(result, "Arboledas")
+    arboledas = station(result, "726")
     assert (arboledas.city, arboledas.region) == ("Tlalnepantla", "MEX")
     assert arboledas.timezone == "America/Mexico_City"
 
@@ -229,13 +234,10 @@ def test_jp_takes_the_prefecture_and_municipality_from_line2():
 def test_tw_region_comes_from_the_formatted_address():
     result, _ = run("TW", [(FIXTURES / "tw_stores.json").read_bytes()])
 
-    assert sorted(s.source_station_id for s in result.stations) == [
-        "Chungli",
-        "North_Taichung",
-        "Xinzhuang",
-    ]
-    chungli = station(result, "Chungli")
-    assert chungli.alt_id == "costcoTaiwanWarehouse010"
+    assert sorted(s.source_station_id for s in result.stations) == ["010", "011", "018"]
+    chungli = station(result, "010")
+    assert chungli.name == "Chungli"
+    assert chungli.alt_id == "Chungli"
     assert chungli.name_local == "桃園中壢店"
     assert chungli.city is None
     assert chungli.region == "桃園市"
@@ -246,8 +248,8 @@ def test_tw_region_comes_from_the_formatted_address():
         ("95", "$30.0"),
         ("98", "$31.5"),
     ]
-    assert station(result, "Xinzhuang").region == "新北市"
-    assert station(result, "North_Taichung").region == "台中市"
+    assert station(result, "011").region == "新北市"
+    assert station(result, "018").region == "台中市"
 
 
 def test_pagination_follows_current_page_until_the_last_one():
@@ -305,3 +307,38 @@ def test_a_failed_request_produces_an_error_and_no_stations():
     ]
     # There is no usable response, so the capture's own clock times the country.
     assert result.captured_at_utc.strftime("%Y-%m-%dT%H%MZ") == "2026-09-15T1910Z"
+
+
+def test_only_countries_with_a_real_warehouse_number_are_keyed_on_it():
+    """GB and JP build their code from the store name, so keying on it buys nothing.
+
+    `coventry` and `costcoJapanTomiyaWarehouse` move the moment the name does,
+    which is the failure the numeric key exists to avoid. They stay on the name,
+    and the code rides along as alt_id.
+    """
+    from costco_gas.sources.occ import NUMERIC_ID_COUNTRIES, _warehouse_number
+
+    assert NUMERIC_ID_COUNTRIES == ("AU", "MX", "TW")
+    assert _warehouse_number("costcoMexicoWharehouse750") == "750"
+    assert _warehouse_number("costcoTaiwanWarehouse010") == "010"
+    assert _warehouse_number("109") == "109"
+    # Nothing to key on: a name-built code, and an absent one.
+    assert _warehouse_number("coventry") is None
+    assert _warehouse_number("costcoJapanTomiyaWarehouse") is None
+    assert _warehouse_number(None) is None
+
+
+def test_a_station_with_no_warehouse_number_keeps_its_name_and_warns():
+    """Losing the station is worse than an inconsistent key, so it falls back."""
+    payload = json.loads((FIXTURES / "mx_stores.json").read_text())
+    for store in payload["stores"]:
+        store.pop("warehouseCode", None)
+    result, _ = run("MX", [json.dumps(payload).encode()])
+
+    assert sorted(s.source_station_id for s in result.stations) == [
+        "Arboledas",
+        "Chihuahua",
+        "Culiacán",
+        "Mexicali",
+    ]
+    assert "missing_warehouse_code" in {w.code for w in result.warnings}
