@@ -922,10 +922,22 @@ class GitHubReleaseStore(_BaseStore):
 
     def list_releases(self) -> list[Release]:
         latest = self._latest_tag()
-        response = self._request("GET", f"{self._base}/releases", ok=(200,))
-        return [
-            self._to_release(item, is_latest=item["tag_name"] == latest) for item in response.json()
-        ]
+        out: list[Release] = []
+        page = 1
+        while True:
+            response = self._request(
+                "GET",
+                f"{self._base}/releases",
+                ok=(200,),
+                params={"per_page": 100, "page": page},
+            )
+            items = response.json()
+            out.extend(
+                self._to_release(item, is_latest=item["tag_name"] == latest) for item in items
+            )
+            if len(items) < 100:
+                return out
+            page += 1
 
     # -- assets ----------------------------------------------------------
     def list_assets(self, tag: str) -> list[Asset]:

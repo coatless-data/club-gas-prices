@@ -827,7 +827,13 @@ class FakeGitHub:
                 return httpx.Response(404, json={"message": "Not Found"})
             return httpx.Response(200, json=release)
         if request.method == "GET" and path == f"{self.base}/releases":
-            return httpx.Response(200, json=list(self.releases.values()))
+            # Newest created first and paginated, the way the real endpoint
+            # answers: the repository's oldest release -- `current` -- is the
+            # last item, so it is the first thing an unpaginated read loses.
+            items = list(reversed(self.releases.values()))
+            page = int(request.url.params.get("page", "1"))
+            per_page = int(request.url.params.get("per_page", "100"))
+            return httpx.Response(200, json=items[(page - 1) * per_page : page * per_page])
         if request.method == "POST" and path == f"{self.base}/releases":
             payload = json.loads(request.content)
             release = self.add_release(
@@ -982,6 +988,38 @@ def test_github_is_latest_comes_from_the_releases_latest_endpoint(writer_env):
     assert moved.make_latest == "true"
     assert moved.is_latest is True
     assert s.get_release("current").is_latest is False
+
+
+def test_github_list_releases_reads_every_page(writer_env):
+    """`GET /releases` is paginated, newest created first.
+
+    `current` is created once, before any `data-*` release, and is never
+    recreated, so it is the last item the endpoint returns. An unpaginated read
+    drops it as soon as the repository holds more than one page of releases:
+    `recovery_tags` would stop returning `current` -- §8.4 recovery would never
+    run again on the release that holds the published data -- and `month_tags`
+    would silently truncate, hiding older months from every roll-up.
+    """
+    fake = FakeGitHub()
+    fake.add_release("current", latest=True)
+    months = [f"data-{year}-{month:02d}" for year in range(2026, 2036) for month in range(1, 13)]
+    for tag in months:
+        fake.add_release(tag, prerelease=True)
+    s = store.GitHubReleaseStore("acme", "gas", transport=fake.transport())
+
+    tags = [r.tag for r in s.list_releases()]
+
+    assert len(tags) == 121
+    assert sorted(tags) == sorted(["current", *months])
+    # `current` is only reachable on the second page, which is the whole point.
+    assert "current" not in tags[:100]
+    listings = [c["url"] for c in fake.calls if "/releases?" in c["url"]]
+    assert listings == [
+        "https://api.github.com/repos/acme/gas/releases?per_page=100&page=1",
+        "https://api.github.com/repos/acme/gas/releases?per_page=100&page=2",
+    ]
+    # And the consequence the pages exist for: recovery still sees `current`.
+    assert store.recovery_tags(s)[0] == "current"
 
 
 def test_github_writes_require_the_token_and_the_writer_flag(
