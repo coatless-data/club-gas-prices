@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import httpx
@@ -31,7 +31,7 @@ def ecom_response(body: bytes = ECOM_BODY, status: int = 200) -> RawResponse:
         url="https://ecom-api.costco.com/core/warehouse-locator/v1/warehouses.json",
         status=status,
         headers={},
-        received_at_utc=datetime(2026, 9, 15, 19, 10, tzinfo=timezone.utc),
+        received_at_utc=datetime(2026, 9, 15, 19, 10, tzinfo=UTC),
         elapsed_ms=900,
         body=body,
         error=None,
@@ -245,3 +245,131 @@ def test_stations_csv_timezone_wins_over_the_province_table():
 
     assert station(result, "1213").timezone == "America/Montreal"
     assert ("timezone_from_region", "1213") not in codes(result.warnings)
+
+
+def test_a_failed_lookup_falls_back_to_the_price_service():
+    previous = stations_frame(
+        [
+            cached_row("1213"),
+            cached_row("530", name="N London", city="LONDON", region="ON", timezone=None),
+        ]
+    )
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if "AjaxWarehouseBrowseLookupView" in str(request.url):
+            return httpx.Response(
+                403, content=b"<HTML><HEAD><TITLE>Access Denied</TITLE></HEAD></HTML>"
+            )
+        return httpx.Response(
+            200, content=PRICES_BODY, headers={"content-type": "text/html;charset=UTF-8"}
+        )
+
+    result, responses = run(handler, previous=previous)
+
+    assert [r.key for r in responses] == ["CA/01-lookup", "CA/02-gasprices-01"]
+    assert str(seen[1].url) == "https://www.costco.ca/AjaxGetGasPricesService?warehouseid=530_1213"
+    assert result.source == "costco-ca-gasprices"
+    assert codes(result.warnings)[:2] == [
+        ("fallback_used", "request_failed"),
+        ("metadata_from_cache", None),
+    ]
+    assert result.errors == []
+
+    vaudreuil = station(result, "1213")
+    assert vaudreuil.id_origin == "cache"
+    assert vaudreuil.city == "VAUDREUIL-DORION"  # metadata from stations.csv
+    assert [(p.grade_raw, p.price_raw) for p in vaudreuil.prices] == [
+        ("diesel", "2.649"),
+        ("premium", "1.999"),
+        ("regular", "1.799"),
+    ]
+    # #530 has no cached timezone, so the province table fills it in.
+    assert station(result, "530").timezone == "America/Toronto"
+    assert ("timezone_from_region", "530") in codes(result.warnings)
+    # Only cached CA ids are polled, so #56's ".959" placeholder is never requested,
+    # and ids the response returns without a cached row are reported, not invented.
+    assert "56" not in [s.source_station_id for s in result.stations]
+    assert ("no_metadata", "56") in codes(result.warnings)
+
+
+def test_an_unparseable_body_triggers_the_fallback():
+    previous = stations_frame([cached_row("1213")])
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "AjaxWarehouseBrowseLookupView" in str(request.url):
+            # Valid JSON is served as text/html here, so Content-Type can never be
+            # used to spot a block; only the body can.
+            return httpx.Response(
+                200,
+                content=b"\r\n<HTML><HEAD><TITLE>Access Denied</TITLE></HEAD></HTML>",
+                headers={"content-type": "text/html;charset=UTF-8"},
+            )
+        return httpx.Response(200, content=PRICES_BODY)
+
+    result, responses = run(handler, previous=previous)
+
+    assert [r.key for r in responses] == ["CA/01-lookup", "CA/02-gasprices-01"]
+    assert result.source == "costco-ca-gasprices"
+    assert ("fallback_used", "unparseable_body") in codes(result.warnings)
+
+
+def test_a_lookup_with_no_usable_station_triggers_the_fallback():
+    previous = stations_frame([cached_row("1213")])
+    # Both warehouses in this body open in the future and have no gas hours.
+    empty = (
+        b"\r\n[false,"
+        b'{"stlocID":1790,"locationName":"Lloydminster","state":"AB",'
+        b'"openDate":"Nov 19, 2026","gasStationHours":[],'
+        b'"gasPrices":{"warehouseid":"1790","regular":"1.549"}},'
+        b'{"stlocID":1813,"locationName":"N Calgary","state":"AB",'
+        b'"openDate":"Apr 1, 2027","gasStationHours":[],'
+        b'"gasPrices":{"warehouseid":"1813"}}]'
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "AjaxWarehouseBrowseLookupView" in str(request.url):
+            return httpx.Response(200, content=empty)
+        return httpx.Response(200, content=PRICES_BODY)
+
+    result, responses = run(handler, previous=previous)
+
+    assert [r.key for r in responses] == ["CA/01-lookup", "CA/02-gasprices-01"]
+    assert ("fallback_used", "zero_stations") in codes(result.warnings)
+
+
+def test_force_fallback_skips_the_lookup_entirely():
+    previous = stations_frame([cached_row("1213")])
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, content=PRICES_BODY)
+
+    result, responses = run(handler, previous=previous, force_fallback=("CA",))
+
+    assert [str(r.url) for r in seen] == [
+        "https://www.costco.ca/AjaxGetGasPricesService?warehouseid=1213"
+    ]
+    assert [r.key for r in responses] == ["CA/02-gasprices-01"]
+    assert result.source == "costco-ca-gasprices"
+    assert ("fallback_used", "forced") in codes(result.warnings)
+
+
+def test_stale_cached_stations_are_not_polled():
+    previous = stations_frame(
+        [
+            cached_row("1213", last_seen_utc=datetime(2026, 9, 14, 18, 17)),
+            cached_row("530", last_seen_utc=datetime(2026, 7, 1, 18, 17)),
+        ]
+    )
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, content=PRICES_BODY)
+
+    run(handler, previous=previous, force_fallback=("CA",))
+
+    assert str(seen[0].url).endswith("warehouseid=1213")

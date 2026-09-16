@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from urllib.parse import urlencode, urlsplit
 
@@ -142,21 +142,85 @@ def cached_stations(
     return out
 
 
+def fallback_trigger(response: RawResponse | None, ctx: CaptureContext) -> str | None:
+    """Why the price-service fallback is needed, or None.
+
+    Recomputed from the stored responses in parse(), so a rebuild years later
+    reaches the same conclusion the live capture did.
+    """
+    if response is None:
+        return "forced"
+    if response.error or response.status != 200:
+        return "request_failed"
+    try:
+        entries = parse_lookup_body(response.body)
+    except (ValueError, UnicodeDecodeError):
+        return "unparseable_body"
+    cc = ctx.interp_config.countries["CA"]
+    ecom = ecom_index(ctx.shared)
+    cached = cached_stations(
+        ctx.previous_stations,
+        ctx.capture_date,
+        cc.seen_within_days or DEFAULT_SEEN_WITHIN_DAYS,
+    )
+    for entry in entries:
+        station, _ = _lookup_station(entry, ecom, cached, cc)
+        if passes_source_filters(station, ctx.capture_date):
+            return None
+    return "zero_stations"
+
+
 class CaSource:
     country = "CA"
 
     def fetch(self, client: Client, ctx: CaptureContext) -> list[RawResponse]:
         cc = ctx.fetch_config.countries["CA"]
+        responses: list[RawResponse] = []
         url = lookup_url(cc)
-        if client.abandoned(url):
-            return []
-        try:
-            return [client.request(LOOKUP_KEY, url, expect_json=True)]
-        except BudgetExceeded:
-            return []
+        trigger = "forced" if "CA" in ctx.force_fallback else None
+
+        if trigger is None:
+            if client.abandoned(url):
+                return responses
+            try:
+                response = client.request(LOOKUP_KEY, url, expect_json=True)
+            except BudgetExceeded:
+                return responses
+            responses.append(response)
+            trigger = fallback_trigger(response, ctx)
+            if trigger is None:
+                return responses
+
+        # batch_size and seen_within_days are country settings, not query
+        # parameters: config/countries.toml gives CA 10 and 30.
+        batch_size = cc.batch_size or DEFAULT_BATCH_SIZE
+        ids = sorted(
+            cached_stations(
+                ctx.previous_stations,
+                ctx.capture_date,
+                cc.seen_within_days or DEFAULT_SEEN_WITHIN_DAYS,
+            ),
+            key=_id_sort_key,
+        )
+        for number, start in enumerate(range(0, len(ids), batch_size), start=1):
+            batch = batch_url(cc, ids[start : start + batch_size])
+            if client.abandoned(batch):
+                break
+            try:
+                responses.append(
+                    client.request(f"{PRICE_KEY_PREFIX}{number:02d}", batch, expect_json=True)
+                )
+            except BudgetExceeded:
+                break
+        return responses
 
     def parse(self, responses: list[RawResponse], ctx: CaptureContext) -> FetchResult:
         lookup = next((r for r in responses if r.key == LOOKUP_KEY), None)
+        prices = sorted(
+            (r for r in responses if r.key.startswith(PRICE_KEY_PREFIX)), key=lambda r: r.key
+        )
+        if prices:
+            return self._parse_fallback(lookup, prices, responses, ctx)
         return self._parse_lookup(lookup, responses, ctx)
 
     def _parse_lookup(
@@ -221,6 +285,90 @@ class CaSource:
             country="CA",
             source=LOOKUP_SOURCE,
             captured_at_utc=captured,
+            stations=stations,
+            responses=list(responses),
+            requests=len([r for r in responses if r.key.startswith("CA/")]),
+            warnings=warnings,
+            errors=errors,
+        )
+
+    def _parse_fallback(
+        self,
+        lookup: RawResponse | None,
+        prices: list[RawResponse],
+        responses: list[RawResponse],
+        ctx: CaptureContext,
+    ) -> FetchResult:
+        cc = ctx.interp_config.countries["CA"]
+        warnings = [
+            Warning(code="fallback_used", detail=fallback_trigger(lookup, ctx) or "forced"),
+            Warning(code="metadata_from_cache"),
+        ]
+        errors: list[Error] = []
+        stations: list[RawStation] = []
+        cached = cached_stations(
+            ctx.previous_stations,
+            ctx.capture_date,
+            cc.seen_within_days or DEFAULT_SEEN_WITHIN_DAYS,
+        )
+        captured: datetime | None = None
+
+        for response in prices:
+            if response.error or response.status != 200:
+                errors.append(
+                    Error(
+                        code="request_failed" if response.status is None else "http_error",
+                        host=urlsplit(response.url).netloc,
+                        http_status=response.status,
+                        detail=response.error,
+                    )
+                )
+                continue
+            try:
+                payload = json.loads(response.body)
+            except (ValueError, UnicodeDecodeError):
+                errors.append(
+                    Error(
+                        code="unparseable_body",
+                        host=urlsplit(response.url).netloc,
+                        http_status=response.status,
+                        detail=response.key,
+                    )
+                )
+                continue
+            if not isinstance(payload, dict) or "errorMessage" in payload:
+                # A non-numeric id fails the whole request with HTTP 200 and an
+                # errorMessage object instead of prices.
+                errors.append(
+                    Error(
+                        code="price_service_error",
+                        host=urlsplit(response.url).netloc,
+                        http_status=response.status,
+                        detail=str(payload)[:200],
+                    )
+                )
+                continue
+            captured = (
+                response.received_at_utc
+                if captured is None
+                else max(captured, response.received_at_utc)
+            )
+            for station_id, grades in payload.items():
+                row = cached.get(str(station_id))
+                if row is None:
+                    warnings.append(Warning(code="no_metadata", detail=str(station_id)))
+                    continue
+                station, tz_origin = _cached_station(str(station_id), row, grades, cc)
+                if tz_origin == "region":
+                    warnings.append(
+                        Warning(code="timezone_from_region", detail=station.source_station_id)
+                    )
+                stations.append(station)
+
+        return FetchResult(
+            country="CA",
+            source=PRICE_SOURCE,
+            captured_at_utc=captured or _capture_time(ctx),
             stations=stations,
             responses=list(responses),
             requests=len([r for r in responses if r.key.startswith("CA/")]),
@@ -294,6 +442,36 @@ def _lookup_station(
         opening_date=parse_open_date(entry.get("openDate")),
         has_hours=bool(entry.get("gasStationHours")),
         prices=_prices(entry.get("gasPrices")),
+    )
+    return station, tz_origin
+
+
+def _cached_station(
+    station_id: str, row: dict[str, Any], grades: Any, cc: CountryConfig
+) -> tuple[RawStation, str | None]:
+    region = _clean(row.get("region"))
+    tz = _clean(row.get("timezone"))
+    tz_origin = "cache" if tz else None
+    if tz is None:
+        tz = cc.timezone_for_region(region)
+        tz_origin = "region" if tz else None
+    station = RawStation(
+        source_station_id=station_id,
+        alt_id=_clean(row.get("alt_id")),
+        id_origin="cache",
+        ecom_state=None,
+        name=_clean(row.get("name")) or station_id,
+        name_local=_clean(row.get("name_local")),
+        address=_clean(row.get("address")),
+        city=_clean(row.get("city")),
+        region=region,
+        postcode=_clean(row.get("postcode")),
+        lat=_as_float(row.get("lat")),
+        lon=_as_float(row.get("lon")),
+        timezone=tz,
+        opening_date=None,
+        has_hours=None,
+        prices=_prices(grades),
     )
     return station, tz_origin
 
@@ -372,4 +550,4 @@ def _id_sort_key(station_id: str) -> tuple[int, Any]:
 
 
 def _capture_time(ctx: CaptureContext) -> datetime:
-    return datetime.strptime(ctx.capture_id, "%Y-%m-%dT%H%MZ").replace(tzinfo=timezone.utc)
+    return datetime.strptime(ctx.capture_id, "%Y-%m-%dT%H%MZ").replace(tzinfo=UTC)
