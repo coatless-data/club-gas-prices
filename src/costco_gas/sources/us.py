@@ -213,7 +213,7 @@ def parse_price_batch(response: RawResponse | None) -> dict[str, dict[str, str]]
     """
     if response is None or response.error or response.status != 200:
         return None
-    text = response.body.decode("utf-8", "replace").lstrip("﻿ \t\r\n")
+    text = response.body.decode("utf-8", "replace").lstrip("\ufeff \t\r\n")
     if not text.startswith("{"):
         return None
     try:
@@ -422,7 +422,7 @@ def parse_lookup(response: RawResponse | None) -> dict[str, dict[str, Any]] | No
     """Parse the costco.ca US lookup body, or ``None`` when it failed."""
     if response is None or response.error or response.status != 200:
         return None
-    text = response.body.decode("utf-8", "replace").lstrip("﻿ \t\r\n")
+    text = response.body.decode("utf-8", "replace").lstrip("\ufeff \t\r\n")
     try:
         payload = json.loads(text)
     except json.JSONDecodeError:
