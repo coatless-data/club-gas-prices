@@ -378,3 +378,128 @@ def test_stations_json_holds_every_search_field(current_dir, tmp_path):
         "first_seen_utc": "2026-09-01T18:18:00Z", "last_seen_utc": "2026-09-15T18:18:00Z",
         "superseded_by": "GB-Reading2",
     }
+
+
+from costco_gas import sitedata  # noqa: E402
+from costco_gas.sitedata import history, summary_daily  # noqa: E402
+
+
+def test_summary_daily_columns_match_the_dashboard_contract(current_dir, tmp_path):
+    out = tmp_path / "data"
+    build_site_data(current_dir, out, _cfg(), now=NOW)
+    frame = pl.read_parquet(out / "summary_daily.parquet")
+
+    # The dashboard's DuckDB queries select these names in this order.
+    assert frame.columns == sitedata.SUMMARY_COLUMNS
+    assert sitedata.SUMMARY_COLUMNS == [
+        "capture_date",
+        "country",
+        "level",
+        "region",
+        "grade",
+        "n_stations",
+        "n_stations_usd",
+        "median_local_per_litre",
+        "p25_local_per_litre",
+        "p75_local_per_litre",
+        "median_usd_per_litre",
+        "p25_usd_per_litre",
+        "p75_usd_per_litre",
+    ]
+    assert frame.schema["n_stations"] == pl.Int32
+    assert frame.schema["n_stations_usd"] == pl.Int32
+
+
+def test_summary_daily_levels_and_hand_computed_statistics(current_dir, tmp_path):
+    out = tmp_path / "data"
+    build_site_data(current_dir, out, _cfg(), now=NOW)
+    frame = pl.read_parquet(out / "summary_daily.parquet")
+
+    country = frame.filter(
+        (pl.col("country") == "US")
+        & (pl.col("level") == "country")
+        & (pl.col("grade") == "regular")
+        & (pl.col("capture_date") == date(2026, 9, 15))
+    )
+    assert country.height == 1
+    row = country.row(0, named=True)
+    assert row["region"] is None
+    assert row["n_stations"] == 4
+    assert row["n_stations_usd"] == 3  # US-2 has a null USD value
+    # local values 1, 2, 3, 4 with linear interpolation
+    assert row["median_local_per_litre"] == 2.5
+    assert row["p25_local_per_litre"] == 1.75
+    assert row["p75_local_per_litre"] == 3.25
+    # USD values 1, 3, 4
+    assert row["median_usd_per_litre"] == 3.0
+    assert row["p25_usd_per_litre"] == 2.0
+    assert row["p75_usd_per_litre"] == 3.5
+
+    florida = frame.filter((pl.col("level") == "region") & (pl.col("region") == "FL") & (pl.col("grade") == "regular"))
+    assert florida.row(0, named=True)["n_stations"] == 2
+    assert florida.row(0, named=True)["median_local_per_litre"] == 1.5
+
+    # The UK has no regional breakdown, so it contributes country rows only.
+    assert frame.filter((pl.col("country") == "GB") & (pl.col("level") == "region")).height == 0
+    assert frame.filter((pl.col("country") == "GB") & (pl.col("level") == "country")).height == 1
+
+    # The two Australian days keep their own stored rates.
+    au = frame.filter((pl.col("country") == "AU") & (pl.col("level") == "country")).sort("capture_date")
+    assert au["median_usd_per_litre"].to_list() == [1.20, 1.28]
+
+    key = ["capture_date", "country", "level", "region", "grade"]
+    assert frame.select(key).is_unique().all()
+
+
+def test_summary_daily_sort_order():
+    frame = summary_daily(dedupe_daily(_daily_frame(DAILY_ROWS), _cfg()))
+    order = ["country", "level", "region", "grade", "capture_date"]
+    assert frame.equals(frame.sort(order, nulls_last=True))
+
+
+def test_summary_daily_rejects_a_duplicate_key():
+    frame = summary_daily(dedupe_daily(_daily_frame(DAILY_ROWS), _cfg()))
+    with pytest.raises(ValueError, match="not unique"):
+        sitedata._check_unique(pl.concat([frame, frame]))
+
+
+def test_history_columns_and_sort_order(current_dir, tmp_path):
+    out = tmp_path / "data"
+    build_site_data(current_dir, out, _cfg(), now=NOW)
+    frame = pl.read_parquet(out / "history.parquet")
+
+    assert frame.columns == [
+        "capture_date",
+        "station_key",
+        "grade",
+        "price_local_per_litre",
+        "price_usd_per_litre",
+        "currency",
+        "n_captures",
+    ]
+    order = ["station_key", "grade", "capture_date"]
+    assert frame.equals(frame.sort(order))
+
+    au = frame.filter(pl.col("station_key") == "AU-109")
+    assert au["capture_date"].to_list() == [date(2026, 9, 14), date(2026, 9, 15)]
+    assert au["n_captures"].to_list() == [4, 1]  # the relabelled evening row wins on the 15th
+    assert frame.filter(pl.col("grade") == "other").height == 0
+
+
+def test_history_is_written_with_the_dashboard_row_group_size(current_dir, tmp_path, monkeypatch):
+    calls = []
+    real = sitedata.write_parquet
+
+    def recorder(frame, path, *, sort_by, row_group_size=None):
+        calls.append((Path(path).name, sort_by, row_group_size))
+        return real(frame, path, sort_by=sort_by, row_group_size=row_group_size)
+
+    monkeypatch.setattr(sitedata, "write_parquet", recorder)
+    build_site_data(current_dir, tmp_path / "data", _cfg(), now=NOW)
+
+    assert ("history.parquet", ["station_key", "grade", "capture_date"], 20000) in calls
+    assert (
+        "summary_daily.parquet",
+        ["country", "level", "region", "grade", "capture_date"],
+        None,
+    ) in calls

@@ -18,6 +18,8 @@ from pathlib import Path
 
 import polars as pl
 
+from .schema import write_parquet
+
 DEDUPE_KEY = ["capture_date", "station_key", "grade"]
 
 
@@ -116,6 +118,15 @@ def build_site_data(current_dir: Path, out_dir: Path, cfg, *, now: datetime) -> 
     _write_json(out_dir / "latest.json", _latest_records(latest, stations))
     _write_json(out_dir / "stations.json", _station_records(stations))
 
+    deduped = dedupe_daily(pl.read_parquet(current_dir / "costco-gas-all.parquet"), cfg)
+    write_parquet(summary_daily(deduped), out_dir / "summary_daily.parquet", sort_by=SUMMARY_SORT)
+    write_parquet(
+        history(deduped),
+        out_dir / "history.parquet",
+        sort_by=HISTORY_SORT,
+        row_group_size=HISTORY_ROW_GROUP_SIZE,
+    )
+
 
 def _read_csv(path: Path, numeric: tuple[str, ...]) -> pl.DataFrame:
     frame = pl.read_csv(path, try_parse_dates=True)
@@ -166,3 +177,89 @@ def _write_json(path: Path, payload: object) -> None:
     with path.open("w", encoding="utf-8") as handle:
         json.dump(payload, handle, ensure_ascii=False, separators=(",", ":"), default=_json_default)
         handle.write("\n")
+
+
+# The dashboard's DuckDB queries select these names, in this order.
+SUMMARY_COLUMNS = [
+    "capture_date",
+    "country",
+    "level",
+    "region",
+    "grade",
+    "n_stations",
+    "n_stations_usd",
+    "median_local_per_litre",
+    "p25_local_per_litre",
+    "p75_local_per_litre",
+    "median_usd_per_litre",
+    "p25_usd_per_litre",
+    "p75_usd_per_litre",
+]
+SUMMARY_KEY = ["capture_date", "country", "level", "region", "grade"]
+SUMMARY_SORT = ["country", "level", "region", "grade", "capture_date"]
+HISTORY_COLUMNS = [
+    "capture_date",
+    "station_key",
+    "grade",
+    "price_local_per_litre",
+    "price_usd_per_litre",
+    "currency",
+    "n_captures",
+]
+HISTORY_SORT = ["station_key", "grade", "capture_date"]
+HISTORY_ROW_GROUP_SIZE = 20000
+
+
+def summary_daily(deduped: pl.DataFrame) -> pl.DataFrame:
+    country = _aggregate(deduped, ["capture_date", "country", "grade"], "country")
+    # Region rows use only the stations that have a region; the UK has none.
+    regional = _aggregate(
+        deduped.filter(pl.col("region").is_not_null()),
+        ["capture_date", "country", "region", "grade"],
+        "region",
+    )
+    frame = pl.concat([country, regional], how="vertical").sort(SUMMARY_SORT, nulls_last=True)
+    _check_unique(frame)
+    return frame
+
+
+def _aggregate(frame: pl.DataFrame, keys: list[str], level: str) -> pl.DataFrame:
+    # The counts are Int32 because that is the width the dashboard contract
+    # declares for n_stations and n_stations_usd.
+    out = frame.group_by(keys).agg(
+        pl.col("station_key").n_unique().cast(pl.Int32).alias("n_stations"),
+        pl.col("price_usd_per_litre").is_not_null().sum().cast(pl.Int32).alias("n_stations_usd"),
+        pl.col("price_local_per_litre").median().alias("median_local_per_litre"),
+        pl.col("price_local_per_litre")
+        .quantile(0.25, interpolation="linear")
+        .alias("p25_local_per_litre"),
+        pl.col("price_local_per_litre")
+        .quantile(0.75, interpolation="linear")
+        .alias("p75_local_per_litre"),
+        # USD statistics ignore the rows whose capture had no exchange rate.
+        pl.col("price_usd_per_litre").drop_nulls().median().alias("median_usd_per_litre"),
+        pl.col("price_usd_per_litre")
+        .drop_nulls()
+        .quantile(0.25, interpolation="linear")
+        .alias("p25_usd_per_litre"),
+        pl.col("price_usd_per_litre")
+        .drop_nulls()
+        .quantile(0.75, interpolation="linear")
+        .alias("p75_usd_per_litre"),
+    )
+    out = out.with_columns(pl.lit(level, dtype=pl.String).alias("level"))
+    if "region" not in out.columns:
+        out = out.with_columns(pl.lit(None, dtype=pl.String).alias("region"))
+    return out.select(SUMMARY_COLUMNS)
+
+
+def _check_unique(frame: pl.DataFrame) -> None:
+    duplicates = frame.group_by(SUMMARY_KEY).len().filter(pl.col("len") > 1)
+    if duplicates.height:
+        raise ValueError(
+            f"summary_daily is not unique on {SUMMARY_KEY}: {duplicates.head(5).to_dicts()}"
+        )
+
+
+def history(deduped: pl.DataFrame) -> pl.DataFrame:
+    return deduped.select(HISTORY_COLUMNS)
