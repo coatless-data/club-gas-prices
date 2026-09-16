@@ -247,6 +247,45 @@ def _collect_fawaz(client: Client, capture_date: date, found: dict[str, FxRow]) 
             return
 
 
+def _collect_carry_forward(ctx: CaptureContext, found: dict[str, FxRow]) -> None:
+    """Copy the newest non-carried row per currency from the previous fx.csv."""
+    frame = ctx.previous_fx
+    if frame is None or frame.height == 0:
+        return
+    required = {"currency", "units_per_usd", "fx_rate_date", "fx_source"}
+    if not required.issubset(set(frame.columns)):
+        return
+
+    best: dict[str, tuple[str, dict[str, Any]]] = {}
+    for record in frame.iter_rows(named=True):
+        currency = str(record.get("currency") or "").upper()
+        if currency not in CURRENCIES or currency in found:
+            continue
+        source = str(record.get("fx_source") or "")
+        if not source or source.startswith(CARRIED_PREFIX):
+            continue
+        order = str(record.get("capture_id") or "")
+        previous = best.get(currency)
+        if previous is None or order >= previous[0]:
+            best[currency] = (order, record)
+
+    for currency, (_order, record) in best.items():
+        rate = _positive_float(record.get("units_per_usd"))
+        rate_date = _parse_date(record.get("fx_rate_date"))
+        if rate is None or rate_date is None:
+            continue
+        if abs((ctx.capture_date - rate_date).days) > CARRY_FORWARD_MAX_AGE_DAYS:
+            continue
+        found[currency] = FxRow(
+            currency=currency,
+            units_per_usd=rate,
+            fx_usd_per_unit=1.0 / rate,
+            fx_rate_date=rate_date,
+            fx_source=CARRIED_PREFIX + str(record["fx_source"]),
+            fx_fetched_at_utc=_parse_datetime(record.get("fx_fetched_at_utc")),
+        )
+
+
 def _status_for(rows: list[FxRow]) -> str:
     """The status names the least-fresh source that contributed a row."""
     if not rows:
@@ -267,5 +306,7 @@ def fetch_rates(client: Client, ctx: CaptureContext) -> FxRates:
                 _collect_fawaz(client, ctx.capture_date, found)
     except BudgetExceeded:
         pass
+    if _missing(found):
+        _collect_carry_forward(ctx, found)
     rows = [found[code] for code in CURRENCIES if code in found]
     return FxRates(status=_status_for(rows), rows=rows, capture_date=ctx.capture_date)

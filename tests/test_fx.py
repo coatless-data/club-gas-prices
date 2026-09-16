@@ -182,3 +182,120 @@ def test_fallback_stops_at_the_capture_date_when_it_resolves(make_client):
     assert fx.for_currency("CAD").fx_rate_date == date(2026, 9, 15)
     assert len(calls) == 2
     assert not any("@2026-09-14" in url for url in calls)
+
+
+def all_network_fails_handler(calls: list[str]):
+    return routing_handler(
+        {
+            "https://api.frankfurter.dev/": httpx.Response(
+                403, content=read_fixture("frankfurter_blocked.json")
+            ),
+            "https://cdn.jsdelivr.net/": httpx.Response(404, content=b"not found"),
+        },
+        calls,
+    )
+
+
+def previous_fx_frame() -> pl.DataFrame:
+    return pl.DataFrame(
+        {
+            "capture_id": [
+                "2026-09-13T1817Z",
+                "2026-09-14T1817Z",
+                "2026-09-15T0017Z",
+                "2026-09-14T1817Z",
+                "2026-09-14T1817Z",
+            ],
+            "currency": ["CAD", "CAD", "CAD", "JPY", "TWD"],
+            "units_per_usd": [1.3800, 1.3871, 1.3900, 154.06565573, 31.7167273],
+            "fx_usd_per_unit": [
+                1 / 1.3800,
+                1 / 1.3871,
+                1 / 1.3900,
+                1 / 154.06565573,
+                1 / 31.7167273,
+            ],
+            "fx_rate_date": [
+                date(2026, 9, 11),
+                date(2026, 9, 12),
+                date(2026, 9, 14),
+                date(2026, 9, 1),
+                date(2026, 9, 8),
+            ],
+            "fx_source": [
+                "frankfurter-v2",
+                "frankfurter-v2",
+                "carried-forward:frankfurter-v2",
+                "fawazahmed0-currency-api",
+                "fawazahmed0-currency-api",
+            ],
+            "fx_fetched_at_utc": [
+                datetime(2026, 9, 13, 18, 17, 41, tzinfo=UTC),
+                datetime(2026, 9, 14, 18, 17, 42, tzinfo=UTC),
+                datetime(2026, 9, 15, 0, 17, 43, tzinfo=UTC),
+                datetime(2026, 9, 14, 18, 17, 42, tzinfo=UTC),
+                datetime(2026, 9, 14, 18, 17, 42, tzinfo=UTC),
+            ],
+        }
+    )
+
+
+def test_carry_forward_copies_the_newest_uncarried_row_within_seven_days(make_client):
+    calls: list[str] = []
+    fx = fetch_rates(
+        make_client(all_network_fails_handler(calls)), make_ctx(previous_fx_frame())
+    )
+
+    assert fx.status == "carried-forward"
+    # JPY's stored rate date is 14 days before the capture, so it is not carried.
+    assert [row.currency for row in fx.rows] == ["CAD", "TWD"]
+    assert fx.for_currency("JPY") is None
+
+    cad = fx.for_currency("CAD")
+    # The newest CAD row is itself carried-forward and must be ignored, otherwise
+    # a stale rate would be carried indefinitely.
+    assert cad.fx_source == "carried-forward:frankfurter-v2"
+    assert cad.units_per_usd == 1.3871
+    assert cad.fx_usd_per_unit == pytest.approx(1 / 1.3871, rel=1e-12)
+    assert cad.fx_rate_date == date(2026, 9, 12)
+    assert cad.fx_fetched_at_utc == datetime(2026, 9, 14, 18, 17, 42, tzinfo=UTC)
+
+    # Exactly 7 days old: still inside the limit.
+    twd = fx.for_currency("TWD")
+    assert twd.fx_source == "carried-forward:fawazahmed0-currency-api"
+    assert twd.fx_rate_date == date(2026, 9, 8)
+
+    assert fx.for_currency("USD").fx_source == "identity"
+
+
+def test_carry_forward_accepts_string_dates(make_client):
+    frame = pl.DataFrame(
+        {
+            "capture_id": ["2026-09-14T1817Z"],
+            "currency": ["GBP"],
+            "units_per_usd": [0.73996],
+            "fx_usd_per_unit": [1 / 0.73996],
+            "fx_rate_date": ["2026-09-14"],
+            "fx_source": ["frankfurter-v2"],
+            "fx_fetched_at_utc": ["2026-09-14T18:17:42Z"],
+        }
+    )
+    calls: list[str] = []
+    fx = fetch_rates(make_client(all_network_fails_handler(calls)), make_ctx(frame))
+
+    gbp = fx.for_currency("GBP")
+    assert gbp.fx_rate_date == date(2026, 9, 14)
+    assert gbp.fx_fetched_at_utc == datetime(2026, 9, 14, 18, 17, 42, tzinfo=UTC)
+
+
+def test_every_source_failing_gives_status_failed_and_an_empty_fx_json(make_client):
+    calls: list[str] = []
+    fx = fetch_rates(make_client(all_network_fails_handler(calls)), make_ctx())
+
+    assert fx.status == "failed"
+    assert fx.rows == []
+    # fx.json is a JSON array, so "empty" is an empty list, not an empty object.
+    assert fx.to_json() == []
+    # normalize() turns a missing row into null USD columns; the capture still wins.
+    assert fx.for_currency("CAD") is None
+    assert fx.for_currency("USD").fx_usd_per_unit == 1.0
