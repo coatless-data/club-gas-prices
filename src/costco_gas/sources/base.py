@@ -14,13 +14,17 @@ exceptions. This module never uses the builtin `Warning`.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import UTC, date, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Protocol
 
 import polars as pl
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
     from costco_gas.config import Config
     from costco_gas.http import Client
 
@@ -109,9 +113,7 @@ class Source(Protocol):
 
     def fetch(self, client: Client, ctx: CaptureContext) -> list[RawResponse]: ...
 
-    def parse(
-        self, responses: list[RawResponse], ctx: CaptureContext
-    ) -> FetchResult: ...
+    def parse(self, responses: list[RawResponse], ctx: CaptureContext) -> FetchResult: ...
 
 
 @dataclass
@@ -155,3 +157,93 @@ SOURCES: dict[str, Source] = {
     "JP": _LazySource("JP", "costco_gas.sources.occ", "OccSource", pass_country=True),
     "TW": _LazySource("TW", "costco_gas.sources.occ", "OccSource", pass_country=True),
 }
+
+
+RESPONSES_DIRNAME = "responses"
+_BODY_SUFFIX = ".body"
+_META_SUFFIX = ".meta.json"
+
+
+def _to_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
+def _iso_utc(value: datetime) -> str:
+    return _to_utc(value).isoformat().replace("+00:00", "Z")
+
+
+def _check_key(key: str) -> None:
+    parts = key.split("/")
+    unsafe = (
+        not key
+        or key.startswith("/")
+        or "\\" in key
+        or any(part in ("", ".", "..") for part in parts)
+    )
+    if unsafe:
+        raise ValueError(f"unsafe response key: {key!r}")
+
+
+def response_paths(root: Path, key: str) -> tuple[Path, Path]:
+    """Return the (.body, .meta.json) paths for `key` under the bundle `root`."""
+    _check_key(key)
+    base = Path(root) / RESPONSES_DIRNAME / key
+    return (
+        base.parent / f"{base.name}{_BODY_SUFFIX}",
+        base.parent / f"{base.name}{_META_SUFFIX}",
+    )
+
+
+def write_responses(responses: Iterable[RawResponse], root: Path) -> list[Path]:
+    """Write each response to `<root>/responses/<key>.body` and `.meta.json`."""
+    written: list[Path] = []
+    for response in responses:
+        body_path, meta_path = response_paths(root, response.key)
+        body_path.parent.mkdir(parents=True, exist_ok=True)
+        body_path.write_bytes(response.body)
+        meta = {
+            "key": response.key,
+            "url": response.url,
+            "status": response.status,
+            "headers": dict(response.headers),
+            "received_at_utc": _iso_utc(response.received_at_utc),
+            "elapsed_ms": int(response.elapsed_ms),
+            "error": response.error,
+        }
+        meta_path.write_text(
+            json.dumps(meta, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        written.extend([body_path, meta_path])
+    return written
+
+
+def read_responses(root: Path) -> list[RawResponse]:
+    """Read back every response written by `write_responses`, sorted by key."""
+    base = Path(root) / RESPONSES_DIRNAME
+    if not base.is_dir():
+        return []
+    out: list[RawResponse] = []
+    for meta_path in sorted(base.rglob(f"*{_META_SUFFIX}")):
+        stem = meta_path.name[: -len(_META_SUFFIX)]
+        key = meta_path.relative_to(base).as_posix()[: -len(_META_SUFFIX)]
+        body_path = meta_path.parent / f"{stem}{_BODY_SUFFIX}"
+        if not body_path.is_file():
+            raise FileNotFoundError(f"missing response body for {key}: {body_path}")
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        received = str(meta["received_at_utc"]).replace("Z", "+00:00")
+        out.append(
+            RawResponse(
+                key=str(meta.get("key") or key),
+                url=str(meta["url"]),
+                status=meta["status"],
+                headers=dict(meta.get("headers") or {}),
+                received_at_utc=_to_utc(datetime.fromisoformat(received)),
+                elapsed_ms=int(meta["elapsed_ms"]),
+                body=body_path.read_bytes(),
+                error=meta.get("error"),
+            )
+        )
+    return out
