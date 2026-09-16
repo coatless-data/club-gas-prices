@@ -130,6 +130,42 @@ def test_retries_5xx_429_and_timeouts_but_not_other_4xx():
     assert calls.count("gone.test") == 1
 
 
+def test_backoff_gaps_stay_within_the_jittered_bounds():
+    """FAST zeroes backoff so the suite stays quick, but the real schedule
+    and jitter formula (never exercised by FAST) must still hold: each gap
+    is 50%-150% of its nominal step, in schedule order.
+
+    The two steps are kept well apart (3x) so that an off-by-one in the
+    schedule index reliably lands outside the other step's bounds instead
+    of overlapping it by chance.
+    """
+    calls: list[float] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(time.monotonic())
+        if len(calls) < 3:
+            return httpx.Response(503, content=b"unavailable")
+        return httpx.Response(200, content=b"[]")
+
+    schedule = (0.08, 0.24)
+    cfg = HttpConfig(backoff_seconds=schedule, backoff_jitter=0.5, min_interval_seconds=0.0)
+    with Client(cfg, transport=httpx.MockTransport(handler)) as client:
+        result = client.request("k", "https://backoff.test/x")
+
+    assert result.status == 200
+    assert len(calls) == 3
+    gap_after_first_failure = calls[1] - calls[0]
+    gap_after_second_failure = calls[2] - calls[1]
+    # 50%-150% of the nominal step, with a small allowance for scheduler
+    # overhead so the test isn't flaky.
+    slack = 0.02
+    for gap, nominal in (
+        (gap_after_first_failure, schedule[0]),
+        (gap_after_second_failure, schedule[1]),
+    ):
+        assert nominal * 0.5 - slack <= gap <= nominal * 1.5 + slack
+
+
 def test_connection_errors_are_retried_and_then_reported():
     calls: list[int] = []
 
@@ -221,6 +257,41 @@ def test_budget_aborts_an_in_flight_request():
         with pytest.raises(BudgetExceeded, match="fx"), client.budget("fx", 0.15):
             client.request("fx/01", "https://fx.test/rates")
         assert time.monotonic() - started < 0.6
+
+
+def test_the_wait_for_response_headers_is_bounded_by_the_budget():
+    """A host that accepts the connection and never answers must not be
+    bounded only by the profile's read timeout (up to 150s on bulk): the
+    in-flight body-chunk checks never run until the first byte arrives, so
+    connect/read must also be clamped to the active budget up front.
+
+    One attempt only, so this isolates the pre-body clamp from the retry
+    loop tested elsewhere.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        read = request.extensions["timeout"]["read"]
+        if read > 1.0:
+            # Not clamped: as if the stalled host eventually answered.
+            return httpx.Response(200, content=b"[]")
+        raise httpx.ReadTimeout("clamped short: bail out before headers", request=request)
+
+    cfg = HttpConfig(
+        backoff_seconds=(0.0, 0.0),
+        min_interval_seconds=0.0,
+        max_attempts=1,
+        profiles={"bulk": TimeoutProfile(connect=10.0, read=150.0, total=150.0)},
+    )
+    with Client(cfg, transport=httpx.MockTransport(handler)) as client:
+        started = time.monotonic()
+        with client.budget("fx", 0.1):
+            result = client.request("fx/01", "https://fx.test/rates", profile="bulk")
+        elapsed = time.monotonic() - started
+
+    # Nowhere near the profile's 150s read timeout.
+    assert elapsed < 1.0
+    assert result.status is None
+    assert result.error is not None and "timeout" in result.error
 
 
 def test_budget_ends_when_its_block_ends():

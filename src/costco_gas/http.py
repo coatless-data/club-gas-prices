@@ -262,15 +262,24 @@ class Client:
         self, url: str, headers: dict[str, str], timeouts: TimeoutProfile
     ) -> tuple[int | None, dict[str, str], bytes, str | None]:
         # httpx applies read to every read, including the wait for response
-        # headers. The total deadline has no httpx equivalent, so the body is
-        # streamed and checked chunk by chunk.
+        # headers. But that alone only bounds the wait by the profile: a host
+        # that accepts the connection and then never answers would otherwise
+        # be bounded by up to the bulk profile's 150s read timeout, because
+        # the in-flight checks below never run until the first byte arrives.
+        # So connect, read and the request's own total deadline are all
+        # clamped to whatever time is actually left on the tightest active
+        # budget before the request is made, not just inside the streaming
+        # loop.
+        self._check_budget()
+        _, budget_remaining = self._tightest_budget()
+        effective_total = min(timeouts.total, budget_remaining)
         timeout = httpx.Timeout(
-            connect=timeouts.connect,
-            read=timeouts.read,
-            write=timeouts.read,
-            pool=timeouts.connect,
+            connect=min(timeouts.connect, effective_total),
+            read=min(timeouts.read, effective_total),
+            write=min(timeouts.read, effective_total),
+            pool=min(timeouts.connect, effective_total),
         )
-        deadline = time.monotonic() + timeouts.total
+        deadline = time.monotonic() + effective_total
         try:
             with self._http.stream("GET", url, headers=headers, timeout=timeout) as response:
                 chunks: list[bytes] = []
