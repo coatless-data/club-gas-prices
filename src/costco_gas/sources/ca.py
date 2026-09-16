@@ -198,8 +198,14 @@ class CaSource:
                     )
                 )
                 entries = []
+            ecom = ecom_index(ctx.shared)
+            cached = cached_stations(
+                ctx.previous_stations,
+                ctx.capture_date,
+                cc.seen_within_days or DEFAULT_SEEN_WITHIN_DAYS,
+            )
             for entry in entries:
-                station, tz_origin = _lookup_station(entry, cc)
+                station, tz_origin = _lookup_station(entry, ecom, cached, cc)
                 if tz_origin == "region":
                     warnings.append(
                         Warning(code="timezone_from_region", detail=station.source_station_id)
@@ -223,13 +229,53 @@ class CaSource:
         )
 
 
-def _lookup_station(entry: dict[str, Any], cc: CountryConfig) -> tuple[RawStation, str | None]:
-    """The station, and where its timezone came from."""
+def ecom_index(shared: dict[str, RawResponse]) -> dict[str, dict[str, Any]]:
+    """warehouseId -> warehouse, from this capture's ecom-api response."""
+    response = shared.get("ecom-api")
+    if response is None or response.error or response.status != 200:
+        return {}
+    try:
+        payload = json.loads(response.body)
+    except (ValueError, UnicodeDecodeError):
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    for warehouse in (payload.get("warehouses") if isinstance(payload, dict) else None) or []:
+        warehouse_id = warehouse.get("warehouseId")
+        if warehouse_id is not None:
+            out[str(warehouse_id)] = warehouse
+    return out
+
+
+def _lookup_station(
+    entry: dict[str, Any],
+    ecom: dict[str, dict[str, Any]],
+    cached: dict[str, dict[str, Any]],
+    cc: CountryConfig | None,
+) -> tuple[RawStation, str | None]:
+    """The station, and where its timezone came from: ecom, cache or region."""
     station_id = str(entry.get("stlocID"))
     region = _clean(entry.get("state"))
-    # CountryConfig owns the table and its default row; never index cc.timezones.
-    tz = cc.timezone_for_region(region)
-    tz_origin = "region" if tz else None
+    lat = _as_float(entry.get("latitude"))
+    lon = _as_float(entry.get("longitude"))
+    tz, tz_origin = None, None
+
+    warehouse = ecom.get(station_id)
+    if warehouse is not None:
+        address = warehouse.get("address") or {}
+        if address.get("latitude") is not None:
+            lat = _as_float(address.get("latitude"))
+        if address.get("longitude") is not None:
+            lon = _as_float(address.get("longitude"))
+        tz = _clean(warehouse.get("timeZone"))
+        tz_origin = "ecom" if tz else None
+    if tz is None:
+        tz = _cached_timezone(cached, station_id)
+        tz_origin = "cache" if tz else None
+    if tz is None and cc is not None:
+        # The province table, through CountryConfig; CA has no "*" default row,
+        # so an unknown or missing province stays None and is dropped later.
+        tz = cc.timezone_for_region(region)
+        tz_origin = "region" if tz else None
 
     station = RawStation(
         source_station_id=station_id,
@@ -242,14 +288,19 @@ def _lookup_station(entry: dict[str, Any], cc: CountryConfig) -> tuple[RawStatio
         city=_clean(entry.get("city")),
         region=region,
         postcode=_clean(entry.get("zipCode")),
-        lat=_as_float(entry.get("latitude")),
-        lon=_as_float(entry.get("longitude")),
+        lat=lat,
+        lon=lon,
         timezone=tz,
         opening_date=parse_open_date(entry.get("openDate")),
         has_hours=bool(entry.get("gasStationHours")),
         prices=_prices(entry.get("gasPrices")),
     )
     return station, tz_origin
+
+
+def _cached_timezone(cached: dict[str, dict[str, Any]], station_id: str) -> str | None:
+    row = cached.get(station_id)
+    return _clean(row.get("timezone")) if row else None
 
 
 def _prices(grades: Any) -> tuple[RawPrice, ...]:

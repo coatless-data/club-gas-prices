@@ -214,3 +214,34 @@ def test_not_open_no_hours_and_priced_before_open():
     # #1813 has no price at all.
     assert ("priced_before_open", "1790") in codes(result.warnings)
     assert ("priced_before_open", "1813") not in codes(result.warnings)
+
+
+def test_ecom_api_supplies_coordinates_and_timezone():
+    result, _ = run(serve(LOOKUP_BODY), shared={"ecom-api": ecom_response()})
+
+    st_johns = station(result, "1324")
+    assert st_johns.lat == pytest.approx(47.50731997)  # 8 decimals, not the lookup's 47.507
+    assert st_johns.lon == pytest.approx(-52.83506698)
+    assert st_johns.timezone == "America/St_Johns"
+    assert station(result, "530").timezone == "America/Toronto"
+    # #1213, #1790 and #1813 are not in ecom-api, so their provinces decide.
+    assert codes(result.warnings) == [
+        ("timezone_from_region", "1213"),
+        ("timezone_from_region", "1790"),
+        ("priced_before_open", "1790"),
+        ("timezone_from_region", "1813"),
+    ]
+
+    # #1213 is not in this ecom-api response, so it keeps the lookup's 3 decimals.
+    vaudreuil = station(result, "1213")
+    assert vaudreuil.lat == pytest.approx(45.415)
+    assert vaudreuil.timezone == "America/Toronto"  # QC, from the province table
+
+
+def test_stations_csv_timezone_wins_over_the_province_table():
+    previous = stations_frame([cached_row("1213", timezone="America/Montreal")])
+
+    result, _ = run(serve(LOOKUP_BODY), previous=previous)
+
+    assert station(result, "1213").timezone == "America/Montreal"
+    assert ("timezone_from_region", "1213") not in codes(result.warnings)
