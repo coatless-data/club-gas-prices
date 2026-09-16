@@ -187,6 +187,21 @@ def test_a_fallback_source_is_degraded():
     assert block["status"] == "degraded"
 
 
+def test_a_us_costco_ca_lookup_fallback_source_is_degraded():
+    # Well clear of the US floor (585) and otherwise healthy, so the only
+    # thing that can make this degraded is the "costco-ca-lookup-us" marker
+    # normalize.row_source() sets when the US falls back to the costco.ca
+    # warehouse lookup.
+    block = evaluate_country(
+        "US",
+        result("US", source="costco-ca-lookup-us"),
+        normalized("US", 600, source="costco-ca-lookup-us"),
+        context(),
+        NOW,
+    )
+    assert block["status"] == "degraded"
+
+
 @pytest.mark.parametrize(
     "code", ["metadata_from_cache", "previous_state_unavailable", "unknown_grade"]
 )
