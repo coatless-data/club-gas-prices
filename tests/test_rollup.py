@@ -6,7 +6,6 @@ import json
 from datetime import UTC, date, datetime
 
 import polars as pl
-import pytest
 
 from costco_gas.rollup import close_periods, daily_grain, rebuild_current
 from costco_gas.store import next_name, open_store, sha256_label
@@ -275,7 +274,11 @@ def test_month_close_is_safe_to_repeat(tmp_path):
     assert {a.name: a.size for a in store.list_assets("data-2026-08")} == before
 
 
-def test_month_close_refuses_when_a_daily_file_disagrees_with_the_manifest(tmp_path):
+def test_close_periods_blocks_a_month_whose_daily_file_disagrees_with_the_manifest(tmp_path):
+    """A row-count mismatch between a daily file and the month manifest must
+    block the month via the same `_blocking_reasons` path as every other
+    refusal, not raise out of `close_periods` and abort the rest of the
+    invocation (spec review, Task 16 round 2)."""
     store = open_store(f"local:{tmp_path / 'releases'}")
     cfg = stub_config(tmp_path)
     manifest = _seed_august(store, tmp_path)
@@ -283,14 +286,55 @@ def test_month_close_refuses_when_a_daily_file_disagrees_with_the_manifest(tmp_p
     path = tmp_path / "manifest-2026-08.json"
     path.write_text(json.dumps(manifest, indent=1, sort_keys=True), "utf-8")
     store.replace_atomic("data-2026-08", path, "manifest-2026-08.json", "run-test")
+    issues = RecordingIssues()
 
-    with pytest.raises(ValueError, match="manifest records 99"):
-        close_periods(
-            store,
-            cfg,
-            now=datetime(2026, 9, 1, 3, 17, tzinfo=UTC),
-            issues=RecordingIssues(),
-        )
+    result = close_periods(
+        store,
+        cfg,
+        now=datetime(2026, 9, 1, 3, 17, tzinfo=UTC),
+        issues=issues,
+    )
+
+    assert result.blocked_months == ["2026-08"]
+    assert result.closed_months == []
+    assert store.get_release("data-2026-08").prerelease is True
+    assert issues.opened[0][0] == "Period close blocked: 2026-08"
+    assert "manifest records 99" in issues.opened[0][1]
+
+
+def test_a_mismatched_month_does_not_block_a_healthy_month_in_the_same_run(tmp_path):
+    """The mismatch in `data-2026-08` must not stop `data-2026-09`, seeded
+    clean, from closing in the same `close_periods` invocation -- and it must
+    sort before it, so the old uncaught `ValueError` would have aborted the
+    whole call before `2026-09` was ever reached (spec review, Task 16
+    round 2)."""
+    store = open_store(f"local:{tmp_path / 'releases'}")
+    cfg = stub_config(tmp_path)
+    manifest = _seed_august(store, tmp_path)
+    manifest["captures"]["2026-08-31T1817Z"]["daily_files"]["2026-08-31"]["rows"] = 99
+    path = tmp_path / "manifest-2026-08.json"
+    path.write_text(json.dumps(manifest, indent=1, sort_keys=True), "utf-8")
+    store.replace_atomic("data-2026-08", path, "manifest-2026-08.json", "run-test")
+    seed_month(
+        store,
+        "2026-09",
+        {"2026-09-15": _us_rows("2026-09-15T1817Z", 4.099)},
+        captures={
+            "2026-09-15T1817Z": {
+                "status": _status("2026-09-15T1817Z"),
+                "rows_by_capture_date": {"2026-09-15": 2},
+            }
+        },
+        work=tmp_path / "seed-09",
+    )
+    issues = RecordingIssues()
+
+    result = close_periods(store, cfg, now=datetime(2026, 10, 1, 3, 17, tzinfo=UTC), issues=issues)
+
+    assert result.blocked_months == ["2026-08"]
+    assert result.closed_months == ["2026-09"]
+    assert store.get_release("data-2026-08").prerelease is True
+    assert store.get_release("data-2026-09").prerelease is False
 
 
 AUD_FX = [

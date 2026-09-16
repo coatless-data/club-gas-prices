@@ -160,16 +160,40 @@ def _blocking_reasons(store, tag: str) -> list[str]:
     # `per_file` only over days that ARE present, so a missing day makes both
     # sides shrink together and would otherwise close the month short (spec
     # review round 4, Finding 1).
-    recorded_days = set(_expected_daily_rows(manifest))
-    uploaded_days = {
-        match.group(1)
+    expected = _expected_daily_rows(manifest)
+    recorded_days = set(expected)
+    uploaded = {
+        match.group(1): asset.name
         for asset in assets
         if (match := DAILY_ASSET.match(asset.name)) and asset.state == "uploaded"
     }
-    for day in sorted(recorded_days - uploaded_days):
+    for day in sorted(recorded_days - set(uploaded)):
         reasons.append(
             f"day `{day}` has no uploaded daily file, though the month manifest records rows for it"
         )
+    # A daily file whose row count disagrees with what the month manifest
+    # records for it must block the month the same way, rather than let
+    # `_close_month`'s own cross-check raise `ValueError` and abort the whole
+    # `close_periods` call -- including every other month still to be checked
+    # in the same invocation. The daily file and the manifest are each written
+    # by their own `replace_atomic` call, so nothing guarantees they always
+    # land together (a rebuild interrupted between the two, or manual
+    # surgery, can leave them disagreeing); disagreeing about a fact this
+    # basic needs a human, via the same blocked-month issue as every other
+    # refusal here, not a crash (spec review, Task 16 round 2).
+    mismatched = sorted(recorded_days & set(uploaded))
+    if mismatched:
+        with tempfile.TemporaryDirectory() as td:
+            work = Path(td)
+            for day in mismatched:
+                name = uploaded[day]
+                path = store.download(tag, name, work / name)
+                actual = schema.read_rows_csv_gz(path).height
+                if actual != expected[day]:
+                    reasons.append(
+                        f"day `{day}` has {actual} rows in `{name}` but the month "
+                        f"manifest records {expected[day]}"
+                    )
     return reasons
 
 

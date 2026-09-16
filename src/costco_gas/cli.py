@@ -13,6 +13,7 @@ from .capture import CaptureResult, run_capture
 from .config import load_config
 from .issues import Issues
 from .publish import publish
+from .rebuild import RebuildResult, rebuild
 from .rollup import CloseResult, close_periods
 from .store import DEFAULT_STORE, open_store
 
@@ -125,6 +126,28 @@ def cmd_close_periods(args) -> int:
     return 0
 
 
+def cmd_rebuild(args) -> int:
+    cfg = load_config(Path("."))
+    store = open_configured_store()
+    if args.month:
+        scope, value = "month", args.month
+    elif args.year:
+        scope, value = "year", args.year
+    else:
+        scope, value = "all", None
+    result: RebuildResult = rebuild(store, cfg, scope=scope, value=value, now=utc_now())
+    print(
+        json.dumps(
+            {
+                "months": result.months,
+                "captures": result.captures,
+                "resumed": result.resumed,
+            }
+        )
+    )
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="costco-gas")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -146,6 +169,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="rebuild the current release in full even if no month closed",
     )
     close.set_defaults(func=cmd_close_periods)
+
+    rebuild_parser = sub.add_parser(
+        "rebuild", help="re-parse stored capture bundles and rewrite history"
+    )
+    scope_group = rebuild_parser.add_mutually_exclusive_group(required=True)
+    scope_group.add_argument("--month", help="a single month, e.g. 2026-09")
+    scope_group.add_argument("--year", help="every month of a year, e.g. 2026")
+    scope_group.add_argument("--all", action="store_true", help="every month")
+    rebuild_parser.set_defaults(func=cmd_rebuild)
 
     return parser
 

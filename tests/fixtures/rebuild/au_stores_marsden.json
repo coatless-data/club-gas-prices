@@ -1,0 +1,44 @@
+{
+ "pagination": {
+  "currentPage": 0,
+  "pageSize": 100,
+  "sort": "asc",
+  "totalPages": 1,
+  "totalResults": 1
+ },
+ "stores": [
+  {
+   "address": {
+    "country": {
+     "isocode": "AU",
+     "name": "Australia"
+    },
+    "formattedAddress": "10 Langford Drive Marsden Park NSW Australia 2765",
+    "line1": "10 Langford Drive",
+    "postalCode": "2765",
+    "town": "Marsden Park NSW"
+   },
+   "displayName": "Marsden Park",
+   "gasTypes": [
+    {
+     "name": "E10",
+     "price": "$2.127"
+    },
+    {
+     "name": "Premium 98",
+     "price": "$2.327"
+    },
+    {
+     "name": "Diesel",
+     "price": "$2.527"
+    }
+   ],
+   "geoPoint": {
+    "latitude": -33.72141,
+    "longitude": 150.839951
+   },
+   "name": "Marsden Park",
+   "warehouseCode": "109"
+  }
+ ]
+}
