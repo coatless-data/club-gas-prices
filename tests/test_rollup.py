@@ -8,7 +8,7 @@ from datetime import UTC, date, datetime
 import polars as pl
 import pytest
 
-from costco_gas.rollup import close_periods, daily_grain
+from costco_gas.rollup import close_periods, daily_grain, rebuild_current
 from costco_gas.store import open_store
 from helpers_rollup import (
     RecordingIssues,
@@ -16,6 +16,7 @@ from helpers_rollup import (
     price_row,
     rows_frame,
     seed_month,
+    stations_frame,
     stub_config,
 )
 
@@ -241,3 +242,228 @@ def test_month_close_refuses_when_a_daily_file_disagrees_with_the_manifest(tmp_p
             now=datetime(2026, 9, 1, 3, 17, tzinfo=UTC),
             issues=RecordingIssues(),
         )
+
+
+AUD_FX = [
+    {
+        "currency": "AUD",
+        "units_per_usd": 1.399,
+        "fx_rate_date": "2026-09-14",
+        "fx_source": "frankfurter-v2",
+        "fx_fetched_at_utc": "2026-08-31T18:17:40Z",
+    }
+]
+
+
+def test_full_rebuild_reads_closed_month_files_and_closed_month_manifest_fx(tmp_path):
+    store = open_store(f"local:{tmp_path / 'releases'}")
+    cfg = stub_config(tmp_path)
+    _seed_august(store, tmp_path, fx=AUD_FX)
+    close_periods(
+        store,
+        cfg,
+        now=datetime(2026, 9, 1, 3, 17, tzinfo=UTC),
+        issues=RecordingIssues(),
+    )
+    seed_month(
+        store,
+        "2026-09",
+        {"2026-09-15": _us_rows("2026-09-15T1817Z", 4.099)},
+        captures={
+            "2026-09-15T1817Z": {
+                "status": _status("2026-09-15T1817Z"),
+                "rows_by_capture_date": {"2026-09-15": 2},
+                "fx": [],
+            }
+        },
+        work=tmp_path / "seed-09",
+    )
+
+    rebuild_current(store, cfg, now=datetime(2026, 9, 15, 18, 30, tzinfo=UTC))
+
+    caps = pl.read_parquet(
+        store.download("current", "costco-gas-all-captures.parquet", tmp_path / "all.parquet")
+    )
+    assert caps.height == 6
+    assert set(caps["capture_id"].unique().to_list()) == {
+        "2026-08-30T1817Z",
+        "2026-08-31T1817Z",
+        "2026-09-15T1817Z",
+    }
+    fx = pl.read_csv(store.download("current", "fx.csv", tmp_path / "fx.csv"))
+    assert fx["currency"].to_list() == ["AUD", "AUD"]
+    assert fx["fx_usd_per_unit"].to_list() == [0.7147962831, 0.7147962831]
+    latest = pl.read_csv(
+        store.download("current", "costco-gas-latest.csv", tmp_path / "latest.csv")
+    )
+    assert latest.height == 2
+    assert set(latest["capture_id"].to_list()) == {"2026-09-15T1817Z"}
+    manifest = json.loads(
+        store.download("current", "manifest.json", tmp_path / "m.json").read_text()
+    )
+    assert manifest["status"]["capture_id"] == "2026-09-15T1817Z"
+    assert manifest["closed_months"] == ["2026-08"]
+    assert manifest["newest_capture_by_country"] == {"US": "2026-09-15T1817Z"}
+    assert set(manifest["assets"]) == CURRENT_DATA_ASSET_NAMES
+
+
+def test_full_rebuild_manifest_equals_the_incremental_one(tmp_path):
+    """The rebuilt current/manifest.json is the same document publish writes: the
+    same keys, and newest_capture_by_country recomputed rather than carried over."""
+    store = open_store(f"local:{tmp_path / 'releases'}")
+    cfg = stub_config(tmp_path)
+    store.ensure_release("current", "Current", "", False, "true")
+    stale = tmp_path / "stale-manifest.json"
+    stale.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "status": {
+                    "schema_version": 1,
+                    "capture_id": "2026-07-01T1817Z",
+                    "countries": {"JP": {"status": "ok"}},
+                },
+                "closed_months": [],
+                "closed_years": [],
+                "newest_capture_by_country": {
+                    "US": "2026-07-01T1817Z",
+                    "JP": "2026-07-01T1817Z",
+                },
+                "assets": {},
+            },
+            indent=1,
+            sort_keys=True,
+        ),
+        "utf-8",
+    )
+    store.upload_new("current", stale, "manifest.json")
+    _seed_august(store, tmp_path)
+
+    rebuild_current(store, cfg, now=datetime(2026, 9, 1, 3, 17, tzinfo=UTC))
+
+    manifest = json.loads(
+        store.download("current", "manifest.json", tmp_path / "out.json").read_text()
+    )
+    assert set(manifest) >= CURRENT_MANIFEST_KEYS
+    assert manifest["newest_capture_by_country"] == {"US": "2026-08-31T1817Z"}
+    assert manifest["status"]["capture_id"] == "2026-08-31T1817Z"
+    assert manifest["closed_months"] == []
+    assert manifest["closed_years"] == []
+    assert set(manifest["assets"]) == CURRENT_DATA_ASSET_NAMES
+
+
+def test_full_rebuild_keeps_alt_id_and_status_and_applies_station_links(tmp_path):
+    store = open_store(f"local:{tmp_path / 'releases'}")
+    links = pl.DataFrame(
+        {
+            "old_station_key": ["US-1364"],
+            "new_station_key": ["US-9999"],
+            "effective_date": ["2026-09-01"],
+            "note": ["relocated"],
+        }
+    )
+    cfg = stub_config(tmp_path, links=links)
+    store.ensure_release("current", "Current", "", False, "true")
+    existing = stations_frame(
+        [
+            {
+                "station_key": "US-1364",
+                "country": "US",
+                "source_station_id": "1364",
+                "alt_id": "Mansfield",
+                "name": "Mansfield",
+                "name_local": None,
+                "address": None,
+                "city": "Mansfield",
+                "region": "TX",
+                "postcode": None,
+                "lat": 32.7,
+                "lon": -97.1,
+                "timezone": "America/Chicago",
+                "grades_seen": "regular",
+                "first_seen_utc": datetime(2026, 7, 1, 0, 17, tzinfo=UTC),
+                "last_seen_utc": datetime(2026, 7, 1, 0, 17, tzinfo=UTC),
+                "status": "missing",
+                "superseded_by": None,
+            }
+        ]
+    )
+    path = tmp_path / "stations.csv"
+    existing.write_csv(path)
+    store.upload_new("current", path, "stations.csv")
+    _seed_august(store, tmp_path)
+
+    rebuild_current(store, cfg, now=datetime(2026, 9, 1, 3, 17, tzinfo=UTC))
+
+    out = pl.read_csv(store.download("current", "stations.csv", tmp_path / "out-stations.csv"))
+    row = out.filter(pl.col("station_key") == "US-1364").row(0, named=True)
+    assert row["alt_id"] == "Mansfield"
+    assert row["status"] == "missing"
+    assert row["grades_seen"] == "premium|regular"
+    assert row["first_seen_utc"].startswith("2026-08-30")
+    assert row["last_seen_utc"].startswith("2026-08-31")
+    assert row["superseded_by"] == "US-9999"
+
+
+def test_full_rebuild_recomputes_merged_captures_to_match_the_rebuilt_captures_file(
+    tmp_path,
+):
+    """Carried from Task 14: `merged_captures` in current/manifest.json is the commit
+    marker `read_or_rebuild_manifest` trusts to decide a bundle is already merged into
+    `current`. A full rebuild must recompute it to exactly the capture ids whose rows
+    it actually wrote into the rebuilt all-captures file -- never carry a stale or
+    over-claiming value over, since that would silently resurrect the exact
+    data-loss hole `merged_captures` was added to close.
+    """
+    store = open_store(f"local:{tmp_path / 'releases'}")
+    cfg = stub_config(tmp_path)
+    store.ensure_release("current", "Current", "", False, "true")
+    stale = tmp_path / "stale-manifest.json"
+    stale.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "status": None,
+                "closed_months": [],
+                "closed_years": [],
+                "newest_capture_by_country": {},
+                "assets": {},
+                # Neither id is a real capture in this test's data: one predates
+                # everything seeded below, the other never existed at all. Both
+                # must be gone from the rebuilt manifest.
+                "merged_captures": ["2020-01-01T0000Z", "2099-01-01T0000Z"],
+            },
+            indent=1,
+            sort_keys=True,
+        ),
+        "utf-8",
+    )
+    store.upload_new("current", stale, "manifest.json")
+    _seed_august(store, tmp_path)
+    seed_month(
+        store,
+        "2026-09",
+        {"2026-09-15": _us_rows("2026-09-15T1817Z", 4.099)},
+        captures={
+            "2026-09-15T1817Z": {
+                "status": _status("2026-09-15T1817Z"),
+                "rows_by_capture_date": {"2026-09-15": 2},
+            }
+        },
+        work=tmp_path / "seed-09",
+    )
+
+    rebuild_current(store, cfg, now=datetime(2026, 9, 15, 19, 0, tzinfo=UTC))
+
+    caps = pl.read_parquet(
+        store.download("current", "costco-gas-all-captures.parquet", tmp_path / "caps.parquet")
+    )
+    manifest = json.loads(
+        store.download("current", "manifest.json", tmp_path / "m.json").read_text()
+    )
+    assert sorted(manifest["merged_captures"]) == sorted(caps["capture_id"].unique().to_list())
+    assert manifest["merged_captures"] == [
+        "2026-08-30T1817Z",
+        "2026-08-31T1817Z",
+        "2026-09-15T1817Z",
+    ]
