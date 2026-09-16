@@ -1,0 +1,167 @@
+
+[
+ false,
+ {
+  "stlocID": 1324,
+  "locationName": "St Johns",
+  "displayName": "1324",
+  "address1": "75 DANNY DR",
+  "city": "ST JOHNS",
+  "state": "NL",
+  "zipCode": "A1H 0N4",
+  "latitude": 47.507,
+  "longitude": -52.835,
+  "openDate": "Sep 12, 1995",
+  "gasStationHours": [
+   {
+    "title": "Mon-Fri. ",
+    "code": "open",
+    "time": "6:00am - 9:30pm"
+   },
+   {
+    "title": "Sat. ",
+    "code": "open",
+    "time": "6:00am - 8:30pm"
+   },
+   {
+    "title": "Sun. ",
+    "code": "open",
+    "time": "6:00am - 8:30pm"
+   }
+  ],
+  "gasPrices": {
+   "warehouseid": "1324",
+   "regular": "2.049",
+   "premium": "2.119",
+   "oid": {
+    "dao": "dao/gasprice"
+   }
+  },
+  "country": "CA",
+  "identifier": "1324"
+ },
+ {
+  "stlocID": 1213,
+  "locationName": "Vaudreuil",
+  "displayName": "1213",
+  "address1": "22400 CH DUMBERRY",
+  "city": "VAUDREUIL-DORION",
+  "state": "QC",
+  "zipCode": "J7V 0M8",
+  "latitude": 45.415,
+  "longitude": -74.038,
+  "openDate": "Oct 16, 2015",
+  "gasStationHours": [
+   {
+    "title": "Mon-Fri. ",
+    "code": "open",
+    "time": "6:00am - 9:30pm"
+   },
+   {
+    "title": "Sat. ",
+    "code": "open",
+    "time": "6:00am - 8:30pm"
+   },
+   {
+    "title": "Sun. ",
+    "code": "open",
+    "time": "6:00am - 8:30pm"
+   }
+  ],
+  "gasPrices": {
+   "warehouseid": "1213",
+   "diesel": "2.649",
+   "regular": "1.799",
+   "premium": "1.999",
+   "oid": {
+    "dao": "dao/gasprice"
+   }
+  },
+  "country": "CA",
+  "identifier": "1213"
+ },
+ {
+  "stlocID": 530,
+  "locationName": "N London",
+  "displayName": "530",
+  "address1": "693 WONDERLAND RD N",
+  "city": "LONDON",
+  "state": "ON",
+  "zipCode": "N4H 4L1",
+  "latitude": 42.987,
+  "longitude": -81.293,
+  "openDate": "Feb 19, 2004",
+  "gasStationHours": [
+   {
+    "title": "Mon-Fri. ",
+    "code": "open",
+    "time": "6:00am - 9:30pm"
+   },
+   {
+    "title": "Sat. ",
+    "code": "open",
+    "time": "6:00am - 8:30pm"
+   },
+   {
+    "title": "Sun. ",
+    "code": "open",
+    "time": "6:00am - 8:30pm"
+   }
+  ],
+  "gasPrices": {
+   "warehouseid": "530",
+   "diesel": "2.279",
+   "regular": "1.739",
+   "premium": "1.969",
+   "oid": {
+    "dao": "dao/gasprice"
+   }
+  },
+  "country": "CA",
+  "identifier": "530"
+ },
+ {
+  "stlocID": 1790,
+  "locationName": "Lloydminster",
+  "displayName": "1790",
+  "address1": "20 STREET",
+  "city": "LLOYDMINSTER",
+  "state": "AB",
+  "zipCode": "T9V 1K5",
+  "latitude": 53.269,
+  "longitude": -110.052,
+  "openDate": "Nov 19, 2026",
+  "gasStationHours": [],
+  "gasPrices": {
+   "warehouseid": "1790",
+   "regular": "1.549",
+   "premium": "1.769",
+   "oid": {
+    "dao": "dao/gasprice"
+   }
+  },
+  "country": "CA",
+  "identifier": "1790"
+ },
+ {
+  "stlocID": 1813,
+  "locationName": "N Calgary",
+  "displayName": "1813",
+  "address1": "8604 38TH STREET NE",
+  "city": "CALGARY",
+  "state": "AB",
+  "zipCode": "T3J 4E4",
+  "latitude": 51.131,
+  "longitude": -113.978,
+  "openDate": "Apr 1, 2027",
+  "gasStationHours": [],
+  "gasPrices": {
+   "warehouseid": "1813",
+   "oid": {
+    "dao": "dao/gasprice"
+   }
+  },
+  "country": "CA",
+  "identifier": "1813"
+ }
+]
