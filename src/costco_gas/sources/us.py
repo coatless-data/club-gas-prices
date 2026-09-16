@@ -308,3 +308,111 @@ def ecom_state(index: dict[str, EcomWarehouse] | None, warehouse_id: str) -> str
     if warehouse.country == COUNTRY and warehouse.has_gas:
         return "gas"
     return "no_gas"
+
+
+# --------------------------------------------------------------------------- id set
+
+
+@dataclass(frozen=True)
+class PolledId:
+    source_station_id: str
+    id_origin: str
+    ecom_state: str
+
+
+def _extra_rows(ctx: CaptureContext) -> dict[str, dict[str, Any]]:
+    frame = getattr(ctx.fetch_config, "us_extra_ids", None)
+    if frame is None or not isinstance(frame, pl.DataFrame) or frame.height == 0:
+        return {}
+    id_column = next(
+        (c for c in ("source_station_id", "warehouse_id", "id") if c in frame.columns),
+        None,
+    )
+    if id_column is None:
+        return {}
+    rows: dict[str, dict[str, Any]] = {}
+    for row in frame.iter_rows(named=True):
+        warehouse_id = _clean(row.get(id_column))
+        if warehouse_id is not None:
+            rows[warehouse_id] = row
+    return rows
+
+
+def _previous_rows(ctx: CaptureContext) -> dict[str, dict[str, Any]]:
+    frame = ctx.previous_stations
+    if frame is None or not isinstance(frame, pl.DataFrame) or frame.height == 0:
+        return {}
+    if "country" not in frame.columns:
+        return {}
+    rows: dict[str, dict[str, Any]] = {}
+    for row in frame.filter(pl.col("country") == COUNTRY).iter_rows(named=True):
+        warehouse_id = _clean(row.get("source_station_id"))
+        if warehouse_id is None:
+            key = _clean(row.get("station_key")) or ""
+            warehouse_id = key.split("-", 1)[1] if "-" in key else None
+        if warehouse_id is not None:
+            rows[warehouse_id] = row
+    return rows
+
+
+def _seen_ids(ctx: CaptureContext) -> list[str]:
+    cutoff = ctx.capture_date - timedelta(days=seen_window_days(ctx))
+    fresh = []
+    for warehouse_id, row in _previous_rows(ctx).items():
+        last_seen = _as_date(row.get("last_seen_utc"))
+        if last_seen is not None and last_seen >= cutoff:
+            fresh.append(warehouse_id)
+    return sorted(fresh, key=_id_sort)
+
+
+def polled_id_set(ctx: CaptureContext) -> list[PolledId]:
+    """The US IDs polled this capture, each tagged with its origin (spec 4.2)."""
+    index = parse_ecom(ctx.shared.get(ECOM_SHARED_KEY))
+    extras = _extra_rows(ctx)
+    seen = _seen_ids(ctx)
+
+    polled: list[PolledId] = []
+    taken: set[str] = set()
+
+    def add(warehouse_id: str, origin: str) -> None:
+        if warehouse_id in taken:
+            return
+        taken.add(warehouse_id)
+        polled.append(PolledId(warehouse_id, origin, ecom_state(index, warehouse_id)))
+
+    if index is None:
+        for warehouse_id in seen:
+            add(warehouse_id, "cache")
+        for warehouse_id in extras:
+            add(warehouse_id, "extra")
+        return polled
+
+    gas_ids = sorted(
+        (w.warehouse_id for w in index.values() if w.country == COUNTRY and w.has_gas),
+        key=_id_sort,
+    )
+    for warehouse_id in gas_ids:
+        add(warehouse_id, "ecom")
+    for warehouse_id in extras:
+        add(warehouse_id, "extra")
+    for warehouse_id in seen:
+        if ecom_state(index, warehouse_id) != "gas":
+            add(warehouse_id, "seen")
+    return polled
+
+
+def polled_id_frame(ctx: CaptureContext) -> pl.DataFrame:
+    """``inputs/us_id_set.csv`` for the capture bundle (spec 8.2)."""
+    polled = polled_id_set(ctx)
+    return pl.DataFrame(
+        {
+            "source_station_id": [p.source_station_id for p in polled],
+            "id_origin": [p.id_origin for p in polled],
+            "ecom_state": [p.ecom_state for p in polled],
+        },
+        schema={
+            "source_station_id": pl.Utf8,
+            "id_origin": pl.Utf8,
+            "ecom_state": pl.Utf8,
+        },
+    )

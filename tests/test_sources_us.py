@@ -348,3 +348,65 @@ def test_parse_ecom_returns_none_for_a_failed_step_one():
     assert us.parse_ecom(response("shared/01-ecom-api", "u", body=b"", status=401)) is None
     assert us.parse_ecom(response("shared/01-ecom-api", "u", body=b"<html>")) is None
     assert us.parse_ecom(None) is None
+
+
+def test_polled_id_set_records_three_origins():
+    previous = stations_frame(
+        [
+            {
+                "station_key": "US-120",
+                "country": "US",
+                "source_station_id": "120",
+                "last_seen_utc": "2026-09-14T18:17:00Z",
+                "region": "HI",
+                "timezone": "Pacific/Honolulu",
+            },
+            {
+                "station_key": "US-9999",
+                "country": "US",
+                "source_station_id": "9999",
+                "last_seen_utc": "2026-01-01T18:17:00Z",
+                "region": "TX",
+            },
+            {
+                "station_key": "US-1364",
+                "country": "US",
+                "source_station_id": "1364",
+                "last_seen_utc": "2026-09-14T18:17:00Z",
+                "region": "FL",
+            },
+        ]
+    )
+    ctx = make_ctx(ecom=ecom_ok(), previous=previous)
+    polled = {p.source_station_id: p for p in us.polled_id_set(ctx)}
+    assert polled["1364"].id_origin == "ecom"
+    assert polled["1680"].id_origin == "extra"
+    assert polled["120"].id_origin == "seen"
+    assert polled["120"].ecom_state == "no_gas"
+    assert "9999" not in polled
+    frame = us.polled_id_frame(ctx)
+    assert frame.columns == ["source_station_id", "id_origin", "ecom_state"]
+    assert frame.height == len(polled)
+
+
+def test_polled_id_set_uses_the_cache_when_step_one_fails():
+    previous = stations_frame(
+        [
+            {
+                "station_key": "US-1364",
+                "country": "US",
+                "source_station_id": "1364",
+                "region": "FL",
+                "last_seen_utc": "2026-09-14T18:17:00Z",
+            }
+        ]
+    )
+    ctx = make_ctx(ecom=ecom_failed(), previous=previous)
+    polled = us.polled_id_set(ctx)
+    assert [(p.source_station_id, p.id_origin) for p in polled] == [
+        ("1364", "cache"),
+        ("1680", "extra"),
+        ("1765", "extra"),
+        ("1772", "extra"),
+    ]
+    assert {p.ecom_state for p in polled} == {"unavailable"}
