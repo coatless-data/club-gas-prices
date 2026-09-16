@@ -160,9 +160,7 @@ def _latest_records(latest: pl.DataFrame, stations: pl.DataFrame) -> list[dict]:
         grade = row.get("grade")
         if grade in CORE_GRADES:
             if (key, grade) in seen:
-                raise ValueError(
-                    f"costco-gas-latest.csv has more than one {grade!r} row for {key}"
-                )
+                raise ValueError(f"costco-gas-latest.csv has more than one {grade!r} row for {key}")
             seen.add((key, grade))
             record["grades"][grade] = price
         else:
@@ -171,9 +169,7 @@ def _latest_records(latest: pl.DataFrame, stations: pl.DataFrame) -> list[dict]:
 
 
 def _station_records(stations: pl.DataFrame) -> list[dict]:
-    return [
-        {field: row.get(field) for field in STATION_JSON_FIELDS} for row in stations.to_dicts()
-    ]
+    return [{field: row.get(field) for field in STATION_JSON_FIELDS} for row in stations.to_dicts()]
 
 
 def _write_json(path: Path, payload: object) -> None:
