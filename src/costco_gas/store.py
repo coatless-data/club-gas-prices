@@ -136,13 +136,9 @@ class ReleaseStore(Protocol):
     def list_assets(self, tag: str) -> list[Asset]: ...
     def download(self, tag: str, name: str, dest: Path) -> Path: ...
     def read_resolved(self, tag: str, name: str, dest: Path) -> Path: ...
-    def upload_new(
-        self, tag: str, path: Path, name: str, label: str | None = None
-    ) -> Asset: ...
+    def upload_new(self, tag: str, path: Path, name: str, label: str | None = None) -> Asset: ...
     def replace_atomic(self, tag: str, path: Path, name: str, token: str) -> Asset: ...
-    def rename(
-        self, tag: str, asset_id: int, new_name: str, label: str | None = None
-    ) -> Asset: ...
+    def rename(self, tag: str, asset_id: int, new_name: str, label: str | None = None) -> Asset: ...
     def delete(self, tag: str, asset_id: int) -> None: ...
 
 
@@ -178,9 +174,7 @@ class _BaseStore:
                 return asset
         return None
 
-    def _temps_for(
-        self, assets: list[Asset], base: str, kind: str | None = None
-    ) -> list[Asset]:
+    def _temps_for(self, assets: list[Asset], base: str, kind: str | None = None) -> list[Asset]:
         """Temporary assets of `base`, newest first."""
         out = []
         for asset in assets:
@@ -210,9 +204,7 @@ class _BaseStore:
         if match.digest is not None:
             got = sha256_label(path)
             if got != match.digest:
-                raise StorageError(
-                    f"digest mismatch for {tag}:{name}: {got} != {match.digest}"
-                )
+                raise StorageError(f"digest mismatch for {tag}:{name}: {got} != {match.digest}")
         return path
 
     def _verify_asset(
@@ -290,9 +282,7 @@ class _BaseStore:
         verified: Asset | None = None
         while True:
             current = self._asset_by_name(tag, temp)
-            if current is not None and self._verify_asset(
-                tag, current, local_label, local_size
-            ):
+            if current is not None and self._verify_asset(tag, current, local_label, local_size):
                 verified = current
                 break
             if self._monotonic() >= deadline:
@@ -335,6 +325,44 @@ class _BaseStore:
         if old is not None:
             self.delete(tag, old.id)
         return promoted
+
+    def _recover_name(self, tag: str, base: str, temps: list[Asset]) -> list[str]:
+        """Finish or unwind the interrupted replace of one asset name."""
+        actions: list[str] = []
+
+        # 1. drop anything that never finished uploading.
+        live: list[Asset] = []
+        for asset in temps:
+            if asset.state != "uploaded":
+                self.delete(tag, asset.id)
+                actions.append(f"deleted-incomplete:{asset.name}")
+            else:
+                live.append(asset)
+
+        # 2-4. put a copy back under the real name if it is missing.
+        if self._asset_by_name(tag, base) is None:
+            chosen: Asset | None = None
+            for candidate in self._temps_for(live, base, "next"):
+                if candidate.label and self._verify_asset(tag, candidate, candidate.label, None):
+                    chosen = candidate
+                    break
+            if chosen is not None:
+                self.rename(tag, chosen.id, base, label="")
+                actions.append(f"promoted:{chosen.name}")
+            else:
+                olds = self._temps_for(live, base, "old")
+                if olds:
+                    chosen = olds[0]
+                    self.rename(tag, chosen.id, base)
+                    actions.append(f"restored:{chosen.name}")
+            if chosen is not None:
+                live = [a for a in live if a.id != chosen.id]
+
+        # 5. delete every remaining temporary for this name, in the same pass.
+        for asset in live:
+            self.delete(tag, asset.id)
+            actions.append(f"deleted-leftover:{asset.name}")
+        return actions
 
 
 class LocalReleaseStore(_BaseStore):
@@ -519,9 +547,7 @@ class LocalReleaseStore(_BaseStore):
                 stamp = newest + timedelta(microseconds=1)
         return stamp
 
-    def upload_new(
-        self, tag: str, path: Path, name: str, label: str | None = None
-    ) -> Asset:
+    def upload_new(self, tag: str, path: Path, name: str, label: str | None = None) -> Asset:
         path = Path(path)
         with self._lock:
             data = self._require(tag)
@@ -548,9 +574,7 @@ class LocalReleaseStore(_BaseStore):
                 return name
         raise StorageError(f"asset id not found: {asset_id}")
 
-    def rename(
-        self, tag: str, asset_id: int, new_name: str, label: str | None = None
-    ) -> Asset:
+    def rename(self, tag: str, asset_id: int, new_name: str, label: str | None = None) -> Asset:
         with self._lock:
             data = self._require(tag)
             name = self._find_by_id(data, asset_id)
@@ -580,3 +604,40 @@ class LocalReleaseStore(_BaseStore):
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, dest)
         return dest
+
+
+def recovery_tags(store: ReleaseStore) -> list[str]:
+    """The release tags recovery runs on: `current` and every `data-*` release.
+
+    Sorted, so `current` comes first and the data releases follow in tag order.
+    Any other tag is left alone: it is not a data release, and a name that
+    merely looks temporary in one of them belongs to somebody else.
+    """
+    return sorted(
+        release.tag
+        for release in store.list_releases()
+        if release.tag == "current" or release.tag.startswith("data-")
+    )
+
+
+def recover_temporaries(store: ReleaseStore, tag: str) -> list[str]:
+    """Finish or unwind every interrupted replace in one release.
+
+    Runs at the start of publish, close-periods and rebuild, over the tags
+    `recovery_tags` returns, open releases and closed ones alike. All release
+    writes share one workflow concurrency group, so this never races another
+    writer. Returns one action string per asset it touched, base name by base
+    name in sorted order.
+    """
+    groups: dict[str, list[Asset]] = {}
+    for asset in store.list_assets(tag):
+        parsed = split_temp_name(asset.name)
+        if parsed is not None:
+            groups.setdefault(parsed[0], []).append(asset)
+    actions: list[str] = []
+    for base in sorted(groups):
+        # Both concrete stores derive from `_BaseStore`, which owns the
+        # per-name logic; the protocol only has to promise the public asset
+        # operations that logic is written against.
+        actions.extend(store._recover_name(tag, base, groups[base]))
+    return actions

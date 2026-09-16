@@ -269,13 +269,9 @@ def test_read_resolved_takes_the_newest_verifying_next(tmp_path: Path):
     torn = tmp_path / "torn.csv"
     torn.write_bytes(b"torn\n")
 
-    s.upload_new(
-        "data-2026-09", good, "stations.csv.next-tok-1", label=store.sha256_label(good)
-    )
+    s.upload_new("data-2026-09", good, "stations.csv.next-tok-1", label=store.sha256_label(good))
     # Uploaded later, but its label does not describe its bytes: a torn upload.
-    s.upload_new(
-        "data-2026-09", torn, "stations.csv.next-tok-2", label="sha256:" + "0" * 64
-    )
+    s.upload_new("data-2026-09", torn, "stations.csv.next-tok-2", label="sha256:" + "0" * 64)
 
     dest = s.read_resolved("data-2026-09", "stations.csv", tmp_path / "r.csv")
     assert dest.read_bytes() == b"good\n"
@@ -292,9 +288,7 @@ def test_read_resolved_falls_back_to_the_newest_old(tmp_path: Path):
 
     s.upload_new("data-2026-09", older, "stations.csv.old-tok-a")
     s.upload_new("data-2026-09", newer, "stations.csv.old-tok-b")
-    s.upload_new(
-        "data-2026-09", torn, "stations.csv.next-tok-1", label="sha256:" + "0" * 64
-    )
+    s.upload_new("data-2026-09", torn, "stations.csv.next-tok-1", label="sha256:" + "0" * 64)
 
     dest = s.read_resolved("data-2026-09", "stations.csv", tmp_path / "r.csv")
     assert dest.read_bytes() == b"newer\n"
@@ -312,9 +306,7 @@ def test_read_resolved_never_modifies_the_release(tmp_path: Path):
     s, _ = _seed(tmp_path)
     good = tmp_path / "good.csv"
     good.write_bytes(b"good\n")
-    s.upload_new(
-        "data-2026-09", good, "stations.csv.next-tok-1", label=store.sha256_label(good)
-    )
+    s.upload_new("data-2026-09", good, "stations.csv.next-tok-1", label=store.sha256_label(good))
     before = [(a.name, a.id, a.label) for a in s.list_assets("data-2026-09")]
 
     s.read_resolved("data-2026-09", "stations.csv", tmp_path / "r.csv")
@@ -421,3 +413,208 @@ def test_replace_atomic_deletes_an_upload_that_never_verifies(tmp_path: Path):
     assert [a.name for a in s.list_assets("data-2026-09")] == ["stations.csv"]
     got = seeder.download("data-2026-09", "stations.csv", tmp_path / "got.csv")
     assert got.read_bytes() == b"stations-v1\n"
+
+
+def _set_state(root: Path, tag: str, name: str, state: str) -> None:
+    """Force an asset's state in the sidecar, as a half-finished upload looks."""
+    sidecar = root / tag / "_release.json"
+    data = json.loads(sidecar.read_text(encoding="utf-8"))
+    data["assets"][name]["state"] = state
+    sidecar.write_text(json.dumps(data), encoding="utf-8")
+
+
+def _write(tmp_path: Path, name: str, payload: bytes) -> Path:
+    path = tmp_path / name
+    path.write_bytes(payload)
+    return path
+
+
+def test_recover_deletes_leftovers_when_the_live_name_is_present(tmp_path: Path):
+    # Crash after step 1 of replace_atomic: <name> is still live and a verified
+    # .next-* is sitting next to it.
+    s, _ = _seed(tmp_path)
+    v1 = _write(tmp_path, "v1.csv", b"stations-v1\n")
+    v2 = _write(tmp_path, "v2.csv", b"stations-v2\n")
+    s.upload_new("data-2026-09", v1, "stations.csv")
+    s.upload_new("data-2026-09", v2, "stations.csv.next-tok-1", label=store.sha256_label(v2))
+
+    actions = store.recover_temporaries(s, "data-2026-09")
+
+    assert [a.name for a in s.list_assets("data-2026-09")] == ["stations.csv"]
+    assert actions == ["deleted-leftover:stations.csv.next-tok-1"]
+    got = s.download("data-2026-09", "stations.csv", tmp_path / "got.csv")
+    assert got.read_bytes() == b"stations-v1\n"
+
+
+def test_recover_promotes_the_next_when_the_live_name_is_gone(tmp_path: Path):
+    # Crash between step 3 and step 4: <name> was renamed away, the new upload
+    # verifies, so it becomes <name> and the old copy is dropped.
+    s, _ = _seed(tmp_path)
+    v1 = _write(tmp_path, "v1.csv", b"stations-v1\n")
+    v2 = _write(tmp_path, "v2.csv", b"stations-v2\n")
+    s.upload_new("data-2026-09", v1, "stations.csv.old-tok")
+    s.upload_new("data-2026-09", v2, "stations.csv.next-tok-1", label=store.sha256_label(v2))
+
+    actions = store.recover_temporaries(s, "data-2026-09")
+
+    assert [a.name for a in s.list_assets("data-2026-09")] == ["stations.csv"]
+    assert actions == [
+        "promoted:stations.csv.next-tok-1",
+        "deleted-leftover:stations.csv.old-tok",
+    ]
+    assert s.list_assets("data-2026-09")[0].label is None
+    got = s.download("data-2026-09", "stations.csv", tmp_path / "got.csv")
+    assert got.read_bytes() == b"stations-v2\n"
+
+
+def test_recover_deletes_the_old_copy_when_the_promotion_already_happened(
+    tmp_path: Path,
+):
+    # Crash between step 4 and step 5.
+    s, _ = _seed(tmp_path)
+    v1 = _write(tmp_path, "v1.csv", b"stations-v1\n")
+    v2 = _write(tmp_path, "v2.csv", b"stations-v2\n")
+    s.upload_new("data-2026-09", v2, "stations.csv")
+    s.upload_new("data-2026-09", v1, "stations.csv.old-tok")
+
+    actions = store.recover_temporaries(s, "data-2026-09")
+
+    assert [a.name for a in s.list_assets("data-2026-09")] == ["stations.csv"]
+    assert actions == ["deleted-leftover:stations.csv.old-tok"]
+    got = s.download("data-2026-09", "stations.csv", tmp_path / "got.csv")
+    assert got.read_bytes() == b"stations-v2\n"
+
+
+def test_recover_restores_the_old_copy_when_no_next_verifies(tmp_path: Path):
+    s, _ = _seed(tmp_path)
+    v1 = _write(tmp_path, "v1.csv", b"stations-v1\n")
+    torn = _write(tmp_path, "torn.csv", b"stations-XX\n")
+    s.upload_new("data-2026-09", v1, "stations.csv.old-tok")
+    s.upload_new("data-2026-09", torn, "stations.csv.next-tok-1", label="sha256:" + "0" * 64)
+
+    actions = store.recover_temporaries(s, "data-2026-09")
+
+    assert [a.name for a in s.list_assets("data-2026-09")] == ["stations.csv"]
+    assert actions == [
+        "restored:stations.csv.old-tok",
+        "deleted-leftover:stations.csv.next-tok-1",
+    ]
+    got = s.download("data-2026-09", "stations.csv", tmp_path / "got.csv")
+    assert got.read_bytes() == b"stations-v1\n"
+
+
+def test_recover_deletes_temporaries_that_never_finished_uploading(tmp_path: Path):
+    s, root = _seed(tmp_path)
+    v1 = _write(tmp_path, "v1.csv", b"stations-v1\n")
+    half = _write(tmp_path, "half.csv", b"stations-v2\n")
+    s.upload_new("data-2026-09", v1, "stations.csv.old-tok")
+    s.upload_new("data-2026-09", half, "stations.csv.next-tok-1", label=store.sha256_label(half))
+    _set_state(root, "data-2026-09", "stations.csv.next-tok-1", "starter")
+
+    actions = store.recover_temporaries(s, "data-2026-09")
+
+    assert actions == [
+        "deleted-incomplete:stations.csv.next-tok-1",
+        "restored:stations.csv.old-tok",
+    ]
+    assert [a.name for a in s.list_assets("data-2026-09")] == ["stations.csv"]
+    got = s.download("data-2026-09", "stations.csv", tmp_path / "got.csv")
+    assert got.read_bytes() == b"stations-v1\n"
+
+
+def test_recover_takes_the_newest_verifying_next_and_clears_the_rest(tmp_path: Path):
+    s, _ = _seed(tmp_path)
+    old_try = _write(tmp_path, "a.csv", b"stations-v2\n")
+    new_try = _write(tmp_path, "b.csv", b"stations-v3\n")
+    previous = _write(tmp_path, "c.csv", b"stations-v1\n")
+    s.upload_new("data-2026-09", previous, "stations.csv.old-tok")
+    s.upload_new(
+        "data-2026-09",
+        old_try,
+        "stations.csv.next-tok-1",
+        label=store.sha256_label(old_try),
+    )
+    s.upload_new(
+        "data-2026-09",
+        new_try,
+        "stations.csv.next-tok-2",
+        label=store.sha256_label(new_try),
+    )
+
+    store.recover_temporaries(s, "data-2026-09")
+
+    assert [a.name for a in s.list_assets("data-2026-09")] == ["stations.csv"]
+    got = s.download("data-2026-09", "stations.csv", tmp_path / "got.csv")
+    assert got.read_bytes() == b"stations-v3\n"
+
+
+def test_recover_handles_several_names_and_a_closed_release(tmp_path: Path):
+    s, _ = _seed(tmp_path)
+    s.update_release("data-2026-09", prerelease=False)  # a closed month
+    rows = _write(tmp_path, "rows.csv", b"rows-v1\n")
+    manifest = _write(tmp_path, "m.json", b"{}\n")
+    s.upload_new("data-2026-09", rows, "costco-gas-2026-09-15.csv.gz")
+    s.upload_new(
+        "data-2026-09",
+        rows,
+        "costco-gas-2026-09-15.csv.gz.next-tok-1",
+        label=store.sha256_label(rows),
+    )
+    s.upload_new(
+        "data-2026-09",
+        manifest,
+        "manifest-2026-09.json.next-tok-1",
+        label=store.sha256_label(manifest),
+    )
+
+    store.recover_temporaries(s, "data-2026-09")
+
+    assert sorted(a.name for a in s.list_assets("data-2026-09")) == [
+        "costco-gas-2026-09-15.csv.gz",
+        "manifest-2026-09.json",
+    ]
+    assert s.get_release("data-2026-09").prerelease is False
+
+
+def test_recover_is_a_no_op_without_temporaries(tmp_path: Path):
+    s, _ = _seed(tmp_path)
+    rows = _write(tmp_path, "rows.csv", b"rows-v1\n")
+    s.upload_new("data-2026-09", rows, "rows.csv")
+    assert store.recover_temporaries(s, "data-2026-09") == []
+
+
+def _seed_four_releases(tmp_path: Path) -> store.LocalReleaseStore:
+    s = store.LocalReleaseStore(tmp_path / "releases")
+    s.ensure_release("current", "Current data", "b", False, "true")
+    s.ensure_release("data-2026-09", "September 2026", "b", True, "false")
+    s.ensure_release("data-2026", "2026", "b", False, "false")
+    s.ensure_release("notes", "not a data release", "b", False, "false")
+    return s
+
+
+def test_recovery_tags_lists_current_and_every_data_release(tmp_path: Path):
+    s = _seed_four_releases(tmp_path)
+    assert store.recovery_tags(s) == ["current", "data-2026", "data-2026-09"]
+
+
+def test_recover_temporaries_over_recovery_tags_leaves_other_releases_alone(
+    tmp_path: Path,
+):
+    s = _seed_four_releases(tmp_path)
+    payload = _write(tmp_path, "p.csv", b"p\n")
+    label = store.sha256_label(payload)
+    s.upload_new("current", payload, "stations.csv.old-tok")
+    s.upload_new("data-2026", payload, "costco-gas-2026.parquet.next-tok-1", label=label)
+    s.upload_new("notes", payload, "readme.txt.old-tok")
+
+    actions = {tag: store.recover_temporaries(s, tag) for tag in store.recovery_tags(s)}
+
+    assert sorted(tag for tag, done in actions.items() if done) == [
+        "current",
+        "data-2026",
+    ]
+    assert actions["data-2026-09"] == []
+    assert [a.name for a in s.list_assets("current")] == ["stations.csv"]
+    assert [a.name for a in s.list_assets("data-2026")] == ["costco-gas-2026.parquet"]
+    # `notes` is not a data release, so recovery never looked at it.
+    assert [a.name for a in s.list_assets("notes")] == ["readme.txt.old-tok"]
