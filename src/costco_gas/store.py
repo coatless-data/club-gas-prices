@@ -32,6 +32,8 @@ from typing import Literal, Protocol
 DEFAULT_STORE = "github:coatless-dashboard/costco-gas-prices"
 SIDECAR_NAME = "_release.json"
 LATEST_NAME = "_latest.json"
+POLL_SECONDS = 60.0
+RENAME_RETRY_DELAYS = (5.0, 10.0, 20.0, 40.0, 80.0)
 
 
 class AssetNotFound(Exception):
@@ -259,6 +261,80 @@ class _BaseStore:
                 return self._fetch_asset(tag, candidate, Path(dest))
 
         raise AssetNotFound(f"{tag}:{name}")
+
+    def replace_atomic(self, tag: str, path: Path, name: str, token: str) -> Asset:
+        """Replace `<name>` with the bytes at `path`, never leaving it unreadable.
+
+        1. upload as `<name>.next-<token>-<n>` with `label = sha256:<hex>`;
+        2. poll for up to 60 s until it is uploaded, the right size and the right
+           digest, otherwise delete it and raise;
+        3. rename any live `<name>` to `<name>.old-<token>`;
+        4. rename the new asset to `<name>` and clear its label, retrying a 422
+           after 5, 10, 20, 40 and 80 s, and rolling the old copy back if it
+           never succeeds;
+        5. delete `<name>.old-<token>`.
+        """
+        path = Path(path)
+        local_label = sha256_label(path)
+        local_size = path.stat().st_size
+
+        used = {a.name for a in self.list_assets(tag)}
+        index = 1
+        while next_name(name, token, index) in used:
+            index += 1
+        temp = next_name(name, token, index)
+
+        self.upload_new(tag, path, temp, label=local_label)
+
+        deadline = self._monotonic() + POLL_SECONDS
+        verified: Asset | None = None
+        while True:
+            current = self._asset_by_name(tag, temp)
+            if current is not None and self._verify_asset(
+                tag, current, local_label, local_size
+            ):
+                verified = current
+                break
+            if self._monotonic() >= deadline:
+                break
+            self._sleep(1.0)
+
+        if verified is None:
+            stale = self._asset_by_name(tag, temp)
+            if stale is not None:
+                self.delete(tag, stale.id)
+            raise StorageError(f"upload did not verify: {tag}:{temp}")
+
+        existing = self._asset_by_name(tag, name)
+        old: Asset | None = None
+        if existing is not None:
+            old = self.rename(tag, existing.id, old_name(name, token))
+
+        promoted: Asset | None = None
+        last_error: Exception | None = None
+        for attempt in range(len(RENAME_RETRY_DELAYS) + 1):
+            try:
+                promoted = self.rename(tag, verified.id, name, label="")
+                break
+            except StorageError as exc:
+                if exc.status != 422:
+                    raise
+                last_error = exc
+                if attempt == len(RENAME_RETRY_DELAYS):
+                    break
+                self._sleep(RENAME_RETRY_DELAYS[attempt])
+
+        if promoted is None:
+            if old is not None:
+                self.rename(tag, old.id, name)
+            raise StorageError(
+                f"could not promote {temp} to {name} in {tag}: {last_error}",
+                status=422,
+            )
+
+        if old is not None:
+            self.delete(tag, old.id)
+        return promoted
 
 
 class LocalReleaseStore(_BaseStore):

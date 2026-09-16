@@ -320,3 +320,104 @@ def test_read_resolved_never_modifies_the_release(tmp_path: Path):
     s.read_resolved("data-2026-09", "stations.csv", tmp_path / "r.csv")
 
     assert [(a.name, a.id, a.label) for a in s.list_assets("data-2026-09")] == before
+
+
+class FakeClock:
+    """A monotonic clock that only moves when something sleeps."""
+
+    def __init__(self) -> None:
+        self.t = 0.0
+        self.slept: list[float] = []
+
+    def now(self) -> float:
+        return self.t
+
+    def sleep(self, seconds: float) -> None:
+        self.slept.append(seconds)
+        self.t += seconds
+
+
+def test_replace_atomic_creates_the_asset_when_it_is_absent(tmp_path: Path):
+    s, _ = _seed(tmp_path)
+    src = tmp_path / "stations.csv"
+    src.write_bytes(b"stations-v1\n")
+
+    asset = s.replace_atomic("data-2026-09", src, "stations.csv", "2026-09-15T1817Z")
+
+    assert asset.name == "stations.csv"
+    assert asset.label is None  # the sha256: label is cleared on promotion
+    assert [a.name for a in s.list_assets("data-2026-09")] == ["stations.csv"]
+    got = s.download("data-2026-09", "stations.csv", tmp_path / "got.csv")
+    assert got.read_bytes() == b"stations-v1\n"
+
+
+def test_replace_atomic_swaps_the_content_and_removes_the_old_copy(tmp_path: Path):
+    s, _ = _seed(tmp_path)
+    v1 = tmp_path / "v1.csv"
+    v1.write_bytes(b"stations-v1\n")
+    v2 = tmp_path / "v2.csv"
+    v2.write_bytes(b"stations-v2\n")
+    s.upload_new("data-2026-09", v1, "stations.csv")
+
+    s.replace_atomic("data-2026-09", v2, "stations.csv", "2026-09-15T1817Z")
+
+    assert [a.name for a in s.list_assets("data-2026-09")] == ["stations.csv"]
+    got = s.download("data-2026-09", "stations.csv", tmp_path / "got.csv")
+    assert got.read_bytes() == b"stations-v2\n"
+
+
+def test_replace_atomic_never_reuses_a_temporary_name(tmp_path: Path):
+    s, _ = _seed(tmp_path)
+    v1 = tmp_path / "v1.csv"
+    v1.write_bytes(b"stations-v1\n")
+    v2 = tmp_path / "v2.csv"
+    v2.write_bytes(b"stations-v2\n")
+    leftover = tmp_path / "leftover.csv"
+    leftover.write_bytes(b"leftover\n")
+
+    s.upload_new("data-2026-09", v1, "stations.csv")
+    s.upload_new(
+        "data-2026-09",
+        leftover,
+        "stations.csv.next-tok-1",
+        label=store.sha256_label(leftover),
+    )
+
+    s.replace_atomic("data-2026-09", v2, "stations.csv", "tok")
+
+    names = sorted(a.name for a in s.list_assets("data-2026-09"))
+    assert names == ["stations.csv", "stations.csv.next-tok-1"]
+    got = s.download("data-2026-09", "stations.csv", tmp_path / "got.csv")
+    assert got.read_bytes() == b"stations-v2\n"
+
+
+def test_replace_atomic_deletes_an_upload_that_never_verifies(tmp_path: Path):
+    class CorruptingStore(store.LocalReleaseStore):
+        """Records a wrong digest for every upload, like a torn transfer."""
+
+        def upload_new(self, tag, path, name, label=None):
+            asset = super().upload_new(tag, path, name, label=label)
+            data = self._read(tag)
+            data["assets"][name]["digest"] = "sha256:" + "0" * 64
+            self._write(tag, data)
+            return asset
+
+    root = tmp_path / "releases"
+    seeder = store.LocalReleaseStore(root)
+    seeder.ensure_release("data-2026-09", "September 2026", "b", True, "false")
+    v1 = tmp_path / "v1.csv"
+    v1.write_bytes(b"stations-v1\n")
+    seeder.upload_new("data-2026-09", v1, "stations.csv")
+
+    clock = FakeClock()
+    s = CorruptingStore(root, sleep=clock.sleep, monotonic=clock.now)
+    v2 = tmp_path / "v2.csv"
+    v2.write_bytes(b"stations-v2\n")
+
+    with pytest.raises(store.StorageError, match="did not verify"):
+        s.replace_atomic("data-2026-09", v2, "stations.csv", "tok")
+
+    assert len(clock.slept) == 60  # polled once a second for 60 seconds
+    assert [a.name for a in s.list_assets("data-2026-09")] == ["stations.csv"]
+    got = seeder.download("data-2026-09", "stations.csv", tmp_path / "got.csv")
+    assert got.read_bytes() == b"stations-v1\n"
