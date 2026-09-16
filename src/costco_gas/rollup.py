@@ -148,11 +148,28 @@ def _blocking_reasons(store, tag: str) -> list[str]:
     for asset in assets:
         if TEMP_ASSET.search(asset.name):
             reasons.append(f"temporary asset `{asset.name}` is still present")
-    known = set(read_month_manifest(store, tag).get("captures", {}))
+    manifest = read_month_manifest(store, tag)
+    known = set(manifest.get("captures", {}))
     for asset in assets:
         match = BUNDLE_ASSET.match(asset.name)
         if match and asset.state == "uploaded" and match.group(1) not in known:
             reasons.append(f"bundle `{asset.name}` has no entry in the month manifest")
+    # A day the manifest records rows for, but whose daily file is missing or not
+    # `uploaded`, must block the month exactly like a temp asset or an orphan
+    # bundle: `_close_month`'s own row-count checks compare `captures.height` and
+    # `per_file` only over days that ARE present, so a missing day makes both
+    # sides shrink together and would otherwise close the month short (spec
+    # review round 4, Finding 1).
+    recorded_days = set(_expected_daily_rows(manifest))
+    uploaded_days = {
+        match.group(1)
+        for asset in assets
+        if (match := DAILY_ASSET.match(asset.name)) and asset.state == "uploaded"
+    }
+    for day in sorted(recorded_days - uploaded_days):
+        reasons.append(
+            f"day `{day}` has no uploaded daily file, though the month manifest records rows for it"
+        )
     return reasons
 
 
@@ -204,9 +221,16 @@ def close_periods(
             )
             continue
         _close_month(store, cfg, tag, month, token=token, now=now)
+        # The data rebuild runs before `prerelease` is cleared on purpose (an
+        # interrupted close is simply retried), so it still sees this month as
+        # open and `current/manifest.json`'s closed_months cannot list it yet.
+        # Refresh that list right after clearing `prerelease`: a small
+        # manifest-only write, safe to lose to an interrupt since the next close
+        # or an explicit rebuild repairs it (spec review round 4, Finding 2).
         _rebuild_current_impl(store, cfg, now=now)
         rebuilt = True
         store.update_release(tag, prerelease=False, make_latest="false")
+        _refresh_current_periods(store, token=token)
         closed_months.append(month)
         _safe_issue(
             issues.close,
@@ -477,7 +501,19 @@ def _current_body(cfg) -> str:
 
 def _rebuild_current_impl(store, cfg, *, now: datetime) -> None:
     """§8.6 full `current` rebuild: closed month files + every month manifest +
-    the daily files of every prerelease data-* release."""
+    the daily files of every prerelease data-* release.
+
+    `close_periods` already recovers every release before it ever reaches here,
+    but `rebuild_current` (this function, under its public name) is also called
+    directly -- Task 16 does so -- so recovery has to run here too, matching
+    store.py's own contract that it runs at the start of publish, close-periods
+    AND rebuild. Without it, a release left mid-`replace_atomic` would rebuild
+    `current` while silently dropping that asset: `DAILY_ASSET` never matches a
+    `.next-`/`.old-` name (spec review round 4, Finding 3). Recovery is
+    idempotent, so calling it again here when `close_periods` already did costs
+    only an extra listing, never a behaviour change.
+    """
+    _recover_all(store)
     token = _token(now)
     releases = {r.tag: r for r in store.list_releases()}
     frames: list[pl.DataFrame] = []

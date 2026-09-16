@@ -9,7 +9,7 @@ import polars as pl
 import pytest
 
 from costco_gas.rollup import close_periods, daily_grain, rebuild_current
-from costco_gas.store import open_store
+from costco_gas.store import next_name, open_store, sha256_label
 from helpers_rollup import (
     RecordingIssues,
     RecordingStore,
@@ -18,6 +18,7 @@ from helpers_rollup import (
     seed_month,
     stations_frame,
     stub_config,
+    write_csv_gz,
 )
 
 CURRENT_DATA_ASSET_NAMES = {
@@ -172,6 +173,32 @@ def _seed_august(store, tmp_path, *, fx=None):
     )
 
 
+def test_close_periods_blocks_a_month_whose_recorded_day_has_no_uploaded_file(tmp_path):
+    """Finding 1 (spec review round 4): a day the manifest records rows for, but
+    whose daily file is missing, must block the month -- `_close_month`'s own
+    row-count checks compare `captures.height` and `per_file` only over days
+    that ARE present, so a missing day would otherwise shrink both sides
+    together and close the month short."""
+    store = open_store(f"local:{tmp_path / 'releases'}")
+    cfg = stub_config(tmp_path)
+    _seed_august(store, tmp_path)
+    missing = next(
+        a for a in store.list_assets("data-2026-08") if a.name == "costco-gas-2026-08-31.csv.gz"
+    )
+    store.delete("data-2026-08", missing.id)
+    issues = RecordingIssues()
+
+    result = close_periods(store, cfg, now=datetime(2026, 9, 1, 3, 17, tzinfo=UTC), issues=issues)
+
+    assert result.blocked_months == ["2026-08"]
+    assert result.closed_months == []
+    assert store.get_release("data-2026-08").prerelease is True
+    assert issues.opened[0][0] == "Period close blocked: 2026-08"
+    assert "2026-08-31" in issues.opened[0][1]
+    names = {a.name for a in store.list_assets("data-2026-08")}
+    assert "costco-gas-2026-08.parquet" not in names
+
+
 def test_month_close_writes_both_grains_and_clears_prerelease_last(tmp_path):
     store = RecordingStore(open_store(f"local:{tmp_path / 'releases'}"))
     cfg = stub_config(tmp_path)
@@ -210,6 +237,28 @@ def test_month_close_writes_both_grains_and_clears_prerelease_last(tmp_path):
         "replace_atomic:data-2026-08:costco-gas-2026-08-captures.parquet"
     )
     assert cleared > store.log.index("replace_atomic:current:manifest.json")
+
+
+def test_month_close_refreshes_current_manifest_closed_months_in_the_same_run(tmp_path):
+    """Finding 2 (spec review round 4): the data rebuild runs while the month is
+    still prerelease (so an interrupted close simply retries), which means
+    current/manifest.json's closed_months cannot list this month yet by the time
+    that rebuild runs. It must be refreshed again right after `prerelease` is
+    cleared, in the same close_periods call -- not left stale until the next
+    close or an explicit --rebuild-current."""
+    store = open_store(f"local:{tmp_path / 'releases'}")
+    cfg = stub_config(tmp_path)
+    _seed_august(store, tmp_path)
+
+    result = close_periods(
+        store, cfg, now=datetime(2026, 9, 1, 3, 17, tzinfo=UTC), issues=RecordingIssues()
+    )
+
+    assert result.closed_months == ["2026-08"]
+    manifest = json.loads(
+        store.download("current", "manifest.json", tmp_path / "m.json").read_text()
+    )
+    assert manifest["closed_months"] == ["2026-08"]
 
 
 def test_month_close_is_safe_to_repeat(tmp_path):
@@ -467,6 +516,36 @@ def test_full_rebuild_recomputes_merged_captures_to_match_the_rebuilt_captures_f
         "2026-08-31T1817Z",
         "2026-09-15T1817Z",
     ]
+
+
+def test_rebuild_current_recovers_an_interrupted_replace_before_reading(tmp_path):
+    """Finding 3 (spec review round 4): `rebuild_current` is a public entry point
+    Task 16 calls directly, not only through close_periods, so it must run
+    recovery itself -- store.py's own contract says recovery runs at the start
+    of publish, close-periods AND rebuild. `DAILY_ASSET` never matches a
+    `.next-`/`.old-` name, so without recovery here an interrupted day's file
+    would be silently dropped from the rebuilt `current`."""
+    store = open_store(f"local:{tmp_path / 'releases'}")
+    cfg = stub_config(tmp_path)
+    store.ensure_release("data-2026-09", "Data 2026-09", "", True, "false")
+    frame = _us_rows("2026-09-15T1817Z", 4.099)
+    path = tmp_path / "costco-gas-2026-09-15.csv.gz"
+    write_csv_gz(frame, path)
+    name = "costco-gas-2026-09-15.csv.gz"
+    # Simulates a replace_atomic that uploaded and verified the new bytes but
+    # crashed before promoting them to the live name: exactly what an
+    # interrupted first-ever write of this day's file leaves behind.
+    store.upload_new("data-2026-09", path, next_name(name, "run-test", 1), label=sha256_label(path))
+
+    rebuild_current(store, cfg, now=datetime(2026, 9, 15, 19, 0, tzinfo=UTC))
+
+    names = {a.name for a in store.list_assets("data-2026-09")}
+    assert name in names
+    caps = pl.read_parquet(
+        store.download("current", "costco-gas-all-captures.parquet", tmp_path / "caps.parquet")
+    )
+    assert caps.height == 2
+    assert set(caps["capture_id"].to_list()) == {"2026-09-15T1817Z"}
 
 
 def _close_both_months_of_2026(store, cfg, tmp_path):
