@@ -11,6 +11,7 @@ from costco_gas.config import load_config
 from costco_gas.http import Client
 from costco_gas.sources.base import CaptureContext, RawResponse
 from costco_gas.sources.ca import (
+    CaSource,
     cached_stations,
     parse_lookup_body,
     parse_open_date,
@@ -165,3 +166,51 @@ def test_cached_stations_keeps_only_recent_ca_rows():
     # The window is the caller's: CountryConfig.seen_within_days, 30 for CA.
     assert sorted(cached_stations(previous, date(2026, 9, 15), 90)) == ["1213", "530"]
     assert cached_stations(pl.DataFrame(), date(2026, 9, 15)) == {}
+
+
+def test_lookup_fields_and_grade_keys():
+    result, responses = run(serve(LOOKUP_BODY))
+
+    assert result.country == "CA"
+    assert result.source == "costco-ca-lookup"
+    assert [r.key for r in responses] == ["CA/01-lookup"]
+    assert result.requests == 1
+    assert result.errors == []
+
+    vaudreuil = station(result, "1213")
+    assert vaudreuil.name == "Vaudreuil"
+    assert vaudreuil.city == "VAUDREUIL-DORION"
+    assert vaudreuil.region == "QC"
+    assert vaudreuil.postcode == "J7V 0M8"
+    assert vaudreuil.address == "22400 CH DUMBERRY"
+    assert vaudreuil.id_origin == "lookup"
+    assert vaudreuil.opening_date == date(2015, 10, 16)
+    assert vaudreuil.has_hours is True
+    # warehouseid and oid are not grades; every other key is.
+    assert [(p.grade_raw, p.price_raw) for p in vaudreuil.prices] == [
+        ("diesel", "2.649"),
+        ("regular", "1.799"),
+        ("premium", "1.999"),
+    ]
+
+
+def test_not_open_no_hours_and_priced_before_open():
+    result, _ = run(serve(LOOKUP_BODY))
+
+    lloydminster = station(result, "1790")
+    assert lloydminster.opening_date == date(2026, 11, 19)
+    assert source_filter_reason(lloydminster, date(2026, 9, 15)) == "not_open"
+
+    calgary = station(result, "1813")
+    assert calgary.opening_date == date(2027, 4, 1)
+    assert calgary.has_hours is False
+    assert calgary.prices == ()
+    assert source_filter_reason(calgary, date(2026, 9, 15)) == "not_open"
+
+    # An already-open, priced, staffed station passes every source filter.
+    assert source_filter_reason(station(result, "1324"), date(2026, 9, 15)) is None
+
+    # #1790 is priced at 1.549 CAD/L before it opens, inside bounds["CAD/L"];
+    # #1813 has no price at all.
+    assert ("priced_before_open", "1790") in codes(result.warnings)
+    assert ("priced_before_open", "1813") not in codes(result.warnings)

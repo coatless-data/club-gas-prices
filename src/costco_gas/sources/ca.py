@@ -6,12 +6,21 @@ import json
 import re
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 
 import polars as pl
 
 from ..config import CountryConfig
-from .base import CaptureContext, RawPrice, RawStation
+from ..http import BudgetExceeded, Client
+from .base import (
+    CaptureContext,
+    Error,
+    FetchResult,
+    RawPrice,
+    RawResponse,
+    RawStation,
+    Warning,
+)
 
 LOOKUP_SOURCE = "costco-ca-lookup"
 PRICE_SOURCE = "costco-ca-gasprices"
@@ -131,6 +140,116 @@ def cached_stations(
             continue
         out[str(station_id)] = row
     return out
+
+
+class CaSource:
+    country = "CA"
+
+    def fetch(self, client: Client, ctx: CaptureContext) -> list[RawResponse]:
+        cc = ctx.fetch_config.countries["CA"]
+        url = lookup_url(cc)
+        if client.abandoned(url):
+            return []
+        try:
+            return [client.request(LOOKUP_KEY, url, expect_json=True)]
+        except BudgetExceeded:
+            return []
+
+    def parse(self, responses: list[RawResponse], ctx: CaptureContext) -> FetchResult:
+        lookup = next((r for r in responses if r.key == LOOKUP_KEY), None)
+        return self._parse_lookup(lookup, responses, ctx)
+
+    def _parse_lookup(
+        self, lookup: RawResponse | None, responses: list[RawResponse], ctx: CaptureContext
+    ) -> FetchResult:
+        cc = ctx.interp_config.countries["CA"]
+        warnings: list[Warning] = []
+        errors: list[Error] = []
+        stations: list[RawStation] = []
+        captured = lookup.received_at_utc if lookup else _capture_time(ctx)
+
+        if lookup is None:
+            errors.append(
+                Error(
+                    code="host_abandoned",
+                    host=urlsplit(lookup_url(ctx.fetch_config.countries["CA"])).netloc,
+                    detail="no lookup response",
+                )
+            )
+        elif lookup.error or lookup.status != 200:
+            errors.append(
+                Error(
+                    code="request_failed" if lookup.status is None else "http_error",
+                    host=urlsplit(lookup.url).netloc,
+                    http_status=lookup.status,
+                    detail=lookup.error,
+                )
+            )
+        else:
+            try:
+                entries = parse_lookup_body(lookup.body)
+            except (ValueError, UnicodeDecodeError) as exc:
+                errors.append(
+                    Error(
+                        code="unparseable_body",
+                        host=urlsplit(lookup.url).netloc,
+                        http_status=lookup.status,
+                        detail=str(exc),
+                    )
+                )
+                entries = []
+            for entry in entries:
+                station, tz_origin = _lookup_station(entry, cc)
+                if tz_origin == "region":
+                    warnings.append(
+                        Warning(code="timezone_from_region", detail=station.source_station_id)
+                    )
+                reason = source_filter_reason(station, ctx.capture_date)
+                if reason in ("not_open", "no_hours") and _regular_in_bounds(station, cc):
+                    warnings.append(
+                        Warning(code="priced_before_open", detail=station.source_station_id)
+                    )
+                stations.append(station)
+
+        return FetchResult(
+            country="CA",
+            source=LOOKUP_SOURCE,
+            captured_at_utc=captured,
+            stations=stations,
+            responses=list(responses),
+            requests=len([r for r in responses if r.key.startswith("CA/")]),
+            warnings=warnings,
+            errors=errors,
+        )
+
+
+def _lookup_station(entry: dict[str, Any], cc: CountryConfig) -> tuple[RawStation, str | None]:
+    """The station, and where its timezone came from."""
+    station_id = str(entry.get("stlocID"))
+    region = _clean(entry.get("state"))
+    # CountryConfig owns the table and its default row; never index cc.timezones.
+    tz = cc.timezone_for_region(region)
+    tz_origin = "region" if tz else None
+
+    station = RawStation(
+        source_station_id=station_id,
+        alt_id=None,
+        id_origin="lookup",
+        ecom_state=None,
+        name=_clean(entry.get("locationName")) or station_id,
+        name_local=None,
+        address=_clean(entry.get("address1")),
+        city=_clean(entry.get("city")),
+        region=region,
+        postcode=_clean(entry.get("zipCode")),
+        lat=_as_float(entry.get("latitude")),
+        lon=_as_float(entry.get("longitude")),
+        timezone=tz,
+        opening_date=parse_open_date(entry.get("openDate")),
+        has_hours=bool(entry.get("gasStationHours")),
+        prices=_prices(entry.get("gasPrices")),
+    )
+    return station, tz_origin
 
 
 def _prices(grades: Any) -> tuple[RawPrice, ...]:
