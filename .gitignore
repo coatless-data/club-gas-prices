@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
+
+# Planning and research notes: never published
+docs/superpowers/
+
+# Quarto build output and generated site data
+site/_site/
+site/.quarto/
+site/data/
+_site/
+.quarto/
+
+# Local capture output and downloaded release state
+out/
+state/
+releases/
+
+# Local environment and credentials
+.env
+.Renviron
+
+# Databases and editor noise
+*.db
+.DS_Store

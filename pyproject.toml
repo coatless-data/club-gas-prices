@@ -1,0 +1,45 @@
+[project]
+name = "costco-gas-prices"
+version = "0.1.0"
+description = "Collect Costco fuel prices worldwide and publish them as GitHub Releases and a dashboard."
+readme = "README.md"
+requires-python = ">=3.13,<3.14"
+license = "MIT"
+license-files = ["LICENSE"]
+dependencies = [
+    "httpx>=0.28,<1",
+    "polars>=1.18,<2",
+]
+
+[project.scripts]
+costco-gas = "costco_gas.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/costco_gas"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3,<9",
+    "ruff>=0.8,<1",
+]
+# CI only: the Render workflow drives the built site with Playwright.
+smoke = [
+    "playwright==1.49.1",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# tests/smoke is launched by the Render workflow as a plain script, not by pytest.
+addopts = "-q --strict-markers --ignore=tests/smoke"
