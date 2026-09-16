@@ -19,9 +19,7 @@ import textwrap
 from pathlib import Path
 
 WORKFLOWS = Path(__file__).resolve().parents[1] / ".github" / "workflows"
-SERIAL_CONCURRENCY = (
-    "concurrency:\n  group: costco-gas-data\n  cancel-in-progress: false\n"
-)
+SERIAL_CONCURRENCY = "concurrency:\n  group: costco-gas-data\n  cancel-in-progress: false\n"
 
 
 def read(name: str) -> str:
@@ -81,9 +79,7 @@ def test_capture_triggers_and_job_settings():
     assert '      COSTCO_GAS_WRITER: "1"\n' in text
     assert "      COUNTRIES: ${{ inputs.countries || 'all' }}\n" in text
     assert "      FORCE_FALLBACK: ${{ inputs.force_fallback || '' }}\n" in text
-    assert (
-        "ref: ${{ github.event.repository.default_branch || github.ref_name }}" in text
-    )
+    assert "ref: ${{ github.event.repository.default_branch || github.ref_name }}" in text
     assert "fetch-depth: 0" in text
 
 
@@ -108,10 +104,7 @@ def test_capture_step_commands_conditions_and_timeouts():
         "if: ${{ always() }}",
         "if: ${{ inputs.dry_run != true && steps.capture.outputs.all_failed != 'true' }}",
         "if: ${{ steps.publish.outcome == 'success' }}",
-        (
-            "if: ${{ !cancelled() && inputs.dry_run != true"
-            " && steps.capture.outcome == 'success' }}"
-        ),
+        ("if: ${{ !cancelled() && inputs.dry_run != true && steps.capture.outcome == 'success' }}"),
         (
             "if: ${{ inputs.dry_run != true"
             " && (steps.capture.outputs.all_failed == 'true'"
@@ -212,9 +205,7 @@ def write_current(directory: Path) -> None:
     for name, body in payload.items():
         (directory / name).write_bytes(body)
         assets[name] = {"sha256": hashlib.sha256(body).hexdigest(), "size": len(body)}
-    (directory / "manifest.json").write_text(
-        json.dumps({"assets": assets}), encoding="utf-8"
-    )
+    (directory / "manifest.json").write_text(json.dumps({"assets": assets}), encoding="utf-8")
 
 
 def run_verify(tmp_path: Path) -> subprocess.CompletedProcess[str]:
@@ -241,9 +232,7 @@ def test_render_verify_script_rejects_a_torn_release(tmp_path):
     # which is what the 5 retries in the workflow are there to ride out.
     (tmp_path / "current").mkdir()
     write_current(tmp_path / "current")
-    (tmp_path / "current" / "fx.csv").write_bytes(
-        b"capture_id,currency\n2026-09-15T1817Z,MXN\n"
-    )
+    (tmp_path / "current" / "fx.csv").write_bytes(b"capture_id,currency\n2026-09-15T1817Z,MXN\n")
     done = run_verify(tmp_path)
     assert done.returncode != 0
     assert "fx.csv" in done.stderr
@@ -271,3 +260,45 @@ def test_discover_conventions_and_settings():
     assert "run: uv run costco-gas discover\n" in text
     # discover only reads releases, so it must never claim the writer flag.
     assert "COSTCO_GAS_WRITER" not in text
+
+
+def test_rebuild_conventions_and_settings():
+    assert_conventions("rebuild.yml")
+    text = read("rebuild.yml")
+    assert text.startswith("name: Rebuild\n")
+    assert SERIAL_CONCURRENCY in text
+    assert "permissions:\n  contents: write\n  issues: write\n  actions: read\n" in text
+    assert "    timeout-minutes: 350\n" in text
+    assert '      COSTCO_GAS_WRITER: "1"\n' in text
+    assert "      SCOPE: ${{ inputs.scope }}\n" in text
+    assert "      VALUE: ${{ inputs.value }}\n" in text
+    assert "ref: ${{ github.event.repository.default_branch || github.ref_name }}" in text
+    # store.py refuses a GitHub release write without COSTCO_GAS_WRITER=1, so it
+    # is declared by exactly the two workflows that write releases.
+    writers = {
+        name
+        for name in ("capture.yml", "render.yml", "discover.yml", "rebuild.yml")
+        if 'COSTCO_GAS_WRITER: "1"' in read(name)
+    }
+    assert writers == {"capture.yml", "rebuild.yml"}
+
+
+def test_rebuild_dispatches_every_scope():
+    text = read("rebuild.yml")
+    for option in (
+        "          - month\n",
+        "          - year\n",
+        "          - all\n",
+        "          - artifact\n",
+    ):
+        assert option in text, option
+    assert "if: ${{ inputs.scope == 'artifact' }}" in text
+    assert "pattern: capture-*" in text
+    assert "run-id: ${{ inputs.value }}" in text
+    assert 'case "$SCOPE" in' in text
+    assert 'uv run costco-gas rebuild --month "$VALUE"' in text
+    assert 'uv run costco-gas rebuild --year "$VALUE"' in text
+    assert "uv run costco-gas rebuild --all" in text
+    assert 'uv run costco-gas publish "$d"' in text
+    assert "if: ${{ steps.rebuild.outcome == 'success' }}" in text
+    assert "run: uv run costco-gas close-periods --rebuild-current" in text

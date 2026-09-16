@@ -1,0 +1,115 @@
+name: Rebuild
+
+on:
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: What to rebuild
+        type: choice
+        required: true
+        options:
+          - month
+          - year
+          - all
+          - artifact
+        default: month
+      value:
+        description: 'YYYY-MM for month, YYYY for year, a run id for artifact, empty for all'
+        type: string
+        default: ""
+
+run-name: Rebuild ${{ inputs.scope }} ${{ inputs.value }}
+
+concurrency:
+  group: costco-gas-data
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  issues: write
+  actions: read
+
+jobs:
+  rebuild:
+    name: Rebuild
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+      GH_TOKEN: ${{ github.token }}
+      CONTACT_EMAIL: ${{ vars.CONTACT_EMAIL }}
+      COSTCO_GAS_WRITER: "1"
+      SCOPE: ${{ inputs.scope }}
+      VALUE: ${{ inputs.value }}
+    steps:
+      - name: Check out the default branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch || github.ref_name }}
+          fetch-depth: 0
+
+      - name: Verify HEAD is the tip of the default branch
+        env:
+          BRANCH: ${{ github.event.repository.default_branch || github.ref_name }}
+        run: |
+          set -euo pipefail
+          git fetch --quiet origin "$BRANCH"
+          head_sha="$(git rev-parse HEAD)"
+          tip_sha="$(git rev-parse FETCH_HEAD)"
+          if [ "$head_sha" != "$tip_sha" ]; then
+            echo "::error::HEAD $head_sha is not the tip of origin/$BRANCH ($tip_sha)"
+            exit 1
+          fi
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          enable-cache: true
+
+      - name: Install the project
+        run: uv sync --locked
+
+      - name: Download the capture artifacts
+        if: ${{ inputs.scope == 'artifact' }}
+        uses: actions/download-artifact@v4
+        with:
+          pattern: capture-*
+          run-id: ${{ inputs.value }}
+          github-token: ${{ github.token }}
+          path: artifact
+
+      - name: Rebuild
+        id: rebuild
+        run: |
+          set -euo pipefail
+          case "$SCOPE" in
+            month)
+              uv run costco-gas rebuild --month "$VALUE"
+              ;;
+            year)
+              uv run costco-gas rebuild --year "$VALUE"
+              ;;
+            all)
+              uv run costco-gas rebuild --all
+              ;;
+            artifact)
+              shopt -s nullglob
+              dirs=(artifact/*/capture)
+              if [ "${#dirs[@]}" -eq 0 ]; then
+                echo "::error::run $VALUE has no capture-*/capture directories"
+                exit 1
+              fi
+              for d in "${dirs[@]}"; do
+                uv run costco-gas publish "$d" || exit 1
+              done
+              ;;
+            *)
+              echo "::error::unknown scope $SCOPE"
+              exit 1
+              ;;
+          esac
+
+      - name: Close periods and rebuild current
+        if: ${{ steps.rebuild.outcome == 'success' }}
+        timeout-minutes: 60
+        run: uv run costco-gas close-periods --rebuild-current
