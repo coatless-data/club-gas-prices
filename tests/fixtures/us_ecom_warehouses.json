@@ -1,0 +1,542 @@
+{
+ "context": {
+  "messageName": "WarehouseSearchResponse",
+  "timestamp": "2026-09-15T19:11:20.90593531Z",
+  "sendingApplication": "esd-warehouse-locator-api-v1.15.0-071760e",
+  "trackingId": "ed44c710-da5d-4719-b52c-eb5b6c87b15a9260227",
+  "statusMessage": {
+   "statusCode": "Success"
+  },
+  "lastPage": true,
+  "totalResults": -1
+ },
+ "warehouses": [
+  {
+   "warehouseId": "1364",
+   "name": [
+    {
+     "value": "Bradenton",
+     "localeCode": "en-US"
+    }
+   ],
+   "subType": {
+    "code": "No Minor Type"
+   },
+   "address": {
+    "line1": "805 LIGHTHOUSE DRIVE",
+    "city": "BRADENTON",
+    "territory": "FL",
+    "postalCode": "34212",
+    "countryName": "US",
+    "latitude": 27.49462445,
+    "longitude": -82.47014406
+   },
+   "timeZone": "America/New_York",
+   "openingDate": "2019-08-21",
+   "services": [
+    {
+     "code": "auto"
+    },
+    {
+     "code": "food"
+    },
+    {
+     "code": "gas"
+    },
+    {
+     "code": "hearing"
+    },
+    {
+     "code": "optical"
+    },
+    {
+     "code": "pharmacy"
+    },
+    {
+     "code": "specialty_item"
+    }
+   ]
+  },
+  {
+   "warehouseId": "140",
+   "name": [
+    {
+     "value": "Kona",
+     "localeCode": "en-US"
+    }
+   ],
+   "subType": {
+    "code": "No Minor Type"
+   },
+   "address": {
+    "line1": "73-5600 MAIAU ST",
+    "city": "KAILUA KONA",
+    "territory": "HI",
+    "postalCode": "96740-2630",
+    "countryName": "US",
+    "latitude": 19.68545677,
+    "longitude": -156.0168782
+   },
+   "timeZone": "Pacific/Honolulu",
+   "openingDate": "1993-11-22",
+   "services": [
+    {
+     "code": "auto"
+    },
+    {
+     "code": "diesel"
+    },
+    {
+     "code": "food"
+    },
+    {
+     "code": "gas"
+    },
+    {
+     "code": "hearing"
+    },
+    {
+     "code": "optical"
+    },
+    {
+     "code": "pharmacy"
+    },
+    {
+     "code": "specialty_item"
+    }
+   ]
+  },
+  {
+   "warehouseId": "335",
+   "name": [
+    {
+     "value": "Carolina",
+     "localeCode": "en-US"
+    }
+   ],
+   "subType": {
+    "code": "No Minor Type"
+   },
+   "address": {
+    "line1": "1185 AVE 65 INFANTERIA",
+    "city": "SAN JUAN",
+    "territory": "PR",
+    "postalCode": "00924-3403",
+    "countryName": "US",
+    "latitude": 18.39974101,
+    "longitude": -65.99743872
+   },
+   "timeZone": "America/Puerto_Rico",
+   "openingDate": "2002-11-22",
+   "services": [
+    {
+     "code": "auto"
+    },
+    {
+     "code": "food"
+    },
+    {
+     "code": "gas"
+    },
+    {
+     "code": "hearing"
+    },
+    {
+     "code": "optical"
+    },
+    {
+     "code": "pharmacy"
+    },
+    {
+     "code": "propane"
+    },
+    {
+     "code": "specialty_item"
+    }
+   ]
+  },
+  {
+   "warehouseId": "1838",
+   "name": [
+    {
+     "value": "Lees Summit",
+     "localeCode": "en-US"
+    }
+   ],
+   "subType": {
+    "code": "No Minor Type"
+   },
+   "address": {
+    "line1": "10 SE OLDHAM PARKWAY",
+    "city": "LEES SUMMIT",
+    "territory": "MO",
+    "postalCode": "64081-2986",
+    "countryName": "US",
+    "latitude": 38.90107,
+    "longitude": -94.37105
+   },
+   "timeZone": "America/Chicago",
+   "openingDate": "2026-10-02",
+   "services": [
+    {
+     "code": "auto"
+    },
+    {
+     "code": "food"
+    },
+    {
+     "code": "gas"
+    },
+    {
+     "code": "hearing"
+    },
+    {
+     "code": "optical"
+    },
+    {
+     "code": "pharmacy"
+    },
+    {
+     "code": "specialty_item"
+    }
+   ]
+  },
+  {
+   "warehouseId": "1793",
+   "name": [
+    {
+     "value": "Mansfield",
+     "localeCode": "en-US"
+    }
+   ],
+   "subType": {
+    "code": "No Minor Type"
+   },
+   "address": {
+    "line1": "1500 S. US HWY 287",
+    "city": "MANSFIELD",
+    "territory": "TX",
+    "postalCode": "76063-3829",
+    "countryName": "US",
+    "latitude": 32.538871377481335,
+    "longitude": -97.10726321431162
+   },
+   "timeZone": "America/Chicago",
+   "openingDate": "2026-08-25",
+   "services": [
+    {
+     "code": "auto"
+    },
+    {
+     "code": "food"
+    },
+    {
+     "code": "gas"
+    },
+    {
+     "code": "hearing"
+    },
+    {
+     "code": "optical"
+    },
+    {
+     "code": "pharmacy"
+    },
+    {
+     "code": "specialty_item"
+    }
+   ]
+  },
+  {
+   "warehouseId": "120",
+   "name": [
+    {
+     "value": "Hawaii Kai",
+     "localeCode": "en-US"
+    }
+   ],
+   "subType": {
+    "code": "No Minor Type"
+   },
+   "address": {
+    "line1": "333 A KEAHOLE STREET",
+    "city": "HONOLULU",
+    "territory": "HI",
+    "postalCode": "96825-3406",
+    "countryName": "US",
+    "latitude": 21.28392317,
+    "longitude": -157.7100014
+   },
+   "timeZone": "Pacific/Honolulu",
+   "openingDate": "1992-09-03",
+   "services": [
+    {
+     "code": "auto"
+    },
+    {
+     "code": "food"
+    },
+    {
+     "code": "hearing"
+    },
+    {
+     "code": "optical"
+    },
+    {
+     "code": "pharmacy"
+    },
+    {
+     "code": "specialty_item"
+    }
+   ]
+  },
+  {
+   "warehouseId": "1120",
+   "name": [
+    {
+     "value": "Washington DC",
+     "localeCode": "en-US"
+    }
+   ],
+   "subType": {
+    "code": "No Minor Type"
+   },
+   "address": {
+    "line1": "2441 MARKET ST NE",
+    "city": "WASHINGTON",
+    "territory": "DC",
+    "postalCode": "20018-3840",
+    "countryName": "US",
+    "latitude": 38.92103262,
+    "longitude": -76.95066169
+   },
+   "timeZone": "America/New_York",
+   "openingDate": "2012-11-29",
+   "services": [
+    {
+     "code": "auto"
+    },
+    {
+     "code": "food"
+    },
+    {
+     "code": "hearing"
+    },
+    {
+     "code": "optical"
+    },
+    {
+     "code": "pharmacy"
+    },
+    {
+     "code": "specialty_item"
+    }
+   ]
+  },
+  {
+   "warehouseId": "729",
+   "name": [
+    {
+     "value": "Hackensack Bus Ctr",
+     "localeCode": "en-US"
+    }
+   ],
+   "subType": {
+    "code": "Business Center"
+   },
+   "address": {
+    "line1": "80 S RIVER ST",
+    "city": "HACKENSACK",
+    "territory": "NJ",
+    "postalCode": "07601-6954",
+    "countryName": "US",
+    "latitude": 40.87639008,
+    "longitude": -74.03887121
+   },
+   "timeZone": "America/New_York",
+   "openingDate": "2016-03-15",
+   "services": [
+    {
+     "code": "specialty_item"
+    }
+   ]
+  },
+  {
+   "warehouseId": "651",
+   "name": [
+    {
+     "value": "Orlando Bus Ctr",
+     "localeCode": "en-US"
+    }
+   ],
+   "subType": {
+    "code": "Business Center"
+   },
+   "address": {
+    "line1": "2101 WATERBRIDGE BLVD",
+    "city": "ORLANDO",
+    "territory": "FL",
+    "postalCode": "32837-9283",
+    "countryName": "US",
+    "latitude": 28.40404658,
+    "longitude": -81.40614041
+   },
+   "timeZone": "America/New_York",
+   "openingDate": "2016-08-26",
+   "services": [
+    {
+     "code": "gas"
+    },
+    {
+     "code": "specialty_item"
+    }
+   ]
+  },
+  {
+   "warehouseId": "1324",
+   "name": [
+    {
+     "value": "St Johns",
+     "localeCode": "en-US"
+    }
+   ],
+   "subType": {
+    "code": "No Minor Type"
+   },
+   "address": {
+    "line1": "75 DANNY DR",
+    "city": "ST JOHNS",
+    "territory": "NL",
+    "postalCode": "A1H 0N4",
+    "countryName": "CA",
+    "latitude": 47.50731997,
+    "longitude": -52.83506698
+   },
+   "timeZone": "America/St_Johns",
+   "openingDate": "1995-09-12",
+   "services": [
+    {
+     "code": "auto"
+    },
+    {
+     "code": "food"
+    },
+    {
+     "code": "gas"
+    },
+    {
+     "code": "hearing"
+    },
+    {
+     "code": "oil"
+    },
+    {
+     "code": "optical"
+    },
+    {
+     "code": "pharmacy"
+    },
+    {
+     "code": "propane"
+    },
+    {
+     "code": "specialty_item"
+    }
+   ]
+  },
+  {
+   "warehouseId": "1345",
+   "name": [
+    {
+     "value": "Moncton",
+     "localeCode": "en-US"
+    }
+   ],
+   "subType": {
+    "code": "No Minor Type"
+   },
+   "address": {
+    "line1": "140 GRANITE DR",
+    "city": "MONCTON",
+    "territory": "NB",
+    "postalCode": "E1H 0K6",
+    "countryName": "CA",
+    "latitude": 46.12887972,
+    "longitude": -64.77765896
+   },
+   "timeZone": "America/Moncton",
+   "openingDate": "1995-10-26",
+   "services": [
+    {
+     "code": "auto"
+    },
+    {
+     "code": "food"
+    },
+    {
+     "code": "gas"
+    },
+    {
+     "code": "hearing"
+    },
+    {
+     "code": "oil"
+    },
+    {
+     "code": "optical"
+    },
+    {
+     "code": "pharmacy"
+    },
+    {
+     "code": "propane"
+    },
+    {
+     "code": "specialty_item"
+    }
+   ]
+  },
+  {
+   "warehouseId": "5231",
+   "name": [
+    {
+     "value": "Southampton",
+     "localeCode": "en-US"
+    }
+   ],
+   "subType": {
+    "code": "No Minor Type"
+   },
+   "address": {
+    "line1": "REGENTS PARK ROAD",
+    "city": "SOUTHAMPTON",
+    "postalCode": "SO15 8TA",
+    "countryName": "GB",
+    "latitude": 50.91565,
+    "longitude": -1.439563
+   },
+   "timeZone": "Europe/London",
+   "openingDate": "2013-05-04",
+   "services": [
+    {
+     "code": "auto"
+    },
+    {
+     "code": "food"
+    },
+    {
+     "code": "gas"
+    },
+    {
+     "code": "hearing"
+    },
+    {
+     "code": "optical"
+    },
+    {
+     "code": "specialty_item"
+    }
+   ]
+  }
+ ]
+}
