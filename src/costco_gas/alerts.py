@@ -89,7 +89,9 @@ def _bundle_uploaded(store: ReleaseStore, capture_id: str | None) -> bool:
     try:
         if store.get_release(tag) is None:
             return False
-        return any(asset.name == name and asset.state == "uploaded" for asset in store.list_assets(tag))
+        return any(
+            asset.name == name and asset.state == "uploaded" for asset in store.list_assets(tag)
+        )
     except (AssetNotFound, StorageError) as exc:
         print(f"::warning::could not check for {name} in {tag}: {exc}")
         return False
@@ -102,7 +104,8 @@ def _publish_issue(status: dict, issues: Issues, now: datetime, publish_outcome:
     elif publish_outcome == "success":
         issues.close(
             "Publish failing",
-            f"Publish succeeded in capture `{status.get('capture_id')}` and nothing is unpublished.",
+            f"Publish succeeded in capture `{status.get('capture_id')}` and nothing is "
+            "unpublished.",
         )
 
 
@@ -135,7 +138,10 @@ def _publish_failing_body(status: dict, now: datetime) -> str:
         ]
     else:
         lines.append("None: every capture's bundle is uploaded.")
-    lines += ["", "This issue closes automatically after a successful publish with nothing unpublished."]
+    lines += [
+        "",
+        "This issue closes automatically after a successful publish with nothing unpublished.",
+    ]
     return "\n".join(lines)
 
 
@@ -149,9 +155,13 @@ def _country_issues(status: dict, issues: Issues, now: datetime) -> None:
         title = f"Capture failing: {country}"
         if state == "failed":
             if int(entry.get("consecutive_failures") or 0) >= CAPTURE_FAILURE_THRESHOLD:
-                issues.ensure_open(title, _capture_failing_body(country, entry, now), ["capture-failure"])
+                issues.ensure_open(
+                    title, _capture_failing_body(country, entry, now), ["capture-failure"]
+                )
         elif state in ("ok", "degraded"):
-            issues.close(title, f"`{country}` was `{state}` in capture `{status.get('capture_id')}`.")
+            issues.close(
+                title, f"`{country}` was `{state}` in capture `{status.get('capture_id')}`."
+            )
 
 
 def _capture_failing_body(country: str, entry: dict, now: datetime) -> str:
@@ -167,11 +177,17 @@ def _capture_failing_body(country: str, entry: dict, now: datetime) -> str:
         "| --- | --- | --- |",
     ]
     for item in entry.get("recent_errors") or []:
-        errors = "; ".join(_error_text(error) for error in item.get("errors") or []) or "(none recorded)"
+        errors = (
+            "; ".join(_error_text(error) for error in item.get("errors") or []) or "(none recorded)"
+        )
         run_url = item.get("run_url") or ""
         run_cell = f"[run]({run_url})" if run_url else "(no run url)"
         lines.append(f"| `{item.get('capture_id', '?')}` | {run_cell} | {errors} |")
-    lines += ["", "This issue closes automatically after the next `ok` or `degraded` capture for this country."]
+    lines += [
+        "",
+        "This issue closes automatically after the next `ok` or `degraded` capture for this "
+        "country.",
+    ]
     return "\n".join(lines)
 
 
@@ -197,14 +213,17 @@ def _ecom_api_issue(status: dict, issues: Issues) -> None:
                     "`ecom-api.costco.com` answered HTTP 401 for the warehouse locator.",
                     "",
                     "The public `client-identifier` has most likely been rotated. It lives in",
-                    "`config/countries.toml`, under `[countries.US]`, as the `ecom_client_identifier`",
+                    "`config/countries.toml`, under `[countries.US]`, as the "
+                    "`ecom_client_identifier`",
                     "key (a sibling of the `[countries.US.params]` query table).",
-                    "Until it is replaced, US and Canada run on cached metadata and are reported as `degraded`.",
+                    "Until it is replaced, US and Canada run on cached metadata and are reported "
+                    "as `degraded`.",
                     "",
                     f"- Capture: `{status.get('capture_id')}`",
                     f"- Run: {status.get('run_url') or '(none)'}",
                     "",
-                    "This issue closes automatically after a capture whose ecom-api request returns 200.",
+                    "This issue closes automatically after a capture whose ecom-api request "
+                    "returns 200.",
                 ]
             ),
         )
@@ -228,13 +247,17 @@ def _grade_issues(status: dict, issues: Issues) -> None:
                 f"Unknown grade label: {country} {label}",
                 "\n".join(
                     [
-                        f"Capture `{status.get('capture_id')}` saw the grade label `{label}` for `{country}`,",
-                        "which is not in `config/grades.csv`. Its rows were stored as `other`, so they are",
+                        f"Capture `{status.get('capture_id')}` saw the grade label `{label}` for "
+                        f"`{country}`,",
+                        "which is not in `config/grades.csv`. Its rows were stored as `other`, "
+                        "so they are",
                         "excluded from every comparison until the label is mapped.",
                         "",
-                        "1. Add the row to `config/grades.csv` with its `grade`, `priority`, `label`, `spec`,",
+                        "1. Add the row to `config/grades.csv` with its `grade`, `priority`, "
+                        "`label`, `spec`,",
                         "   `spec_source` and `spec_source_url`.",
-                        "2. Run **Actions -> Rebuild** for the affected month so the stored rows are remapped.",
+                        "2. Run **Actions -> Rebuild** for the affected month so the stored "
+                        "rows are remapped.",
                         "3. Close this issue.",
                     ]
                 ),
@@ -254,7 +277,8 @@ def _close_period_issue(status: dict, issues: Issues, close_outcome: str) -> Non
                     "",
                     f"- Run: {status.get('run_url') or '(none)'}",
                     "",
-                    "Month and year releases stay open until it succeeds. `current` is still updated by",
+                    "Month and year releases stay open until it succeeds. `current` is still "
+                    "updated by",
                     "`publish`, so the dashboard keeps working.",
                     "",
                     "This issue closes automatically after a `close-periods` run that exits 0.",

@@ -107,18 +107,32 @@ def test_failure_after_the_bundle_uploaded_records_nothing(tmp_path, issues):
 def test_second_failure_opens_the_issue_on_the_counter(tmp_path, issues):
     store = _store(tmp_path)
     _upload_bundle(store, tmp_path, "2026-09-15T1817Z")
-    path = _status(tmp_path, publish={"outcome": "failure", "consecutive_failures": 1, "unpublished": []})
+    path = _status(
+        tmp_path, publish={"outcome": "failure", "consecutive_failures": 1, "unpublished": []}
+    )
     result = run_alerts(
-        path, publish_outcome="failure", close_outcome="skipped", store=store, issues=issues, now=NOW
+        path,
+        publish_outcome="failure",
+        close_outcome="skipped",
+        store=store,
+        issues=issues,
+        now=NOW,
     )
     assert result["publish"]["consecutive_failures"] == 2
     assert "ensure_open: Publish failing" in issues.actions
 
 
 def test_skipped_leaves_the_counter_and_records_nothing(tmp_path, issues):
-    path = _status(tmp_path, publish={"outcome": "failure", "consecutive_failures": 1, "unpublished": []})
+    path = _status(
+        tmp_path, publish={"outcome": "failure", "consecutive_failures": 1, "unpublished": []}
+    )
     result = run_alerts(
-        path, publish_outcome="skipped", close_outcome="skipped", store=_store(tmp_path), issues=issues, now=NOW
+        path,
+        publish_outcome="skipped",
+        close_outcome="skipped",
+        store=_store(tmp_path),
+        issues=issues,
+        now=NOW,
     )
     assert result["publish"]["outcome"] == "skipped"
     assert result["publish"]["consecutive_failures"] == 1
@@ -133,11 +147,20 @@ def test_success_keeps_the_issue_open_until_the_entry_resolves(tmp_path):
     path = _status(tmp_path)
 
     first = Issues(None, None)
-    run_alerts(path, publish_outcome="failure", close_outcome="skipped", store=store, issues=first, now=NOW)
+    run_alerts(
+        path, publish_outcome="failure", close_outcome="skipped", store=store, issues=first, now=NOW
+    )
     assert "ensure_open: Publish failing" in first.actions
 
     second = Issues(None, None)
-    result = run_alerts(path, publish_outcome="success", close_outcome="success", store=store, issues=second, now=NOW)
+    result = run_alerts(
+        path,
+        publish_outcome="success",
+        close_outcome="success",
+        store=store,
+        issues=second,
+        now=NOW,
+    )
     assert result["publish"]["consecutive_failures"] == 0
     assert len(result["publish"]["unpublished"]) == 1
     assert "ensure_open: Publish failing" in second.actions
@@ -145,7 +168,9 @@ def test_success_keeps_the_issue_open_until_the_entry_resolves(tmp_path):
 
     _upload_bundle(store, tmp_path, "2026-09-15T1817Z")
     third = Issues(None, None)
-    result = run_alerts(path, publish_outcome="success", close_outcome="success", store=store, issues=third, now=NOW)
+    result = run_alerts(
+        path, publish_outcome="success", close_outcome="success", store=store, issues=third, now=NOW
+    )
     assert result["publish"]["unpublished"] == []
     assert "close: Publish failing" in third.actions
 
@@ -168,7 +193,14 @@ def test_capture_failing_opens_at_three_consecutive_failures(tmp_path, issues):
         "failed",
         consecutive_failures=3,
         last_success_capture_id="2026-09-14T0617Z",
-        errors=[{"code": "http_error", "host": "www.costco.co.jp", "http_status": 403, "detail": "blocked"}],
+        errors=[
+            {
+                "code": "http_error",
+                "host": "www.costco.co.jp",
+                "http_status": 403,
+                "detail": "blocked",
+            }
+        ],
         recent_errors=[
             {
                 "capture_id": "2026-09-15T1817Z",
