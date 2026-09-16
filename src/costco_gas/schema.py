@@ -215,3 +215,99 @@ def round_fx_columns(df: pl.DataFrame, digits: int = FX_SIGNIFICANT_DIGITS) -> p
     if not present:
         return df
     return df.with_columns([pl.col(name).round_sig_figs(digits) for name in present])
+
+
+def _prepare(df: pl.DataFrame, schema: dict[str, pl.DataType], sort_by: list[str]) -> pl.DataFrame:
+    out = cast_to_schema(df, schema)
+    out = round_price_columns(out)
+    out = round_fx_columns(out)
+    return out.sort(sort_by)
+
+
+def _write_csv_bytes(df: pl.DataFrame) -> bytes:
+    buf = io.BytesIO()
+    df.write_csv(buf, date_format=CSV_DATE_FORMAT, datetime_format=CSV_DATETIME_FORMAT)
+    return buf.getvalue()
+
+
+def _read_csv_bytes(raw: bytes, schema: dict[str, pl.DataType]) -> pl.DataFrame:
+    # Every field is read as text and cast explicitly, so no column's type
+    # depends on how the first rows happen to look.
+    df = pl.read_csv(raw, infer_schema_length=0)
+    missing = [name for name in schema if name not in df.columns]
+    if missing:
+        raise SchemaError(f"missing columns: {', '.join(missing)}")
+    exprs = []
+    for name, dtype in schema.items():
+        col = pl.col(name)
+        if dtype == pl.Date():
+            exprs.append(col.str.to_date(CSV_DATE_FORMAT).alias(name))
+        elif isinstance(dtype, pl.Datetime):
+            exprs.append(
+                col.str.to_datetime(CSV_DATETIME_FORMAT, time_unit="us")
+                .dt.replace_time_zone("UTC")
+                .alias(name)
+            )
+        elif dtype == pl.String():
+            exprs.append(col.alias(name))
+        else:
+            exprs.append(col.cast(dtype).alias(name))
+    return df.select(exprs)
+
+
+def _write_gzip(raw: bytes, path: Path) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # mtime=0 and an empty stored filename keep the bytes identical for
+    # identical content, so re-publishing a capture does not change any digest.
+    with path.open("wb") as fh, gzip.GzipFile(filename="", mode="wb", fileobj=fh, mtime=0) as gz:
+        gz.write(raw)
+    return path
+
+
+def write_rows_csv_gz(df: pl.DataFrame, path: Path) -> Path:
+    """Validate, round, sort and write price rows as gzipped CSV."""
+    validate_rows(df)
+    return _write_gzip(_write_csv_bytes(_prepare(df, ROW_SCHEMA, ROW_SORT)), Path(path))
+
+
+def read_rows_csv_gz(path: Path) -> pl.DataFrame:
+    """Read a gzipped CSV of price rows back under ROW_SCHEMA."""
+    with gzip.open(Path(path), "rb") as fh:
+        raw = fh.read()
+    return _read_csv_bytes(raw, ROW_SCHEMA)
+
+
+def write_csv(
+    df: pl.DataFrame, path: Path, *, schema: dict[str, pl.DataType], sort_by: list[str]
+) -> Path:
+    """Write a plain CSV asset such as stations.csv or fx.csv."""
+    out = _prepare(df, schema, sort_by)
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(_write_csv_bytes(out))
+    return path
+
+
+def read_csv(path: Path, schema: dict[str, pl.DataType]) -> pl.DataFrame:
+    """Read a plain CSV asset back under an explicit schema."""
+    return _read_csv_bytes(Path(path).read_bytes(), schema)
+
+
+def write_parquet(
+    df: pl.DataFrame,
+    path: Path,
+    *,
+    sort_by: list[str],
+    row_group_size: int | None = None,
+) -> Path:
+    """Write a Parquet file with an explicit sort and column statistics."""
+    out = round_fx_columns(round_price_columns(df)).sort(sort_by)
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    out.write_parquet(
+        path,
+        compression="zstd",
+        statistics=True,
+        row_group_size=row_group_size,
+    )
+    return path

@@ -5,16 +5,25 @@ import pytest
 
 from costco_gas.schema import (
     FX_SCHEMA,
+    FX_SORT,
     ROW_SCHEMA,
     ROW_SORT,
     STATION_SCHEMA,
+    STATION_SORT,
     SchemaError,
     cast_to_schema,
     empty_frame,
+    read_csv,
+    read_rows_csv_gz,
     round_fx_columns,
     round_price_columns,
     round_significant,
+    validate_fx,
     validate_rows,
+    validate_stations,
+    write_csv,
+    write_parquet,
+    write_rows_csv_gz,
 )
 
 CAPTURE_ID = "2026-09-15T1817Z"
@@ -241,3 +250,96 @@ def test_cast_to_schema_reorders_and_casts_strings():
     )
     assert out.columns == ["station_key", "country", "lat"]
     assert out["lat"].item() == 38.4
+
+
+def test_rows_csv_gz_round_trips_and_is_sorted(tmp_path):
+    df = frame(us_row(), row())
+    path = write_rows_csv_gz(df, tmp_path / "costco-gas-2026-09-15.csv.gz")
+    back = read_rows_csv_gz(path)
+
+    assert back.schema == pl.Schema(ROW_SCHEMA)
+    # ROW_SORT is capture_id, country, station_key, grade_raw: JP before US.
+    assert back["country"].to_list() == ["JP", "US"]
+    assert back["name_local"].to_list() == ["富谷", None]
+    assert back["captured_at_utc"].to_list() == [CAPTURED_AT, CAPTURED_AT]
+    assert back["fx_rate_date"].to_list() == [dt.date(2026, 9, 14), dt.date(2026, 9, 15)]
+    assert back["price_usd_per_gallon"].to_list() == [3.6568, 3.999]
+    assert back["fx_usd_per_unit"].to_list() == [0.00648340249, 1.0]
+    assert back["lat"].to_list() == [None, 44.855]
+
+
+def test_rows_csv_gz_is_byte_identical_for_identical_content(tmp_path):
+    df = frame(row())
+    write_rows_csv_gz(df, tmp_path / "a.csv.gz")
+    write_rows_csv_gz(df, tmp_path / "b.csv.gz")
+    # Re-publishing a capture must not change any asset's SHA-256, so the gzip
+    # header stores no timestamp and no original filename.
+    assert (tmp_path / "a.csv.gz").read_bytes() == (tmp_path / "b.csv.gz").read_bytes()
+
+
+def test_rows_csv_gz_refuses_an_invalid_frame(tmp_path):
+    with pytest.raises(SchemaError, match="duplicate key"):
+        write_rows_csv_gz(frame(row(), row()), tmp_path / "never-written.csv.gz")
+    assert not (tmp_path / "never-written.csv.gz").exists()
+
+
+def test_write_parquet_sorts_explicitly(tmp_path):
+    df = frame(row(station_key="JP-Zama", source_station_id="Zama", name="Zama"), row())
+    path = write_parquet(
+        df,
+        tmp_path / "captures.parquet",
+        sort_by=["station_key", "grade_raw", "capture_id"],
+        row_group_size=20000,
+    )
+    back = pl.read_parquet(path)
+    assert back["station_key"].to_list() == ["JP-Tomiya", "JP-Zama"]
+    assert back.schema == pl.Schema(ROW_SCHEMA)
+    assert back["price_usd_per_gallon"].to_list() == [3.6568, 3.6568]
+
+
+def test_stations_csv_round_trips(tmp_path):
+    stations = pl.DataFrame(
+        [
+            {
+                "station_key": "JP-Tomiya",
+                "country": "JP",
+                "source_station_id": "Tomiya",
+                "alt_id": "costcoJapanTomiyaWarehouse",
+                "name": "Tomiya",
+                "name_local": "富谷",
+                "address": "宮城県富谷市高屋敷26",
+                "city": "富谷市",
+                "region": "宮城県",
+                "postcode": "981-3313",
+                "lat": None,
+                "lon": None,
+                "timezone": "Asia/Tokyo",
+                "grades_seen": "Diesel|Kerosene|Premium|Regular",
+                "first_seen_utc": CAPTURED_AT,
+                "last_seen_utc": CAPTURED_AT,
+                "status": "active",
+                "superseded_by": None,
+            }
+        ],
+        schema=dict(STATION_SCHEMA),
+        orient="row",
+    )
+    validate_stations(stations)
+    path = write_csv(
+        stations, tmp_path / "stations.csv", schema=STATION_SCHEMA, sort_by=STATION_SORT
+    )
+    back = read_csv(path, STATION_SCHEMA)
+    assert back.schema == pl.Schema(STATION_SCHEMA)
+    assert back["superseded_by"].to_list() == [None]
+    assert back["grades_seen"].item() == "Diesel|Kerosene|Premium|Regular"
+    assert back["first_seen_utc"].item() == CAPTURED_AT
+
+
+def test_fx_csv_round_trips_with_ten_significant_digits(tmp_path):
+    fx = fx_frame()
+    validate_fx(fx)
+    path = write_csv(fx, tmp_path / "fx.csv", schema=FX_SCHEMA, sort_by=FX_SORT)
+    assert "0.00648340249" in path.read_text(encoding="utf-8")
+    back = read_csv(path, FX_SCHEMA)
+    assert back["fx_usd_per_unit"].item() == 0.00648340249
+    assert back["units_per_usd"].item() == 154.24
