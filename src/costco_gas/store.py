@@ -152,6 +152,9 @@ class _BaseStore:
     _sleep: Callable[[float], None]
     _monotonic: Callable[[], float]
 
+    def get_release(self, tag: str) -> Release | None:  # pragma: no cover - interface
+        raise NotImplementedError
+
     def list_assets(self, tag: str) -> list[Asset]:  # pragma: no cover - interface
         raise NotImplementedError
 
@@ -191,6 +194,15 @@ class _BaseStore:
         return sorted(out, key=lambda a: a.created_at, reverse=True)
 
     def download(self, tag: str, name: str, dest: Path) -> Path:
+        """Read the verified `<name>` asset from a release.
+
+        Raises `AssetNotFound` only when a fresh listing of an *existing*
+        release shows neither `<name>` nor any temporary form of it -- that is
+        "this was never published". A missing release itself is a different
+        failure: `list_assets` raises `StorageError` for it, and that error
+        propagates here unchanged, so a wrong store spec or a dead token can
+        never present as "never published" and silently reset history.
+        """
         assets = self.list_assets(tag)
         match = next((a for a in assets if a.name == name), None)
         if match is None:
@@ -236,7 +248,13 @@ class _BaseStore:
         the capture command and discovery. Everything else reads `download`.
         Order: `<name>`; then the newest `.next-*` whose bytes hash to its own
         label; then the newest `.old-*`.
+
+        Unlike `download`, a missing release raises `AssetNotFound` rather than
+        `StorageError`: this is the pre-publish read path, and the very first
+        capture legitimately finds no `current` release yet.
         """
+        if self.get_release(tag) is None:
+            raise AssetNotFound(f"{tag}:{name}")
         assets = self.list_assets(tag)
         match = next((a for a in assets if a.name == name), None)
         if match is not None:
@@ -282,16 +300,33 @@ class _BaseStore:
 
         self.upload_new(tag, path, temp, label=local_label)
 
+        # Poll for the asset to report `state == "uploaded"` at the right size,
+        # with a digest that either already matches or was never reported at
+        # all. A digest that is present but wrong may still be catching up
+        # with GitHub's own metadata, so that case keeps polling to the
+        # deadline. A missing digest never will (older assets never grow one),
+        # so once we reach it we stop polling and fall through to a single
+        # download-and-hash fallback below, rather than re-downloading the
+        # asset on every one-second tick for up to 60 iterations.
         deadline = self._monotonic() + POLL_SECONDS
-        verified: Asset | None = None
+        ready: Asset | None = None
         while True:
             current = self._asset_by_name(tag, temp)
-            if current is not None and self._verify_asset(tag, current, local_label, local_size):
-                verified = current
+            if (
+                current is not None
+                and current.state == "uploaded"
+                and current.size == local_size
+                and (current.digest is None or current.digest == local_label)
+            ):
+                ready = current
                 break
             if self._monotonic() >= deadline:
                 break
             self._sleep(1.0)
+
+        verified: Asset | None = None
+        if ready is not None and self._verify_asset(tag, ready, local_label, local_size):
+            verified = ready
 
         if verified is None:
             stale = self._asset_by_name(tag, temp)
@@ -343,22 +378,34 @@ class _BaseStore:
             else:
                 live.append(asset)
 
-        # 2-4. put a copy back under the real name if it is missing.
+        # 2-4. put a copy back under the real name if it is missing. A verified
+        # `.next` and an `.old` both being present means two different replaces
+        # left something behind; `replace_atomic` never deletes a foreign-token
+        # leftover, so a self-consistent but stale `.next` from an abandoned
+        # run can verify even though a later run already produced a newer
+        # `.old`. Compare `created_at` and let the newer one win; prefer the
+        # `.next` only on an exact tie.
         if self._asset_by_name(tag, base) is None:
-            chosen: Asset | None = None
+            best_next: Asset | None = None
             for candidate in self._temps_for(live, base, "next"):
                 if candidate.label and self._verify_asset(tag, candidate, candidate.label, None):
-                    chosen = candidate
+                    best_next = candidate
                     break
-            if chosen is not None:
-                self.rename(tag, chosen.id, base, label="")
-                actions.append(f"promoted:{chosen.name}")
-            else:
-                olds = self._temps_for(live, base, "old")
-                if olds:
-                    chosen = olds[0]
-                    self.rename(tag, chosen.id, base)
-                    actions.append(f"restored:{chosen.name}")
+            olds = self._temps_for(live, base, "old")
+            best_old = olds[0] if olds else None
+
+            chosen: Asset | None = None
+            if best_next is not None and (
+                best_old is None or best_next.created_at >= best_old.created_at
+            ):
+                self.rename(tag, best_next.id, base, label="")
+                actions.append(f"promoted:{best_next.name}")
+                chosen = best_next
+            elif best_old is not None:
+                self.rename(tag, best_old.id, base)
+                actions.append(f"restored:{best_old.name}")
+                chosen = best_old
+
             if chosen is not None:
                 live = [a for a in live if a.id != chosen.id]
 
@@ -534,7 +581,7 @@ class LocalReleaseStore(_BaseStore):
     def list_assets(self, tag: str) -> list[Asset]:
         data = self._read(tag)
         if data is None:
-            return []
+            raise StorageError(f"release not found: {tag}")
         return [
             self._asset_from_entry(tag, name, entry)
             for name, entry in sorted(data["assets"].items())
@@ -884,7 +931,7 @@ class GitHubReleaseStore(_BaseStore):
     def list_assets(self, tag: str) -> list[Asset]:
         payload = self._release_payload(tag)
         if payload is None:
-            return []
+            raise StorageError(f"release not found: {tag}")
         release_id = int(payload["id"])
         out: list[Asset] = []
         page = 1

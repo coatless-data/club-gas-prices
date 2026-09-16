@@ -161,9 +161,13 @@ def test_upload_new_on_a_duplicate_name_reports_422(tmp_path: Path):
     assert excinfo.value.status == 422
 
 
-def test_list_assets_of_a_missing_release_is_empty(tmp_path: Path):
+def test_list_assets_raises_when_the_release_is_missing(tmp_path: Path):
+    # A missing release must never look like "no assets": a wrong store spec
+    # or a stale path would otherwise present exactly like "never published"
+    # to `download`, which reads its listing through `list_assets`.
     s, _ = _seed(tmp_path)
-    assert s.list_assets("data-2030-01") == []
+    with pytest.raises(store.StorageError, match="release not found: data-2030-01"):
+        s.list_assets("data-2030-01")
 
 
 def test_created_at_is_strictly_increasing(tmp_path: Path):
@@ -185,11 +189,21 @@ def test_download_writes_the_bytes_and_creates_parents(tmp_path: Path):
     assert dest.read_bytes() == b"rows-v1\n"
 
 
-def test_download_raises_asset_not_found_when_nothing_is_there(tmp_path: Path):
+def test_download_raises_asset_not_found_when_the_asset_is_missing(tmp_path: Path):
     s, _ = _seed(tmp_path)
     with pytest.raises(store.AssetNotFound):
         s.download("data-2026-09", "rows.csv", tmp_path / "d.csv")
-    with pytest.raises(store.AssetNotFound):
+
+
+def test_download_propagates_release_not_found_instead_of_asset_not_found(
+    tmp_path: Path,
+):
+    # A missing release must never present as "this file was never
+    # published": callers treat AssetNotFound as "first publish" and would
+    # otherwise start from empty and destroy history for what is really a
+    # wrong store spec or a stale path.
+    s, _ = _seed(tmp_path)
+    with pytest.raises(store.StorageError, match="release not found: data-2030-01"):
         s.download("data-2030-01", "rows.csv", tmp_path / "d.csv")
 
 
@@ -551,6 +565,34 @@ def test_recover_takes_the_newest_verifying_next_and_clears_the_rest(tmp_path: P
     assert got.read_bytes() == b"stations-v3\n"
 
 
+def test_recover_prefers_a_newer_old_over_a_stale_verifying_next(tmp_path: Path):
+    # replace_atomic deliberately never deletes a foreign-token leftover, so a
+    # self-consistent .next from an earlier, abandoned run can still verify
+    # even though a later run already produced a newer .old. The newer one
+    # must win by created_at -- not "any verifying .next beats any .old" --
+    # or recovery would resurrect stale content over the run that came after.
+    s, _ = _seed(tmp_path)
+    stale = _write(tmp_path, "stale.csv", b"stations-stale\n")
+    newer = _write(tmp_path, "newer.csv", b"stations-newer\n")
+    s.upload_new(
+        "data-2026-09",
+        stale,
+        "stations.csv.next-stale-1",
+        label=store.sha256_label(stale),
+    )
+    s.upload_new("data-2026-09", newer, "stations.csv.old-tok")
+
+    actions = store.recover_temporaries(s, "data-2026-09")
+
+    assert actions == [
+        "restored:stations.csv.old-tok",
+        "deleted-leftover:stations.csv.next-stale-1",
+    ]
+    assert [a.name for a in s.list_assets("data-2026-09")] == ["stations.csv"]
+    got = s.download("data-2026-09", "stations.csv", tmp_path / "got.csv")
+    assert got.read_bytes() == b"stations-newer\n"
+
+
 def test_recover_handles_several_names_and_a_closed_release(tmp_path: Path):
     s, _ = _seed(tmp_path)
     s.update_release("data-2026-09", prerelease=False)  # a closed month
@@ -731,6 +773,15 @@ class FakeGitHub:
     def label_of(self, tag: str, name: str) -> str:
         return self._asset(tag, name)["label"]
 
+    def corrupt_body(self, tag: str, name: str, data: bytes) -> None:
+        """Overwrite a stored asset's bytes in place, as a torn transfer would.
+
+        The caller is responsible for keeping `len(data)` equal to the
+        original body so a size check alone cannot catch the corruption --
+        only a digest or a hash of the actual bytes can.
+        """
+        self._asset(tag, name)["body"] = data
+
     # -- serialisation ---------------------------------------------------
     def _asset_json(self, asset: dict) -> dict:
         digest = None if self.null_digest else "sha256:" + hashlib.sha256(asset["body"]).hexdigest()
@@ -863,7 +914,6 @@ def test_github_reads_need_no_token_and_no_auth_on_downloads(
     assert s.get_release("data-2030-01") is None
     assert s.get_latest().tag == "current"
     assert [a.name for a in s.list_assets("current")] == ["stations.csv"]
-    assert s.list_assets("data-2030-01") == []
 
     dest = s.download("current", "stations.csv", tmp_path / "stations.csv")
     assert dest.read_bytes() == b"station_key,country\nUS-1364,US\n"
@@ -873,6 +923,42 @@ def test_github_reads_need_no_token_and_no_auth_on_downloads(
     # browser_download_url is public: it costs no API quota, and the signed
     # redirect target rejects an Authorization header.
     assert downloads[0]["auth"] is None
+
+
+def test_github_get_release_returns_none_when_the_release_is_missing(writer_env):
+    fake = FakeGitHub()
+    s = store.GitHubReleaseStore("acme", "gas", transport=fake.transport())
+    assert s.get_release("data-2030-01") is None
+
+
+def test_github_list_assets_raises_when_the_release_is_missing(writer_env):
+    fake = FakeGitHub()
+    s = store.GitHubReleaseStore("acme", "gas", transport=fake.transport())
+    with pytest.raises(store.StorageError, match="release not found: data-2030-01"):
+        s.list_assets("data-2030-01")
+
+
+def test_github_download_propagates_release_not_found_instead_of_asset_not_found(
+    tmp_path: Path, writer_env
+):
+    # A 404 on the release itself -- a wrong repo, a renamed release, a token
+    # that cannot see it -- must never look like "this file was never
+    # published", or publish logic would happily start writing fresh history.
+    fake = FakeGitHub()
+    s = store.GitHubReleaseStore("acme", "gas", transport=fake.transport())
+    with pytest.raises(store.StorageError, match="release not found: data-2030-01"):
+        s.download("data-2030-01", "stations.csv", tmp_path / "d.csv")
+
+
+def test_github_read_resolved_raises_asset_not_found_when_the_release_is_missing(
+    tmp_path: Path, writer_env
+):
+    # read_resolved is the pre-recovery, pre-publish read path: the very
+    # first capture legitimately finds no `current` release yet.
+    fake = FakeGitHub()
+    s = store.GitHubReleaseStore("acme", "gas", transport=fake.transport())
+    with pytest.raises(store.AssetNotFound):
+        s.read_resolved("current", "stations.csv", tmp_path / "d.csv")
 
 
 def test_github_is_latest_comes_from_the_releases_latest_endpoint(writer_env):
@@ -977,6 +1063,66 @@ def test_github_read_resolved_verifies_by_hashing_when_digest_is_null(
 
     dest = s.read_resolved("current", "stations.csv", tmp_path / "s.csv")
     assert dest.read_bytes() == good
+
+
+def test_github_replace_atomic_accepts_a_null_digest_upload_that_hashes_correctly(
+    tmp_path: Path, writer_env
+):
+    # `_verify_asset`'s download-and-hash fallback (for the null-digest case)
+    # is only exercised through a poll loop like `replace_atomic`'s, not
+    # through `read_resolved`'s own inline hashing. This proves it accepts a
+    # genuine upload, and does so by hashing the bytes at most once.
+    fake = FakeGitHub()
+    fake.null_digest = True
+    fake.add_release("current")
+    fake.add_asset("current", "stations.csv", b"stations-v1\n")
+    clock = FakeClock()
+    s = store.GitHubReleaseStore(
+        "acme", "gas", transport=fake.transport(), sleep=clock.sleep, monotonic=clock.now
+    )
+    payload = _write(tmp_path, "v2.csv", b"stations-v2\n")
+
+    asset = s.replace_atomic("current", payload, "stations.csv", "tok")
+
+    assert asset.name == "stations.csv"
+    assert fake.body_of("current", "stations.csv") == b"stations-v2\n"
+    downloads = [c for c in fake.calls if "downloads.invalid" in c["url"]]
+    assert len(downloads) == 1  # hashed once, not re-downloaded on every poll
+    assert clock.slept == []
+
+
+def test_github_replace_atomic_rejects_a_null_digest_upload_that_hashes_wrong(
+    tmp_path: Path, writer_env
+):
+    # A torn transfer that GitHub reports as `state: "uploaded"` with a
+    # matching size but no digest must still be rejected -- and rejected
+    # after hashing it exactly once, not after 60 repeated downloads.
+    fake = FakeGitHub()
+    fake.null_digest = True
+    fake.add_release("current")
+    fake.add_asset("current", "stations.csv", b"stations-v1\n")
+
+    class CorruptingGitHubStore(store.GitHubReleaseStore):
+        """The transport silently stores torn bytes for every upload."""
+
+        def upload_new(self, tag, path, name, label=None):
+            asset = super().upload_new(tag, path, name, label=label)
+            fake.corrupt_body(tag, name, b"stations-XX\n")  # same length, wrong bytes
+            return asset
+
+    clock = FakeClock()
+    s = CorruptingGitHubStore(
+        "acme", "gas", transport=fake.transport(), sleep=clock.sleep, monotonic=clock.now
+    )
+    payload = _write(tmp_path, "v2.csv", b"stations-v2\n")
+
+    with pytest.raises(store.StorageError, match="did not verify"):
+        s.replace_atomic("current", payload, "stations.csv", "tok")
+
+    downloads = [c for c in fake.calls if "downloads.invalid" in c["url"]]
+    assert len(downloads) == 1  # rejected after hashing once, not retried
+    assert clock.slept == []
+    assert fake.body_of("current", "stations.csv") == b"stations-v1\n"
 
 
 def test_github_replace_atomic_retries_a_422_promotion(tmp_path: Path, writer_env):
