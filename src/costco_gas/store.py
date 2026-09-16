@@ -20,6 +20,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
+import tempfile
 import threading
 import time
 from collections.abc import Callable
@@ -143,7 +144,95 @@ class ReleaseStore(Protocol):
     def delete(self, tag: str, asset_id: int) -> None: ...
 
 
-class LocalReleaseStore:
+class _BaseStore:
+    """Behaviour shared by every store, written against the primitives below."""
+
+    _sleep: Callable[[float], None]
+    _monotonic: Callable[[], float]
+
+    def list_assets(self, tag: str) -> list[Asset]:  # pragma: no cover - interface
+        raise NotImplementedError
+
+    def upload_new(
+        self, tag: str, path: Path, name: str, label: str | None = None
+    ) -> Asset:  # pragma: no cover - interface
+        raise NotImplementedError
+
+    def rename(
+        self, tag: str, asset_id: int, new_name: str, label: str | None = None
+    ) -> Asset:  # pragma: no cover - interface
+        raise NotImplementedError
+
+    def delete(self, tag: str, asset_id: int) -> None:  # pragma: no cover - interface
+        raise NotImplementedError
+
+    def _fetch_asset(self, tag: str, asset: Asset, dest: Path) -> Path:
+        # pragma: no cover - interface
+        raise NotImplementedError
+
+    def _asset_by_name(self, tag: str, name: str) -> Asset | None:
+        for asset in self.list_assets(tag):
+            if asset.name == name:
+                return asset
+        return None
+
+    def _temps_for(
+        self, assets: list[Asset], base: str, kind: str | None = None
+    ) -> list[Asset]:
+        """Temporary assets of `base`, newest first."""
+        out = []
+        for asset in assets:
+            parsed = split_temp_name(asset.name)
+            if parsed is None or parsed[0] != base:
+                continue
+            if kind is not None and parsed[1] != kind:
+                continue
+            out.append(asset)
+        return sorted(out, key=lambda a: a.created_at, reverse=True)
+
+    def download(self, tag: str, name: str, dest: Path) -> Path:
+        assets = self.list_assets(tag)
+        match = next((a for a in assets if a.name == name), None)
+        if match is None:
+            temps = self._temps_for(assets, name)
+            if temps:
+                raise StorageError(
+                    f"{tag}:{name} is missing while {len(temps)} temporary assets "
+                    f"exist; run recovery before reading it"
+                )
+            raise AssetNotFound(f"{tag}:{name}")
+        path = self._fetch_asset(tag, match, Path(dest))
+        size = path.stat().st_size
+        if size != match.size:
+            raise StorageError(f"size mismatch for {tag}:{name}: {size} != {match.size}")
+        if match.digest is not None:
+            got = sha256_label(path)
+            if got != match.digest:
+                raise StorageError(
+                    f"digest mismatch for {tag}:{name}: {got} != {match.digest}"
+                )
+        return path
+
+    def _verify_asset(
+        self, tag: str, asset: Asset, expected_label: str, expected_size: int | None
+    ) -> bool:
+        """True when the stored asset really holds the bytes `expected_label` names."""
+        if asset.state != "uploaded":
+            return False
+        if expected_size is not None and asset.size != expected_size:
+            return False
+        if asset.digest is not None:
+            return asset.digest == expected_label
+        # GitHub reports no digest for older assets: download and hash instead.
+        scratch = Path(tempfile.mkdtemp(prefix="costco-gas-verify-"))
+        try:
+            path = self._fetch_asset(tag, asset, scratch / "asset")
+            return sha256_label(path) == expected_label
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+
+
+class LocalReleaseStore(_BaseStore):
     """Releases in a local directory: one directory per tag, plus a JSON sidecar.
 
     The sidecar `_release.json` holds the release attributes and, for every
@@ -291,3 +380,98 @@ class LocalReleaseStore:
                 if release is not None:
                     out.append(release)
         return out
+
+    # -- assets ----------------------------------------------------------
+    def _asset_from_entry(self, tag: str, name: str, entry: dict) -> Asset:
+        path = self._dir(tag) / name
+        return Asset(
+            name=name,
+            id=int(entry["id"]),
+            size=path.stat().st_size if path.exists() else 0,
+            state=entry.get("state", "uploaded"),
+            digest=entry.get("digest"),
+            label=entry.get("label") or None,
+            created_at=datetime.fromisoformat(entry["created_at"]),
+        )
+
+    def list_assets(self, tag: str) -> list[Asset]:
+        data = self._read(tag)
+        if data is None:
+            return []
+        return [
+            self._asset_from_entry(tag, name, entry)
+            for name, entry in sorted(data["assets"].items())
+        ]
+
+    def _new_created_at(self, data: dict) -> datetime:
+        stamp = datetime.now(UTC)
+        existing = [
+            datetime.fromisoformat(entry["created_at"]) for entry in data["assets"].values()
+        ]
+        if existing:
+            newest = max(existing)
+            if stamp <= newest:
+                stamp = newest + timedelta(microseconds=1)
+        return stamp
+
+    def upload_new(
+        self, tag: str, path: Path, name: str, label: str | None = None
+    ) -> Asset:
+        path = Path(path)
+        with self._lock:
+            data = self._require(tag)
+            if "/" in name or name in (SIDECAR_NAME, SIDECAR_NAME + ".tmp"):
+                raise StorageError(f"reserved asset name: {name}")
+            if name in data["assets"]:
+                raise StorageError(f"asset exists: {tag}:{name}", status=422)
+            shutil.copyfile(path, self._dir(tag) / name)
+            entry = {
+                "id": int(data["next_asset_id"]),
+                "label": label,
+                "state": "uploaded",
+                "digest": sha256_label(path),
+                "created_at": self._new_created_at(data).isoformat(),
+            }
+            data["next_asset_id"] = int(data["next_asset_id"]) + 1
+            data["assets"][name] = entry
+            self._write(tag, data)
+            return self._asset_from_entry(tag, name, entry)
+
+    def _find_by_id(self, data: dict, asset_id: int) -> str:
+        for name, entry in data["assets"].items():
+            if int(entry["id"]) == asset_id:
+                return name
+        raise StorageError(f"asset id not found: {asset_id}")
+
+    def rename(
+        self, tag: str, asset_id: int, new_name: str, label: str | None = None
+    ) -> Asset:
+        with self._lock:
+            data = self._require(tag)
+            name = self._find_by_id(data, asset_id)
+            if new_name != name and new_name in data["assets"]:
+                raise StorageError(f"asset exists: {tag}:{new_name}", status=422)
+            entry = data["assets"].pop(name)
+            if label is not None:
+                entry["label"] = label or None
+            (self._dir(tag) / name).replace(self._dir(tag) / new_name)
+            data["assets"][new_name] = entry
+            self._write(tag, data)
+            return self._asset_from_entry(tag, new_name, entry)
+
+    def delete(self, tag: str, asset_id: int) -> None:
+        with self._lock:
+            data = self._require(tag)
+            name = self._find_by_id(data, asset_id)
+            del data["assets"][name]
+            (self._dir(tag) / name).unlink(missing_ok=True)
+            self._write(tag, data)
+
+    def _fetch_asset(self, tag: str, asset: Asset, dest: Path) -> Path:
+        source = self._dir(tag) / asset.name
+        if not source.exists():
+            raise StorageError(f"asset bytes are missing: {tag}:{asset.name}")
+        dest = Path(dest)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, dest)
+        return dest

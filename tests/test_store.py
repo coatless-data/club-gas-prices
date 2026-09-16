@@ -111,3 +111,134 @@ def test_ensure_release_refuses_an_immutable_release(tmp_path: Path):
 
     with pytest.raises(store.StorageError, match="immutable release: current"):
         s.ensure_release("current", "Current data", "b", False, "true")
+
+
+def _seed(tmp_path: Path) -> tuple[store.LocalReleaseStore, Path]:
+    root = tmp_path / "releases"
+    s = store.LocalReleaseStore(root)
+    s.ensure_release("data-2026-09", "September 2026", "b", True, "false")
+    return s, root
+
+
+def test_upload_new_records_digest_size_and_state(tmp_path: Path):
+    s, root = _seed(tmp_path)
+    src = tmp_path / "rows.csv"
+    src.write_bytes(b"capture_id,price\n2026-09-15T1817Z,3.999\n")
+
+    asset = s.upload_new("data-2026-09", src, "costco-gas-2026-09-15.csv.gz")
+    assert asset.name == "costco-gas-2026-09-15.csv.gz"
+    assert asset.state == "uploaded"
+    assert asset.size == src.stat().st_size
+    assert asset.digest == store.sha256_label(src)
+    assert asset.label is None
+
+    listed = s.list_assets("data-2026-09")
+    assert [a.name for a in listed] == ["costco-gas-2026-09-15.csv.gz"]
+    assert listed[0].id == asset.id
+    assert (root / "data-2026-09" / "costco-gas-2026-09-15.csv.gz").read_bytes() == (
+        src.read_bytes()
+    )
+
+
+def test_upload_new_keeps_an_explicit_label(tmp_path: Path):
+    s, _ = _seed(tmp_path)
+    src = tmp_path / "rows.csv"
+    src.write_bytes(b"rows-v1\n")
+    asset = s.upload_new("data-2026-09", src, "rows.csv.next-tok-1", label="sha256:abc")
+    assert asset.label == "sha256:abc"
+
+
+def test_upload_new_on_a_duplicate_name_reports_422(tmp_path: Path):
+    s, _ = _seed(tmp_path)
+    src = tmp_path / "rows.csv"
+    src.write_bytes(b"rows-v1\n")
+    s.upload_new("data-2026-09", src, "rows.csv")
+    with pytest.raises(store.StorageError) as excinfo:
+        s.upload_new("data-2026-09", src, "rows.csv")
+    assert excinfo.value.status == 422
+
+
+def test_list_assets_of_a_missing_release_is_empty(tmp_path: Path):
+    s, _ = _seed(tmp_path)
+    assert s.list_assets("data-2030-01") == []
+
+
+def test_created_at_is_strictly_increasing(tmp_path: Path):
+    s, _ = _seed(tmp_path)
+    src = tmp_path / "rows.csv"
+    src.write_bytes(b"rows-v1\n")
+    first = s.upload_new("data-2026-09", src, "a.csv")
+    second = s.upload_new("data-2026-09", src, "b.csv")
+    assert second.created_at > first.created_at
+
+
+def test_download_writes_the_bytes_and_creates_parents(tmp_path: Path):
+    s, _ = _seed(tmp_path)
+    src = tmp_path / "rows.csv"
+    src.write_bytes(b"rows-v1\n")
+    s.upload_new("data-2026-09", src, "rows.csv")
+
+    dest = s.download("data-2026-09", "rows.csv", tmp_path / "out" / "nested" / "d.csv")
+    assert dest.read_bytes() == b"rows-v1\n"
+
+
+def test_download_raises_asset_not_found_when_nothing_is_there(tmp_path: Path):
+    s, _ = _seed(tmp_path)
+    with pytest.raises(store.AssetNotFound):
+        s.download("data-2026-09", "rows.csv", tmp_path / "d.csv")
+    with pytest.raises(store.AssetNotFound):
+        s.download("data-2030-01", "rows.csv", tmp_path / "d.csv")
+
+
+def test_download_raises_storage_error_when_only_temporaries_exist(tmp_path: Path):
+    # A missing <name> with a .next-* present is an interrupted replace, not a
+    # file that was never published. Callers treat AssetNotFound as "first
+    # publish" and would start from an empty frame, which would lose history.
+    s, _ = _seed(tmp_path)
+    src = tmp_path / "rows.csv"
+    src.write_bytes(b"rows-v1\n")
+    s.upload_new("data-2026-09", src, "rows.csv.next-tok-1", label=store.sha256_label(src))
+    with pytest.raises(store.StorageError, match="recovery"):
+        s.download("data-2026-09", "rows.csv", tmp_path / "d.csv")
+
+
+def test_download_detects_a_corrupted_asset(tmp_path: Path):
+    s, root = _seed(tmp_path)
+    src = tmp_path / "rows.csv"
+    src.write_bytes(b"rows-v1\n")
+    s.upload_new("data-2026-09", src, "rows.csv")
+    # Same length, different bytes: the size still matches, the digest does not.
+    (root / "data-2026-09" / "rows.csv").write_bytes(b"rows-XX\n")
+
+    with pytest.raises(store.StorageError, match="digest mismatch"):
+        s.download("data-2026-09", "rows.csv", tmp_path / "d.csv")
+
+
+def test_rename_can_clear_the_label_and_delete_removes_the_asset(tmp_path: Path):
+    s, root = _seed(tmp_path)
+    src = tmp_path / "rows.csv"
+    src.write_bytes(b"rows-v1\n")
+    uploaded = s.upload_new("data-2026-09", src, "rows.csv.next-tok-1", label="sha256:abc")
+
+    renamed = s.rename("data-2026-09", uploaded.id, "rows.csv", label="")
+    assert renamed.name == "rows.csv"
+    assert renamed.label is None
+    assert renamed.created_at == uploaded.created_at
+    assert (root / "data-2026-09" / "rows.csv").exists()
+    assert not (root / "data-2026-09" / "rows.csv.next-tok-1").exists()
+
+    s.delete("data-2026-09", renamed.id)
+    assert s.list_assets("data-2026-09") == []
+    with pytest.raises(store.StorageError):
+        s.delete("data-2026-09", renamed.id)
+
+
+def test_rename_onto_an_existing_name_reports_422(tmp_path: Path):
+    s, _ = _seed(tmp_path)
+    src = tmp_path / "rows.csv"
+    src.write_bytes(b"rows-v1\n")
+    s.upload_new("data-2026-09", src, "rows.csv")
+    other = s.upload_new("data-2026-09", src, "rows.csv.next-tok-1")
+    with pytest.raises(store.StorageError) as excinfo:
+        s.rename("data-2026-09", other.id, "rows.csv")
+    assert excinfo.value.status == 422
