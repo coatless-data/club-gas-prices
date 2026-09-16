@@ -1,0 +1,210 @@
+{
+ "pagination": {
+  "currentPage": 0,
+  "pageSize": 100,
+  "sort": "asc",
+  "totalPages": 1,
+  "totalResults": 6
+ },
+ "stores": [
+  {
+   "name": "Kawasaki",
+   "displayName": "川崎",
+   "warehouseCode": "costcoJapanKawasakiWarehouse",
+   "gasTypes": [],
+   "geoPoint": {
+    "latitude": 35.522377,
+    "longitude": 139.732507
+   },
+   "address": {
+    "country": {
+     "isocode": "JP",
+     "name": "Japan"
+    },
+    "formattedAddress": "",
+    "line1": "210-0832",
+    "line2": "神奈川県川崎市川崎区池上新町3-1-4 "
+   }
+  },
+  {
+   "name": "Tomiya",
+   "displayName": "富谷",
+   "warehouseCode": "costcoJapanTomiyaWarehouse",
+   "gasTypes": [
+    {
+     "name": "Kerosene",
+     "price": "¥124"
+    },
+    {
+     "name": "Diesel",
+     "price": "¥135"
+    },
+    {
+     "name": "Regular",
+     "price": "¥149"
+    },
+    {
+     "name": "Premium",
+     "price": "¥159"
+    }
+   ],
+   "geoPoint": {
+    "latitude": 38.392992,
+    "longitude": 140.875784
+   },
+   "address": {
+    "country": {
+     "isocode": "JP",
+     "name": "Japan"
+    },
+    "formattedAddress": "",
+    "line1": "981-3313",
+    "line2": "宮城県富谷市高屋敷26"
+   }
+  },
+  {
+   "name": "Shinmisato",
+   "displayName": "新三郷",
+   "warehouseCode": "costcoJapanShinmisatoWarehouse",
+   "gasTypes": [
+    {
+     "name": "Kerosene",
+     "price": "¥125"
+    },
+    {
+     "name": "Diesel",
+     "price": "¥137"
+    },
+    {
+     "name": "Regular",
+     "price": "¥150"
+    },
+    {
+     "name": "Premium",
+     "price": "¥160"
+    }
+   ],
+   "geoPoint": {
+    "latitude": 35.861039,
+    "longitude": 139.864172
+   },
+   "address": {
+    "country": {
+     "isocode": "JP",
+     "name": "Japan"
+    },
+    "formattedAddress": "",
+    "line1": " 341-0009",
+    "line2": " 埼玉県三郷市新三郷ららシティ3-1-2 "
+   }
+  },
+  {
+   "name": "Maebashi",
+   "displayName": "前橋",
+   "warehouseCode": "costcoJapanMaebashiWarehouse",
+   "gasTypes": [
+    {
+     "name": "Kerosene",
+     "price": "¥123"
+    },
+    {
+     "name": "Diesel",
+     "price": "¥135"
+    },
+    {
+     "name": "Regular",
+     "price": "¥150"
+    },
+    {
+     "name": "Premium",
+     "price": "¥160"
+    }
+   ],
+   "geoPoint": {
+    "latitude": 36.332819,
+    "longitude": 139.093856
+   },
+   "address": {
+    "country": {
+     "isocode": "JP",
+     "name": "Japan"
+    },
+    "formattedAddress": "",
+    "line1": "379-2141",
+    "line2": " 群馬県前橋市鶴光路町137-2"
+   }
+  },
+  {
+   "name": "Nonoichi",
+   "displayName": "野々市",
+   "warehouseCode": "costcoJapanNonoichiWarehouse",
+   "gasTypes": [
+    {
+     "name": "Kerosene",
+     "price": "¥121"
+    },
+    {
+     "name": "Diesel",
+     "price": "¥136"
+    },
+    {
+     "name": "Regular",
+     "price": "¥151"
+    },
+    {
+     "name": "Premium",
+     "price": "¥162"
+    }
+   ],
+   "geoPoint": {
+    "latitude": 36.528361,
+    "longitude": 136.5815
+   },
+   "address": {
+    "country": {
+     "isocode": "JP",
+     "name": "Japan"
+    },
+    "formattedAddress": "",
+    "line1": "921-8848",
+    "line2": "石川県野々市市柳町301-1"
+   }
+  },
+  {
+   "name": "Hisayama",
+   "displayName": "久山",
+   "warehouseCode": "costcoJapanHisayamaWarehouse",
+   "gasTypes": [
+    {
+     "name": "Kerosene",
+     "price": "¥120"
+    },
+    {
+     "name": "Diesel",
+     "price": "¥138"
+    },
+    {
+     "name": "Regular",
+     "price": "¥150"
+    },
+    {
+     "name": "Premium",
+     "price": "¥161"
+    }
+   ],
+   "geoPoint": {
+    "latitude": 33.6525079,
+    "longitude": 130.4871172
+   },
+   "address": {
+    "country": {
+     "isocode": "JP",
+     "name": "Japan"
+    },
+    "formattedAddress": "",
+    "line1": "811-2502",
+    "line2": "福岡県糟屋郡久山町大字山田字高柳1152-1【トリアス久山　西ゾーン内】"
+   }
+  }
+ ]
+}

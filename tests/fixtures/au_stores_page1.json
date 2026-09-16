@@ -1,0 +1,98 @@
+{
+ "pagination": {
+  "currentPage": 0,
+  "pageSize": 3,
+  "sort": "asc",
+  "totalPages": 2,
+  "totalResults": 5
+ },
+ "stores": [
+  {
+   "name": "Marsden Park",
+   "displayName": "Marsden Park",
+   "warehouseCode": "109",
+   "gasTypes": [
+    {
+     "name": "E10",
+     "price": "$2.127"
+    },
+    {
+     "name": "Premium 98",
+     "price": "$2.327"
+    },
+    {
+     "name": "Diesel",
+     "price": "$2.527"
+    }
+   ],
+   "geoPoint": {
+    "latitude": -33.72141,
+    "longitude": 150.839951
+   },
+   "address": {
+    "country": {
+     "isocode": "AU",
+     "name": "Australia"
+    },
+    "formattedAddress": "10 Langford Drive Marsden Park NSW Australia 2765",
+    "line1": "10 Langford Drive",
+    "postalCode": "2765",
+    "town": "Marsden Park NSW"
+   }
+  },
+  {
+   "name": "Canberra",
+   "displayName": "Canberra",
+   "warehouseCode": "103",
+   "gasTypes": [
+    {
+     "name": "Unleaded 91",
+     "price": "$2.147"
+    },
+    {
+     "name": "Premium 98",
+     "price": "$2.347"
+    },
+    {
+     "name": "Diesel",
+     "price": "$2.547"
+    }
+   ],
+   "geoPoint": {
+    "latitude": -35.296407,
+    "longitude": 149.189441
+   },
+   "address": {
+    "country": {
+     "isocode": "AU",
+     "name": "Australia"
+    },
+    "formattedAddress": "39-41 Mustang Ave Majura Park Canberra Airport ACT Australia 2609",
+    "line1": "39-41 Mustang Ave",
+    "line2": "Majura Park",
+    "postalCode": "2609",
+    "town": "Canberra Airport ACT"
+   }
+  },
+  {
+   "name": "Ringwood",
+   "displayName": "Ringwood",
+   "warehouseCode": "104",
+   "gasTypes": [],
+   "geoPoint": {
+    "latitude": -37.814545,
+    "longitude": 145.225345
+   },
+   "address": {
+    "country": {
+     "isocode": "AU",
+     "name": "Australia"
+    },
+    "formattedAddress": "29 Bond Street Ringwood VIC Australia 3134",
+    "line1": "29 Bond Street",
+    "postalCode": "3134",
+    "town": "Ringwood VIC"
+   }
+  }
+ ]
+}

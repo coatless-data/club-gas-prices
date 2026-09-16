@@ -1,0 +1,134 @@
+{
+ "pagination": {
+  "currentPage": 0,
+  "pageSize": 100,
+  "sort": "asc",
+  "totalPages": 1,
+  "totalResults": 4
+ },
+ "stores": [
+  {
+   "name": "Hayes",
+   "displayName": "Hayes",
+   "warehouseCode": "hayes",
+   "gasTypes": [],
+   "geoPoint": {
+    "latitude": 51.496387,
+    "longitude": -0.402671
+   },
+   "address": {
+    "country": {
+     "isocode": "GB",
+     "name": "United Kingdom"
+    },
+    "formattedAddress": "Western International Park, Hayes Road Hayes London United Kingdom UB2 5XJ",
+    "line1": "Western International Park, Hayes Road",
+    "line2": "Hayes",
+    "postalCode": "UB2 5XJ",
+    "town": "London"
+   }
+  },
+  {
+   "name": "Haydock",
+   "displayName": "Haydock",
+   "warehouseCode": "haydock",
+   "gasTypes": [
+    {
+     "name": "5301",
+     "price": "161.9"
+    },
+    {
+     "name": "5302",
+     "price": "169.9"
+    },
+    {
+     "name": "5303",
+     "price": "181.9"
+    }
+   ],
+   "geoPoint": {
+    "latitude": 53.474435,
+    "longitude": -2.660873
+   },
+   "address": {
+    "country": {
+     "isocode": "GB",
+     "name": "United Kingdom"
+    },
+    "formattedAddress": "Andover Road Haydock Merseyside United Kingdom WA11 9FA",
+    "line1": "Andover Road",
+    "line2": "Haydock",
+    "postalCode": "WA11 9FA",
+    "town": "Merseyside"
+   }
+  },
+  {
+   "name": "Reading",
+   "displayName": "Reading",
+   "warehouseCode": "reading",
+   "gasTypes": [
+    {
+     "name": "5301",
+     "price": "165.9"
+    },
+    {
+     "name": "5302",
+     "price": "175.9"
+    },
+    {
+     "name": "5303",
+     "price": "188.9"
+    }
+   ],
+   "geoPoint": {
+    "latitude": 51.420906,
+    "longitude": -0.983806
+   },
+   "address": {
+    "country": {
+     "isocode": "GB",
+     "name": "United Kingdom"
+    },
+    "formattedAddress": "100 South Oak Way Green Park Reading United Kingdom RG2 6UE",
+    "line1": "100 South Oak Way",
+    "line2": "Green Park",
+    "postalCode": "RG2 6UE",
+    "town": "Reading"
+   }
+  },
+  {
+   "name": "Sunbury",
+   "displayName": "Sunbury ",
+   "warehouseCode": "sunbury",
+   "gasTypes": [
+    {
+     "name": "5301",
+     "price": "162.9"
+    },
+    {
+     "name": "5302",
+     "price": "174.9"
+    },
+    {
+     "name": "5303",
+     "price": "184.9"
+    }
+   ],
+   "geoPoint": {
+    "latitude": 51.422806,
+    "longitude": -0.412846
+   },
+   "address": {
+    "country": {
+     "isocode": "GB",
+     "name": "United Kingdom"
+    },
+    "formattedAddress": "Costco Sunbury Hanworth Road Sunbury on Thames Sunbury United Kingdom TW16 5LN",
+    "line1": "Hanworth Road",
+    "line2": "Sunbury on Thames",
+    "postalCode": "TW16 5LN",
+    "town": "Sunbury"
+   }
+  }
+ ]
+}

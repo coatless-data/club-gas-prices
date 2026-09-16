@@ -1,0 +1,164 @@
+{
+ "pagination": {
+  "currentPage": 0,
+  "pageSize": 100,
+  "sort": "asc",
+  "totalPages": 1,
+  "totalResults": 5
+ },
+ "stores": [
+  {
+   "name": "Marsden Park",
+   "displayName": "Marsden Park",
+   "warehouseCode": "109",
+   "gasTypes": [
+    {
+     "name": "E10",
+     "price": "$2.127"
+    },
+    {
+     "name": "Premium 98",
+     "price": "$2.327"
+    },
+    {
+     "name": "Diesel",
+     "price": "$2.527"
+    }
+   ],
+   "geoPoint": {
+    "latitude": -33.72141,
+    "longitude": 150.839951
+   },
+   "address": {
+    "country": {
+     "isocode": "AU",
+     "name": "Australia"
+    },
+    "formattedAddress": "10 Langford Drive Marsden Park NSW Australia 2765",
+    "line1": "10 Langford Drive",
+    "postalCode": "2765",
+    "town": "Marsden Park NSW"
+   }
+  },
+  {
+   "name": "Canberra",
+   "displayName": "Canberra",
+   "warehouseCode": "103",
+   "gasTypes": [
+    {
+     "name": "Unleaded 91",
+     "price": "$2.147"
+    },
+    {
+     "name": "Premium 98",
+     "price": "$2.347"
+    },
+    {
+     "name": "Diesel",
+     "price": "$2.547"
+    }
+   ],
+   "geoPoint": {
+    "latitude": -35.296407,
+    "longitude": 149.189441
+   },
+   "address": {
+    "country": {
+     "isocode": "AU",
+     "name": "Australia"
+    },
+    "formattedAddress": "39-41 Mustang Ave Majura Park Canberra Airport ACT Australia 2609",
+    "line1": "39-41 Mustang Ave",
+    "line2": "Majura Park",
+    "postalCode": "2609",
+    "town": "Canberra Airport ACT"
+   }
+  },
+  {
+   "name": "Ringwood",
+   "displayName": "Ringwood",
+   "warehouseCode": "104",
+   "gasTypes": [],
+   "geoPoint": {
+    "latitude": -37.814545,
+    "longitude": 145.225345
+   },
+   "address": {
+    "country": {
+     "isocode": "AU",
+     "name": "Australia"
+    },
+    "formattedAddress": "29 Bond Street Ringwood VIC Australia 3134",
+    "line1": "29 Bond Street",
+    "postalCode": "3134",
+    "town": "Ringwood VIC"
+   }
+  },
+  {
+   "name": "Perth Airport",
+   "displayName": "Perth Airport",
+   "warehouseCode": "116",
+   "gasTypes": [
+    {
+     "name": "Unleaded 91",
+     "price": "$2.027"
+    },
+    {
+     "name": "Premium 98",
+     "price": "$2.227"
+    },
+    {
+     "name": "Diesel",
+     "price": "$2.407"
+    }
+   ],
+   "geoPoint": {
+    "latitude": -31.94378,
+    "longitude": 115.95545
+   },
+   "address": {
+    "country": {
+     "isocode": "AU",
+     "name": "Australia"
+    },
+    "formattedAddress": "142 Dunreath Drive Perth Airport  Australia 6105",
+    "line1": "142 Dunreath Drive",
+    "postalCode": "6105",
+    "town": "Perth Airport "
+   }
+  },
+  {
+   "name": "Casuarina",
+   "displayName": "Casuarina",
+   "warehouseCode": "118",
+   "gasTypes": [
+    {
+     "name": "Unleaded 91",
+     "price": "$2.027"
+    },
+    {
+     "name": "Premium 98",
+     "price": "$2.227"
+    },
+    {
+     "name": "Diesel",
+     "price": "$2.407"
+    }
+   ],
+   "geoPoint": {
+    "latitude": -32.2342231139156,
+    "longitude": 115.8519965043888
+   },
+   "address": {
+    "country": {
+     "isocode": "AU",
+     "name": "Australia"
+    },
+    "formattedAddress": "137 Market Street Casuarina WA Australia 6167",
+    "line1": "137 Market Street",
+    "postalCode": "6167 ",
+    "town": "Casuarina WA"
+   }
+  }
+ ]
+}
