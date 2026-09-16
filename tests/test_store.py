@@ -1209,6 +1209,37 @@ def test_github_replace_atomic_rolls_back_when_the_promotion_keeps_failing(
     assert fake.asset_names("current") == ["stations.csv"]
 
 
+def test_recover_promotes_the_next_when_it_ties_the_old_to_the_second(writer_env):
+    """On an exact `created_at` tie the verified `.next` wins, not the `.old`.
+
+    GitHub stamps an asset's `created_at` to the second, and step 3 and step 4
+    of one `replace_atomic` -- rename the live copy to `.old`, rename the new
+    copy in -- are two requests apart, so a tie is ordinary rather than
+    hypothetical. A crash between them leaves exactly this state. The `.next`
+    is the copy that run verified and was installing, and the `.old` is the
+    copy it was replacing, so preferring the `.old` on a tie would undo a
+    completed publish. Only a *newer* `.old`, from a later run, outranks a
+    stale `.next`, which the test above covers.
+    """
+    fake = FakeGitHub()
+    fake.add_release("current", latest=True)
+    payload = b"stations-v2\n"
+    label = "sha256:" + hashlib.sha256(payload).hexdigest()
+    incoming = fake.add_asset("current", "stations.csv.next-tok-1", payload, label=label)
+    previous = fake.add_asset("current", "stations.csv.old-tok", b"stations-v1\n")
+    previous["created_at"] = incoming["created_at"]  # the same second
+    s = store.GitHubReleaseStore("acme", "gas", transport=fake.transport())
+
+    actions = store.recover_temporaries(s, "current")
+
+    assert actions == [
+        "promoted:stations.csv.next-tok-1",
+        "deleted-leftover:stations.csv.old-tok",
+    ]
+    assert fake.asset_names("current") == ["stations.csv"]
+    assert fake.body_of("current", "stations.csv") == payload
+
+
 def test_open_store_builds_both_kinds(tmp_path: Path):
     local = store.open_store(f"local:{tmp_path / 'releases'}")
     assert isinstance(local, store.LocalReleaseStore)

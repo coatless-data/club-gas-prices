@@ -6,7 +6,9 @@ import json
 from datetime import UTC, date, datetime
 
 import polars as pl
+import pytest
 
+from costco_gas import rollup
 from costco_gas.rollup import close_periods, daily_grain, rebuild_current
 from costco_gas.store import next_name, open_store, sha256_label
 from helpers_rollup import (
@@ -300,6 +302,42 @@ def test_close_periods_blocks_a_month_whose_daily_file_disagrees_with_the_manife
     assert store.get_release("data-2026-08").prerelease is True
     assert issues.opened[0][0] == "Period close blocked: 2026-08"
     assert "manifest records 99" in issues.opened[0][1]
+
+
+def test_a_close_refuses_a_capture_grain_that_lost_rows_the_daily_files_hold(tmp_path, monkeypatch):
+    """Spec 8.6 step 2, an explicit acceptance criterion (§14.6): the
+    capture-grain row count must equal the sum of the daily files' rows.
+
+    Today `_close_month` builds that frame by concatenating the same daily
+    files it counts, so the two sides agree by construction and no seeded
+    month can make them differ -- which is exactly why the check reads as
+    redundant and why deleting it costs nothing until the day the frame stops
+    coming straight from those files. The month files are the permanent copy of
+    that history and `prerelease` is cleared right after them, so a close that
+    wrote a short capture-grain file would freeze the loss. Here the read is
+    made to drop one row, the way a partial read or a filtered concat would,
+    with `per_file` still matching the manifest so that no other check can
+    fire.
+    """
+    store = open_store(f"local:{tmp_path / 'releases'}")
+    cfg = stub_config(tmp_path)
+    _seed_august(store, tmp_path)
+    real = rollup._read_daily_files
+
+    def short(store_arg, tag, work):
+        frame, per_file = real(store_arg, tag, work)
+        return frame.head(frame.height - 1), per_file
+
+    monkeypatch.setattr(rollup, "_read_daily_files", short)
+
+    with pytest.raises(ValueError, match=r"capture grain has 3 rows, the daily files hold 4"):
+        close_periods(store, cfg, now=datetime(2026, 9, 1, 3, 17, tzinfo=UTC))
+
+    # Nothing was written and the month is still open, so a fixed run can retry.
+    names = {a.name for a in store.list_assets("data-2026-08")}
+    assert "costco-gas-2026-08.parquet" not in names
+    assert "costco-gas-2026-08-captures.parquet" not in names
+    assert store.get_release("data-2026-08").prerelease is True
 
 
 def test_a_mismatched_month_does_not_block_a_healthy_month_in_the_same_run(tmp_path):

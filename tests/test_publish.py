@@ -14,9 +14,10 @@ from pathlib import Path
 import polars as pl
 import pytest
 
+from costco_gas import publish as publish_module
 from costco_gas import rollup, schema
 from costco_gas.config import load_config
-from costco_gas.publish import publish
+from costco_gas.publish import publish, upsert_stations
 from costco_gas.store import LocalReleaseStore, StorageError, sha256_file
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -1145,3 +1146,81 @@ def test_the_incremental_and_full_writers_of_current_agree_byte_for_byte(tmp_pat
         for name in ("fx.csv", "stations.csv")
     }
     assert after == before
+
+
+def test_a_merge_that_would_drop_a_capture_date_refuses_to_write(tmp_path: Path, cfg):
+    """`current` may never come out of a merge holding fewer capture dates.
+
+    Everything upstream is meant to make this impossible -- the merge keeps
+    every date but the capture's own and puts that day's merged rows back --
+    so this is the check that catches the case where it did not: a day whose
+    daily file came back empty, a merge that produced the wrong frame, a
+    `capture_date` that did not round-trip. Publishing that frame would delete
+    a day of history from the only copy on the release, and nothing downstream
+    would notice, so `_update_current` raises before it writes anything.
+    """
+    store = LocalReleaseStore(tmp_path / "releases")
+    first = make_capture_dir(tmp_path / "captures", "2026-09-15T1817Z", DAY1, prices=PRICES)
+    publish(store, first, cfg, now=NOW)
+
+    # A later capture on the same day whose merge lost the day it was for.
+    later = make_capture_dir(
+        tmp_path / "captures",
+        "2026-09-15T2317Z",
+        datetime(2026, 9, 15, 23, 17, tzinfo=UTC),
+        prices=PRICES,
+    )
+    captured = publish_module.load_capture_dir(later)
+    empty = pl.DataFrame(schema=schema.ROW_SCHEMA)
+    before = store.download("current", "costco-gas-all-captures.parquet", tmp_path / "before.pq")
+    digest = sha256_file(before)
+
+    with pytest.raises(StorageError, match=r"all-captures would lose capture dates"):
+        publish_module._update_current(store, cfg, captured, empty, tmp_path / "scratch", [])
+
+    after = store.download("current", "costco-gas-all-captures.parquet", tmp_path / "after.pq")
+    assert sha256_file(after) == digest
+
+
+def test_a_late_capture_leaves_station_metadata_and_status_alone(cfg):
+    """Spec 6.3: a capture older than its country's newest merged capture
+    touches only first_seen_utc, last_seen_utc and grades_seen.
+
+    Metadata, alt_id and status stay as the newest capture left them. Without
+    that gate a late publish -- a rerun, a replayed bundle, a slow country
+    thread -- would quietly reinstate a stale name, a stale position, and an
+    `active` status for a station the newest capture recorded as missing.
+    """
+    late_at = datetime(2026, 9, 15, 0, 17, tzinfo=UTC)
+    stored = station_row("Chungli", DAY1, {"95", "98"})
+    stored.update(name="Chungli renamed", alt_id="560", city="Taoyuan", status="missing")
+    previous = pl.DataFrame([stored], schema=schema.STATION_SCHEMA)
+    arriving = station_row("Chungli", late_at, {"Diesel"})
+    arriving.update(name="Chungli", alt_id="111", city=None, status="active")
+    incoming = pl.DataFrame([arriving], schema=schema.STATION_SCHEMA)
+    status = {"countries": {"TW": {"status": "ok"}}}
+    newest = {"TW": "2026-09-15T1817Z"}
+
+    late = upsert_stations(
+        previous, incoming, status, cfg.station_links, newest, "2026-09-15T0017Z"
+    ).to_dicts()[0]
+
+    assert late["name"] == "Chungli renamed"
+    assert late["alt_id"] == "560"
+    assert late["city"] == "Taoyuan"
+    assert late["status"] == "missing"
+    # The three columns a late capture does move.
+    assert late["first_seen_utc"] == late_at
+    assert late["last_seen_utc"] == DAY1
+    assert late["grades_seen"] == "95|98|Diesel"
+
+    # The same rows from a capture that is the newest: metadata moves, and the
+    # station comes back to active.
+    fresh = upsert_stations(
+        previous, incoming, status, cfg.station_links, newest, "2026-09-15T2317Z"
+    ).to_dicts()[0]
+
+    assert fresh["name"] == "Chungli"
+    assert fresh["alt_id"] == "111"
+    assert fresh["city"] is None
+    assert fresh["status"] == "active"
