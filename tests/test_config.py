@@ -470,3 +470,18 @@ def test_interp_view_keeps_only_what_reading_a_response_needs(cfg):
     assert interp.us_extra_ids.height == 0
     assert interp.us_extra_ids.columns == cfg.us_extra_ids.columns
     assert cfg.countries["US"].url == "https://www.costco.com/AjaxGetGasPricesService"
+
+
+def test_a_budget_the_code_does_not_have_is_rejected(config_copy: Path):
+    """A typo in [budgets] must not merge in as a key nothing ever reads.
+
+    Silently accepting an unknown name is exactly how this table came to be
+    dead config: the edit looks applied, the real budget stays at its default,
+    and nothing anywhere says so.
+    """
+    path = config_copy / "config" / "http.toml"
+    path.write_text(path.read_text().replace("capture = 720.0", "captrue = 720.0"))
+    with pytest.raises(ConfigError) as exc:
+        load_config(config_copy)
+    assert "captrue" in str(exc.value)
+    assert "capture" in str(exc.value)

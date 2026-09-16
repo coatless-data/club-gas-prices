@@ -83,6 +83,20 @@ def _default_budgets() -> dict[str, float]:
     return {"fx": 90.0, "ecom-api": 90.0, "country": 480.0, "capture": 720.0}
 
 
+def _budget_overrides(raw: dict, path: Path) -> dict[str, float]:
+    """The `[budgets]` table, checked against the budgets that exist."""
+    known = _default_budgets()
+    out: dict[str, float] = {}
+    for key, value in raw.get("budgets", {}).items():
+        name = str(key)
+        if name not in known:
+            raise ConfigError(
+                f"{path}: unknown budget {name!r}; known budgets are {', '.join(sorted(known))}"
+            )
+        out[name] = float(value)
+    return out
+
+
 CHROME_UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
@@ -360,11 +374,12 @@ def _load_http(path: Path) -> HttpConfig:
                 raw.get("blocks", {}).get("signals_before_abandon", 2)
             ),
             # Merged over the defaults, so a table that names only some of the
-            # budgets still leaves the rest at their documented values.
-            budgets={
-                **_default_budgets(),
-                **{str(k): float(v) for k, v in raw.get("budgets", {}).items()},
-            },
+            # budgets still leaves the rest at their documented values. An
+            # unknown key is rejected rather than merged: silently ignoring one
+            # is how this table came to be dead config in the first place, and
+            # a typo would leave the real budget at its default with nothing
+            # to show for the edit.
+            budgets={**_default_budgets(), **_budget_overrides(raw, path)},
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise ConfigError(f"{path}: {exc}") from exc

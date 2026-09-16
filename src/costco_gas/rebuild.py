@@ -93,12 +93,21 @@ def _read_input_csv(path: Path, schema: dict) -> pl.DataFrame:
     (`pl.DataFrame().write_csv()`, the >0-byte case the old `st_size` guard
     missed). Both mean "empty", and only the second would reach `pl.read_csv`,
     which raises `NoDataError` on it.
+
+    `schema=` assigns columns by position and ignores the header, so the header
+    is checked first. These bundles are read years after they were written: if
+    a future column order ever disagrees with the one a bundle was written
+    with, that has to fail loudly here rather than quietly load a column's
+    values into its neighbour.
     """
     if not path.exists():
         return pl.DataFrame(schema=schema)
     raw = path.read_bytes()
     if not raw.strip():
         return pl.DataFrame(schema=schema)
+    header = raw.split(b"\n", 1)[0].decode("utf-8").strip().split(",")
+    if header != list(schema):
+        raise ValueError(f"{path}: column order is {header}, expected {list(schema)}")
     return pl.read_csv(raw, schema=schema)
 
 

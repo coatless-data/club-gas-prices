@@ -5,8 +5,9 @@ explicit date (status "fallback"), then carry-forward from the previous capture'
 fx.csv (status "carried-forward"). If nothing works the capture still succeeds
 with no rows (status "failed") and null USD columns.
 
-`units_per_usd` is the provider's raw rate (quote units per 1 USD) and is stored
-unrounded; rows use `fx_usd_per_unit = 1 / units_per_usd`.
+`units_per_usd` is the provider's raw rate (quote units per 1 USD) and rows use
+`fx_usd_per_unit = 1 / units_per_usd`. Both are carried at full precision in
+memory and rounded to 10 significant digits only when written (spec 6.1).
 
 The bundle's fx.json is a JSON *array* of rate rows and carries no status, so
 `to_json()` returns a list and `from_json()` takes the status as a keyword

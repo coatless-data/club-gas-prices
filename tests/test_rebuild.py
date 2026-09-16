@@ -448,3 +448,26 @@ def test_rebuild_reads_a_bundle_written_by_the_real_capture_path(
     assert e10["station_key"] == "AU-109"
     assert e10["price"] == 2.127
     assert e10["currency"] == "AUD"
+
+
+def test_a_bundle_whose_columns_moved_is_refused_not_misread(tmp_path: Path):
+    """`schema=` assigns by position, so the header is the only thing that can object.
+
+    These frames are read back years after they were written. A column order
+    that no longer matches would load each value into its neighbour among the
+    adjacent String columns — silently, and into published data.
+    """
+    from costco_gas.rebuild import _read_input_csv
+    from costco_gas.schema import FX_SCHEMA
+
+    names = list(FX_SCHEMA)
+    swapped = [names[1], names[0], *names[2:]]
+    path = tmp_path / "fx_used.csv"
+    path.write_text(",".join(swapped) + "\n")
+
+    with pytest.raises(ValueError) as exc:
+        _read_input_csv(path, FX_SCHEMA)
+    assert "column order" in str(exc.value)
+
+    path.write_text(",".join(names) + "\n")
+    assert _read_input_csv(path, FX_SCHEMA).height == 0
