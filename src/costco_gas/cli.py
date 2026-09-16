@@ -18,6 +18,7 @@ from .issues import Issues
 from .publish import publish
 from .rebuild import RebuildResult, rebuild
 from .rollup import CloseResult, close_periods
+from .sitedata import build_site_data
 from .store import DEFAULT_STORE, open_store
 
 
@@ -178,6 +179,16 @@ def cmd_discover(args) -> int:
     return 0
 
 
+def cmd_site_data(args) -> int:
+    build_site_data(
+        Path(args.current),
+        Path(args.out),
+        load_config(Path(args.root)),
+        now=utc_now(),
+    )
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="costco-gas")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -228,6 +239,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     discover_cmd.add_argument("--root", default=".", help="repository root holding config/")
     discover_cmd.set_defaults(func=cmd_discover)
+
+    site_data_cmd = sub.add_parser(
+        "site-data", help="build the dashboard's data files from a current release (spec 9.1)"
+    )
+    site_data_cmd.add_argument(
+        "--current", required=True, help="directory holding the downloaded current assets"
+    )
+    site_data_cmd.add_argument("--out", required=True, help="output directory, normally site/data")
+    site_data_cmd.add_argument("--root", default=".", help="repository root holding config/")
+    site_data_cmd.set_defaults(func=cmd_site_data)
 
     return parser
 
