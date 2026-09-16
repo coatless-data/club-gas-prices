@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 
 import polars as pl
@@ -139,3 +140,142 @@ def test_rebuild_stamps_the_manifest_with_the_git_sha_and_config_shas(tmp_path, 
     }
     assert entry["rows_by_capture_date"] == {"2026-09-01": 3}
     assert entry["daily_files"]["2026-09-01"]["rows"] == 3
+
+
+def _two_day_month(store, tmp_path, checkout):
+    bundles = {
+        "2026-09-01T1817Z": make_bundle(
+            tmp_path / "bundles",
+            capture_id="2026-09-01T1817Z",
+            config_dir=checkout / "config",
+            price_e10="$2.127",
+        ),
+        "2026-09-02T1817Z": make_bundle(
+            tmp_path / "bundles",
+            capture_id="2026-09-02T1817Z",
+            config_dir=checkout / "config",
+            price_e10="$2.187",
+        ),
+    }
+    return seed_month(store, "2026-09", bundles=bundles, work=tmp_path / "seed")
+
+
+def _put_state(store, tag, state, tmp_path):
+    path = tmp_path / "rebuild-state.json"
+    path.write_text(json.dumps(state, indent=1, sort_keys=True), "utf-8")
+    store.replace_atomic(tag, path, "rebuild-state.json", "run-test")
+
+
+def test_rebuild_resumes_after_the_last_completed_day_when_everything_matches(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("GITHUB_SHA", "sha-four")
+    store = open_store(f"local:{tmp_path / 'releases'}")
+    checkout = checkout_with_config(tmp_path)
+    _two_day_month(store, tmp_path, checkout)
+    cfg = load_config(checkout)
+    from costco_gas.rebuild import interp_config_sha256
+
+    _put_state(
+        store,
+        "data-2026-09",
+        {
+            "schema_version": 1,
+            "scope": "month",
+            "value": "2026-09",
+            "git_sha": "sha-four",
+            "config_sha256": interp_config_sha256(cfg),
+            "last_completed_day": "2026-09-01",
+            "complete": False,
+        },
+        tmp_path,
+    )
+
+    result = rebuild(store, cfg, scope="month", value="2026-09", now=NOW)
+
+    assert result.resumed is True
+    assert result.captures == 1
+    day_one = _daily(store, "data-2026-09", "2026-09-01", tmp_path, "one.csv.gz")
+    assert day_one.height == 0
+    day_two = _daily(store, "data-2026-09", "2026-09-02", tmp_path, "two.csv.gz")
+    assert day_two.height == 3
+    state = json.loads(
+        store.download("data-2026-09", "rebuild-state.json", tmp_path / "state.json").read_text()
+    )
+    assert state["complete"] is True
+    assert state["last_completed_day"] == "2026-09-02"
+
+
+def test_rebuild_restarts_when_the_git_sha_differs(tmp_path, monkeypatch):
+    monkeypatch.setenv("GITHUB_SHA", "sha-new")
+    store = open_store(f"local:{tmp_path / 'releases'}")
+    checkout = checkout_with_config(tmp_path)
+    _two_day_month(store, tmp_path, checkout)
+    cfg = load_config(checkout)
+    from costco_gas.rebuild import interp_config_sha256
+
+    _put_state(
+        store,
+        "data-2026-09",
+        {
+            "schema_version": 1,
+            "scope": "month",
+            "value": "2026-09",
+            "git_sha": "sha-old",
+            "config_sha256": interp_config_sha256(cfg),
+            "last_completed_day": "2026-09-01",
+            "complete": False,
+        },
+        tmp_path,
+    )
+
+    result = rebuild(store, cfg, scope="month", value="2026-09", now=NOW)
+
+    assert result.resumed is False
+    assert result.captures == 2
+    assert _daily(store, "data-2026-09", "2026-09-01", tmp_path, "r1.csv.gz").height == 3
+
+
+def test_a_second_rebuild_after_a_grades_change_reprocesses_every_day(tmp_path, monkeypatch):
+    monkeypatch.setenv("GITHUB_SHA", "sha-five")
+    store = open_store(f"local:{tmp_path / 'releases'}")
+    checkout = checkout_with_config(tmp_path)
+    _two_day_month(store, tmp_path, checkout)
+    drop_au_e10(checkout)
+    first = rebuild(store, load_config(checkout), scope="month", value="2026-09", now=NOW)
+    assert first.captures == 2
+
+    restore_config(checkout)
+    second = rebuild(store, load_config(checkout), scope="month", value="2026-09", now=NOW)
+
+    assert second.resumed is False
+    assert second.captures == 2
+    for day in ("2026-09-01", "2026-09-02"):
+        rows = _daily(store, "data-2026-09", day, tmp_path, f"{day}.csv.gz")
+        assert rows.filter(pl.col("grade_raw") == "E10")["grade"].to_list() == ["regular"]
+
+
+def test_rebuild_of_an_open_month_then_refreshes_current(tmp_path, monkeypatch):
+    monkeypatch.setenv("GITHUB_SHA", "sha-six")
+    from costco_gas.rollup import rebuild_current
+
+    store = open_store(f"local:{tmp_path / 'releases'}")
+    checkout = checkout_with_config(tmp_path)
+    _two_day_month(store, tmp_path, checkout)
+    cfg = load_config(checkout)
+    rebuild(store, cfg, scope="month", value="2026-09", now=NOW)
+
+    rebuild_current(store, cfg, now=NOW)
+
+    stations = pl.read_csv(store.download("current", "stations.csv", tmp_path / "stations.csv"))
+    assert "AU-109" in stations["station_key"].to_list()
+    captures = pl.read_parquet(
+        store.download("current", "costco-gas-all-captures.parquet", tmp_path / "all.parquet")
+    )
+    assert captures.height == 6
+    fx = pl.read_csv(store.download("current", "fx.csv", tmp_path / "fx.csv"))
+    assert fx["currency"].to_list() == ["AUD", "AUD"]
+    manifest = json.loads(
+        store.download("current", "manifest.json", tmp_path / "m.json").read_text()
+    )
+    assert manifest["newest_capture_by_country"] == {"AU": "2026-09-02T1817Z"}
