@@ -13,6 +13,7 @@ in ``n_stations_usd``.
 from __future__ import annotations
 
 import json
+import os
 from datetime import date, datetime
 from pathlib import Path
 
@@ -126,6 +127,8 @@ def build_site_data(current_dir: Path, out_dir: Path, cfg, *, now: datetime) -> 
         sort_by=HISTORY_SORT,
         row_group_size=HISTORY_ROW_GROUP_SIZE,
     )
+
+    _write_json(out_dir / "meta.json", _meta(current_dir, cfg, now=now))
 
 
 def _read_csv(path: Path, numeric: tuple[str, ...]) -> pl.DataFrame:
@@ -263,3 +266,144 @@ def _check_unique(frame: pl.DataFrame) -> None:
 
 def history(deduped: pl.DataFrame) -> pl.DataFrame:
     return deduped.select(HISTORY_COLUMNS)
+
+
+DEFAULT_RELEASE_BASE_URL = "https://github.com/coatless-dashboard/costco-gas-prices/releases"
+DEFAULT_NOTICE = (
+    "Unofficial. Not affiliated with, endorsed by, or connected to Costco Wholesale "
+    "Corporation. Prices are collected from Costco's public websites and may differ "
+    "from the price at the pump."
+)
+DEFAULT_BASEMAP_KEY_ENV = "CARTO_BASEMAP_KEY"
+KEYED_PROVIDER = "carto"
+FALLBACK_PROVIDER = "osm"
+DEFAULT_MAX_ZOOM = 19
+# The dashboard's freshness notice reads this instead of hardcoding 12 hours.
+STALE_AFTER_HOURS = 12
+CURRENT_ASSETS = {
+    "all_parquet": "costco-gas-all.parquet",
+    "all_csv_gz": "costco-gas-all.csv.gz",
+    "all_captures_parquet": "costco-gas-all-captures.parquet",
+    "latest_csv": "costco-gas-latest.csv",
+    "stations_csv": "stations.csv",
+    "fx_csv": "fx.csv",
+}
+GRADE_TABLE_FIELDS = (
+    "country",
+    "grade_raw",
+    "grade",
+    "priority",
+    "label",
+    "spec",
+    "spec_source",
+    "spec_source_url",
+)
+
+
+def _meta(current_dir: Path, cfg, *, now: datetime) -> dict:
+    manifest = _read_json(current_dir / "manifest.json")
+    status = _manifest_status(manifest)
+    countries = {
+        code: {
+            "status": entry.get("status"),
+            "last_success_capture_id": entry.get("last_success_capture_id"),
+        }
+        for code, entry in (status.get("countries") or {}).items()
+    }
+    base = str(_site_value(cfg, "release_base_url", DEFAULT_RELEASE_BASE_URL)).rstrip("/")
+    return {
+        "built_at_utc": _json_default(now),
+        "capture_id": status.get("capture_id"),
+        "countries": countries,
+        "closed_months": manifest.get("closed_months") or [],
+        "closed_years": manifest.get("closed_years") or [],
+        "grades": _grade_table(cfg),
+        "notice": _site_value(cfg, "notice", DEFAULT_NOTICE),
+        "stale_after_hours": STALE_AFTER_HOURS,
+        "releases": {
+            "current": f"{base}/tag/current",
+            "all": base,
+            **{key: f"{base}/download/current/{name}" for key, name in CURRENT_ASSETS.items()},
+        },
+        "basemap": _basemap(cfg),
+    }
+
+
+def _read_json(path: Path) -> dict:
+    if not path.exists():
+        print(f"::warning::{path.name} is missing; meta.json will carry no capture status")
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except ValueError as exc:
+        print(f"::warning::{path.name} is not valid JSON: {exc}")
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _manifest_status(manifest: dict) -> dict:
+    for key in ("status", "status_json"):
+        if isinstance(manifest.get(key), dict):
+            return manifest[key]
+    return manifest if "countries" in manifest else {}
+
+
+def _site_value(cfg, name: str, default):
+    site = getattr(cfg, "site", None)
+    value = getattr(site, name, None)
+    if value is None and isinstance(site, dict):
+        value = site.get(name)
+    return default if value in (None, "") else value
+
+
+def _grade_table(cfg) -> list[dict]:
+    grades = getattr(cfg, "grades", None)
+    rows = getattr(grades, "rows", None)
+    if callable(rows):
+        rows = rows()
+    if rows is None:
+        return []
+    if isinstance(rows, pl.DataFrame):
+        rows = rows.to_dicts()
+    if isinstance(rows, dict):
+        rows = list(rows.values())
+    table = []
+    for entry in rows:
+        if isinstance(entry, dict):
+            table.append({field: entry.get(field) for field in GRADE_TABLE_FIELDS})
+        else:
+            table.append({field: getattr(entry, field, None) for field in GRADE_TABLE_FIELDS})
+    return table
+
+
+def _basemap(cfg) -> dict:
+    """The basemap block the dashboard reads (spec 9.2).
+
+    CARTO's raster basemaps need an API key since 2026-08-14 and keyless tiles
+    are watermarked, so the OSM fallback is used when no key is configured. The
+    ``{key}`` placeholder is substituted here, because the browser only ever
+    sees the finished URL.
+    """
+    env_name = str(_site_value(cfg, "basemap_key_env", DEFAULT_BASEMAP_KEY_ENV))
+    key = (os.environ.get(env_name) or "").strip()
+    providers = _site_value(cfg, "basemaps", {}) or {}
+    name = KEYED_PROVIDER if key else FALLBACK_PROVIDER
+    provider = dict(providers.get(name) or {})
+    if not key:
+        print(
+            f"::warning::{env_name} is not set; the dashboard falls back to "
+            "OpenStreetMap tiles, which are best effort and have no SLA"
+        )
+    return {
+        "provider": name,
+        "light_url": _with_key(provider.get("light_url"), key),
+        "dark_url": _with_key(provider.get("dark_url"), key),
+        "subdomains": str(provider.get("subdomains") or ""),
+        "max_zoom": int(provider.get("max_zoom") or DEFAULT_MAX_ZOOM),
+        "dark_filter": bool(provider.get("dark_filter", False)),
+        "attribution": str(provider.get("attribution") or ""),
+    }
+
+
+def _with_key(url: object, key: str) -> str:
+    return "" if not url else str(url).replace("{key}", key)

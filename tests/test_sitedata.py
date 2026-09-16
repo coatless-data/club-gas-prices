@@ -503,3 +503,77 @@ def test_history_is_written_with_the_dashboard_row_group_size(current_dir, tmp_p
         ["country", "level", "region", "grade", "capture_date"],
         None,
     ) in calls
+
+
+BASEMAP_KEYS = {
+    "provider",
+    "light_url",
+    "dark_url",
+    "subdomains",
+    "max_zoom",
+    "dark_filter",
+    "attribution",
+}
+
+
+def test_meta_json_carries_status_grades_and_releases(current_dir, tmp_path, monkeypatch):
+    monkeypatch.delenv("CARTO_BASEMAP_KEY", raising=False)
+    out = tmp_path / "data"
+    build_site_data(current_dir, out, _cfg(), now=NOW)
+    meta = json.loads((out / "meta.json").read_text(encoding="utf-8"))
+
+    assert meta["built_at_utc"] == "2026-09-16T02:00:00Z"
+    assert meta["capture_id"] == "2026-09-15T1817Z"
+    assert meta["countries"]["US"] == {
+        "status": "ok",
+        "last_success_capture_id": "2026-09-15T1817Z",
+    }
+    assert meta["countries"]["GB"]["status"] == "failed"
+    assert meta["closed_months"] == ["2026-08"]
+    assert meta["notice"].startswith("Unofficial. Not affiliated with")
+    # The freshness notice reads this instead of hardcoding 12 hours.
+    assert meta["stale_after_hours"] == 12
+    assert {row["grade_raw"] for row in meta["grades"] if row["country"] == "AU"} == {
+        "Unleaded 91",
+        "E10",
+    }
+    base = "https://github.com/coatless-dashboard/costco-gas-prices/releases"
+    assert meta["releases"]["all"] == base
+    assert meta["releases"]["current"] == f"{base}/tag/current"
+    assert meta["releases"]["latest_csv"] == f"{base}/download/current/costco-gas-latest.csv"
+    assert meta["releases"]["all_parquet"] == f"{base}/download/current/costco-gas-all.parquet"
+
+
+def test_meta_json_falls_back_to_osm_without_a_key(current_dir, tmp_path, monkeypatch, capsys):
+    monkeypatch.delenv("CARTO_BASEMAP_KEY", raising=False)
+    out = tmp_path / "data"
+    build_site_data(current_dir, out, _cfg(), now=NOW)
+    basemap = json.loads((out / "meta.json").read_text(encoding="utf-8"))["basemap"]
+
+    assert set(basemap) == BASEMAP_KEYS
+    assert basemap["provider"] == "osm"
+    assert basemap["light_url"] == "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+    assert basemap["dark_url"] == "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+    assert basemap["subdomains"] == ""
+    assert basemap["max_zoom"] == 19
+    assert basemap["dark_filter"] is True  # OSM has no dark tiles, so the page inverts them
+    assert "OpenStreetMap" in basemap["attribution"]
+    assert "::warning::" in capsys.readouterr().out
+
+
+def test_meta_json_uses_carto_when_the_key_is_set(current_dir, tmp_path, monkeypatch):
+    monkeypatch.setenv("CARTO_BASEMAP_KEY", "abc123")
+    out = tmp_path / "data"
+    build_site_data(current_dir, out, _cfg(), now=NOW)
+    basemap = json.loads((out / "meta.json").read_text(encoding="utf-8"))["basemap"]
+
+    assert set(basemap) == BASEMAP_KEYS
+    assert basemap["provider"] == "carto"
+    # sitedata substitutes {key}; the browser never sees the placeholder.
+    assert "{key}" not in basemap["light_url"]
+    assert basemap["light_url"].endswith("?key=abc123")
+    assert basemap["dark_url"].endswith("?key=abc123")
+    assert "{z}/{x}/{y}" in basemap["light_url"]
+    assert basemap["subdomains"] == "abcd"
+    assert basemap["max_zoom"] == 20
+    assert basemap["dark_filter"] is False  # CARTO ships real dark tiles
