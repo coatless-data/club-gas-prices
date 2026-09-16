@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from types import SimpleNamespace
 
 import polars as pl
 import pytest
 
-from costco_gas.checks import all_failed, evaluate_country, price_fingerprint
+from costco_gas.checks import (
+    all_failed,
+    build_status,
+    evaluate_country,
+    price_fingerprint,
+)
 from costco_gas.fx import FxRates, FxRow
 from costco_gas.normalize import Drop, NormalizedCountry
 from costco_gas.schema import ROW_SCHEMA, STATION_SCHEMA
@@ -22,8 +27,8 @@ from costco_gas.sources.base import (
 
 CAPTURE_ID = "2026-09-15T1817Z"
 CAPTURE_DATE = date(2026, 9, 15)
-CAPTURED_AT = datetime(2026, 9, 15, 18, 17, 40, tzinfo=timezone.utc)
-NOW = datetime(2026, 9, 15, 18, 19, 2, tzinfo=timezone.utc)
+CAPTURED_AT = datetime(2026, 9, 15, 18, 17, 40, tzinfo=UTC)
+NOW = datetime(2026, 9, 15, 18, 19, 2, tzinfo=UTC)
 
 FLOORS = {"US": 585, "CA": 78, "MX": 18, "GB": 21, "AU": 14, "JP": 26, "TW": 3}
 STALE_AFTER_DAYS = {"US": 3, "CA": 3, "MX": 3, "GB": 3, "AU": 3, "JP": 10, "TW": 14}
@@ -33,17 +38,13 @@ def interp_config() -> SimpleNamespace:
     """checks.py only reads .countries[cc].floor and .stale_after_days."""
     return SimpleNamespace(
         countries={
-            code: SimpleNamespace(
-                code=code, floor=floor, stale_after_days=STALE_AFTER_DAYS[code]
-            )
+            code: SimpleNamespace(code=code, floor=floor, stale_after_days=STALE_AFTER_DAYS[code])
             for code, floor in FLOORS.items()
         }
     )
 
 
-def context(
-    previous_status: dict | None = None, capture_id: str = CAPTURE_ID
-) -> CaptureContext:
+def context(previous_status: dict | None = None, capture_id: str = CAPTURE_ID) -> CaptureContext:
     return CaptureContext(
         capture_id=capture_id,
         capture_date=CAPTURE_DATE,
@@ -215,24 +216,18 @@ def test_normalize_warnings_are_merged_into_the_block():
 
 def test_more_than_five_percent_out_of_bounds_is_degraded():
     drops = [Drop("90", "out_of_bounds", "regular=1.929 USD/gal")]
-    block = evaluate_country(
-        "AU", result("AU"), normalized("AU", 18, drops=drops), context(), NOW
-    )
+    block = evaluate_country("AU", result("AU"), normalized("AU", 18, drops=drops), context(), NOW)
     assert block["dropped"] == {"out_of_bounds": 1}
     assert block["status"] == "degraded"  # 1 / 19 = 5.3%
 
     drops = [Drop("90", "out_of_bounds", "regular=1.929 USD/gal")]
-    block = evaluate_country(
-        "AU", result("AU"), normalized("AU", 19, drops=drops), context(), NOW
-    )
+    block = evaluate_country("AU", result("AU"), normalized("AU", 19, drops=drops), context(), NOW)
     assert block["status"] == "ok"  # 1 / 20 = 5.0%
 
 
 def test_other_drop_reasons_do_not_degrade():
     drops = [Drop("1838", "not_open", ""), Drop("1121", "no_price", "")]
-    block = evaluate_country(
-        "AU", result("AU"), normalized("AU", 14, drops=drops), context(), NOW
-    )
+    block = evaluate_country("AU", result("AU"), normalized("AU", 14, drops=drops), context(), NOW)
     assert block["status"] == "ok"
     assert block["dropped"] == {"not_open": 1, "no_price": 1}
 
@@ -245,14 +240,10 @@ def test_no_rows_is_failed_and_bumps_the_counter():
             "last_success_capture_id": "2026-09-14T1817Z",
             "price_fingerprint": "sha256:old",
             "unchanged_since_capture_id": "2026-09-14T1817Z",
-            "recent_errors": [
-                {"capture_id": "2026-09-15T1217Z", "run_url": "u1", "errors": []}
-            ],
+            "recent_errors": [{"capture_id": "2026-09-15T1217Z", "run_url": "u1", "errors": []}],
         }
     )
-    errors = [
-        Error(code="http_error", host="www.costco.com.tw", http_status=403, detail="")
-    ]
+    errors = [Error(code="http_error", host="www.costco.com.tw", http_status=403, detail="")]
     block = evaluate_country(
         "TW",
         result("TW", errors=errors),
@@ -285,9 +276,7 @@ def test_recent_errors_keep_only_the_last_three():
             ],
         }
     )
-    block = evaluate_country(
-        "TW", result("TW"), empty_normalized(), context(previous), NOW
-    )
+    block = evaluate_country("TW", result("TW"), empty_normalized(), context(previous), NOW)
     assert len(block["recent_errors"]) == 3
     assert [entry["capture_id"] for entry in block["recent_errors"]] == [
         CAPTURE_ID,
@@ -302,14 +291,10 @@ def test_a_success_resets_the_counter_but_keeps_recent_errors():
         AU={
             "consecutive_failures": 2,
             "last_success_capture_id": "2026-09-13T1817Z",
-            "recent_errors": [
-                {"capture_id": "2026-09-15T1217Z", "run_url": "u1", "errors": []}
-            ],
+            "recent_errors": [{"capture_id": "2026-09-15T1217Z", "run_url": "u1", "errors": []}],
         }
     )
-    block = evaluate_country(
-        "AU", result("AU"), normalized("AU", 14), context(previous), NOW
-    )
+    block = evaluate_country("AU", result("AU"), normalized("AU", 14), context(previous), NOW)
     assert block["status"] == "ok"
     assert block["consecutive_failures"] == 0
     assert block["last_success_capture_id"] == CAPTURE_ID
@@ -326,13 +311,9 @@ def test_a_country_that_was_not_selected_is_skipped_and_changes_nothing():
         "last_success_capture_id": "2026-09-13T1817Z",
         "price_fingerprint": "sha256:abc",
         "unchanged_since_capture_id": "2026-09-10T1817Z",
-        "recent_errors": [
-            {"capture_id": "2026-09-15T1217Z", "run_url": "u1", "errors": []}
-        ],
+        "recent_errors": [{"capture_id": "2026-09-15T1217Z", "run_url": "u1", "errors": []}],
     }
-    block = evaluate_country(
-        "JP", None, None, context(previous_status(JP=carried)), NOW
-    )
+    block = evaluate_country("JP", None, None, context(previous_status(JP=carried)), NOW)
     assert block["status"] == "skipped"
     assert block["consecutive_failures"] == 2
     assert block["last_success_capture_id"] == "2026-09-13T1817Z"
@@ -363,9 +344,7 @@ def test_an_unchanged_fingerprint_carries_its_capture_id_forward():
 def test_a_changed_fingerprint_restarts_the_clock():
     first = evaluate_country("AU", result("AU"), normalized("AU", 14), context(), NOW)
     ctx = context(previous_status(AU=first), capture_id="2026-09-16T0017Z")
-    block = evaluate_country(
-        "AU", result("AU"), normalized("AU", 14, price_raw="2.157"), ctx, NOW
-    )
+    block = evaluate_country("AU", result("AU"), normalized("AU", 14, price_raw="2.157"), ctx, NOW)
     assert block["price_fingerprint"] != first["price_fingerprint"]
     assert block["unchanged_since_capture_id"] == "2026-09-16T0017Z"
 
@@ -381,9 +360,7 @@ def test_a_changed_fingerprint_restarts_the_clock():
         ("TW", 3, 15, "degraded"),
     ],
 )
-def test_staleness_uses_each_countrys_stale_after_days(
-    country, n_stations, days, expected
-):
+def test_staleness_uses_each_countrys_stale_after_days(country, n_stations, days, expected):
     unchanged_since = "2026-09-01T1817Z"
     fingerprint = price_fingerprint(rows(country, n_stations))
     previous = previous_status(
@@ -394,9 +371,7 @@ def test_staleness_uses_each_countrys_stale_after_days(
             }
         }
     )
-    now = datetime(2026, 9, 1, 18, 17, tzinfo=timezone.utc) + timedelta(
-        days=days, minutes=1
-    )
+    now = datetime(2026, 9, 1, 18, 17, tzinfo=UTC) + timedelta(days=days, minutes=1)
     block = evaluate_country(
         country,
         result(country),
@@ -418,7 +393,7 @@ def test_duration_spans_the_first_request_and_the_last_response():
             url="https://www.costco.com.au/rest/v2/australia/stores",
             status=200,
             headers={},
-            received_at_utc=datetime(2026, 9, 15, 18, 18, 0, tzinfo=timezone.utc),
+            received_at_utc=datetime(2026, 9, 15, 18, 18, 0, tzinfo=UTC),
             elapsed_ms=1200,
             body=b"{}",
             error=None,
@@ -428,7 +403,7 @@ def test_duration_spans_the_first_request_and_the_last_response():
             url="https://www.costco.com.au/rest/v2/australia/stores",
             status=200,
             headers={},
-            received_at_utc=datetime(2026, 9, 15, 18, 18, 9, tzinfo=timezone.utc),
+            received_at_utc=datetime(2026, 9, 15, 18, 18, 9, tzinfo=UTC),
             elapsed_ms=800,
             body=b"{}",
             error=None,
@@ -448,11 +423,97 @@ def test_duration_spans_the_first_request_and_the_last_response():
 
 
 def test_all_failed_ignores_skipped_countries():
-    assert all_failed(
-        {"countries": {"US": {"status": "failed"}, "CA": {"status": "skipped"}}}
-    )
-    assert not all_failed(
-        {"countries": {"US": {"status": "failed"}, "CA": {"status": "degraded"}}}
-    )
+    assert all_failed({"countries": {"US": {"status": "failed"}, "CA": {"status": "skipped"}}})
+    assert not all_failed({"countries": {"US": {"status": "failed"}, "CA": {"status": "degraded"}}})
     assert not all_failed({"countries": {"US": {"status": "ok"}}})
     assert all_failed({"countries": {}})
+
+
+# --- build_status -------------------------------------------------------------
+
+
+def test_build_status_assembles_the_whole_document():
+    ctx = context(
+        {
+            "publish": {
+                "outcome": "failure",
+                "consecutive_failures": 1,
+                "unpublished": [{"capture_id": "2026-09-15T1217Z", "run_id": 7, "run_url": "u"}],
+            },
+            "countries": {},
+        }
+    )
+    au = evaluate_country("AU", result("AU"), normalized("AU", 14), ctx, NOW)
+    status = build_status(
+        ctx,
+        {"AU": au},
+        fx_rates(),
+        {"attempted": True, "http_status": 200},
+        NOW,
+        {
+            "run_id": 123,
+            "run_attempt": 1,
+            "run_url": "https://github.com/x/y/actions/runs/123",
+            "started_at_utc": CAPTURED_AT,
+            "git_sha": "deadbeef",
+            "warnings": [Warning(code="previous_state_unavailable", detail="")],
+        },
+    )
+    assert status["schema_version"] == 1
+    assert status["capture_id"] == CAPTURE_ID
+    assert status["run_id"] == 123
+    assert status["run_attempt"] == 1
+    assert status["started_at_utc"] == "2026-09-15T18:17:40Z"
+    assert status["finished_at_utc"] == "2026-09-15T18:19:02Z"
+    assert status["git_sha"] == "deadbeef"
+    assert status["fx"] == {
+        "status": "ok",
+        "source": "frankfurter-v2",
+        "rate_date": "2026-09-14",
+    }
+    assert status["ecom_api"] == {"attempted": True, "http_status": 200}
+    assert status["publish"] == {
+        "outcome": None,
+        "consecutive_failures": 1,
+        "unpublished": [{"capture_id": "2026-09-15T1217Z", "run_id": 7, "run_url": "u"}],
+    }
+    assert status["close"] == {"outcome": None}
+    assert status["warnings"] == [{"code": "previous_state_unavailable", "detail": ""}]
+    assert sorted(status["countries"]) == ["AU", "CA", "GB", "JP", "MX", "TW", "US"]
+    assert status["countries"]["AU"]["status"] == "ok"
+    assert status["countries"]["US"]["status"] == "skipped"
+
+
+def test_build_status_fills_the_run_url_into_this_captures_recent_errors():
+    ctx = context()
+    tw = evaluate_country(
+        "TW",
+        result(
+            "TW",
+            errors=[
+                Error(
+                    code="timeout",
+                    host="www.costco.com.tw",
+                    http_status=None,
+                    detail="",
+                )
+            ],
+        ),
+        empty_normalized(),
+        ctx,
+        NOW,
+    )
+    assert tw["recent_errors"][0]["run_url"] is None
+    status = build_status(
+        ctx,
+        {"TW": tw},
+        FxRates(status="failed", rows=[]),
+        {"attempted": False, "http_status": None},
+        NOW,
+        {"run_id": 9, "run_attempt": 1, "run_url": "https://gh/runs/9"},
+    )
+    entry = status["countries"]["TW"]["recent_errors"][0]
+    assert entry["capture_id"] == CAPTURE_ID
+    assert entry["run_url"] == "https://gh/runs/9"
+    assert status["fx"] == {"status": "failed", "source": None, "rate_date": None}
+    assert all_failed(status)

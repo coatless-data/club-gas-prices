@@ -5,7 +5,7 @@ from __future__ import annotations
 import copy
 import hashlib
 from dataclasses import asdict, is_dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import polars as pl
 
@@ -32,7 +32,7 @@ MAX_RECENT_ERRORS = 3
 
 
 def parse_capture_id(capture_id: str) -> datetime:
-    return datetime.strptime(capture_id, CAPTURE_ID_FORMAT).replace(tzinfo=timezone.utc)
+    return datetime.strptime(capture_id, CAPTURE_ID_FORMAT).replace(tzinfo=UTC)
 
 
 def price_fingerprint(rows: pl.DataFrame) -> str:
@@ -64,7 +64,7 @@ def _as_dict(item) -> dict:
 def _iso(value) -> str | None:
     if value is None or isinstance(value, str):
         return value
-    return value.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return value.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _previous_block(ctx: CaptureContext, country: str) -> dict:
@@ -94,9 +94,7 @@ def _duration_s(result: FetchResult) -> float:
     return round((max(ends) - min(starts)).total_seconds(), 1)
 
 
-def _is_stale(
-    unchanged_since: str | None, now: datetime, stale_after_days: int
-) -> bool:
+def _is_stale(unchanged_since: str | None, now: datetime, stale_after_days: int) -> bool:
     if not unchanged_since:
         return False
     try:
@@ -163,9 +161,7 @@ def evaluate_country(
 
     if n_rows == 0:
         block.update(_carried(previous))
-        block["consecutive_failures"] = (
-            int(previous.get("consecutive_failures") or 0) + 1
-        )
+        block["consecutive_failures"] = int(previous.get("consecutive_failures") or 0) + 1
         recent = [
             {"capture_id": ctx.capture_id, "run_url": None, "errors": errors},
             *block["recent_errors"],
@@ -202,3 +198,54 @@ def evaluate_country(
     )
     block["status"] = "degraded" if degraded else "ok"
     return block
+
+
+def build_status(
+    ctx: CaptureContext,
+    countries: dict[str, dict],
+    fx: FxRates,
+    ecom_api: dict,
+    now: datetime,
+    run: dict,
+) -> dict:
+    """Assemble status.json. capture writes everything except publish.outcome
+    and close.outcome, which alerts fills in later (spec 6.5)."""
+    previous = ctx.previous_status or {}
+    previous_publish = previous.get("publish") or {}
+
+    blocks = copy.deepcopy(dict(countries))
+    for code in ctx.interp_config.countries:
+        if code not in blocks:
+            blocks[code] = evaluate_country(code, None, None, ctx, now)
+
+    run_url = run.get("run_url")
+    for block in blocks.values():
+        for entry in block.get("recent_errors") or []:
+            if entry.get("capture_id") == ctx.capture_id and not entry.get("run_url"):
+                entry["run_url"] = run_url
+
+    fx_row = fx.rows[0] if fx.rows else None
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "capture_id": ctx.capture_id,
+        "run_id": run.get("run_id"),
+        "run_attempt": run.get("run_attempt"),
+        "run_url": run_url,
+        "started_at_utc": _iso(run.get("started_at_utc")),
+        "finished_at_utc": _iso(now),
+        "git_sha": run.get("git_sha"),
+        "fx": {
+            "status": fx.status,
+            "source": None if fx_row is None else fx_row.fx_source,
+            "rate_date": None if fx_row is None else fx_row.fx_rate_date.isoformat(),
+        },
+        "ecom_api": dict(ecom_api),
+        "publish": {
+            "outcome": None,
+            "consecutive_failures": int(previous_publish.get("consecutive_failures") or 0),
+            "unpublished": copy.deepcopy(previous_publish.get("unpublished") or []),
+        },
+        "close": {"outcome": None},
+        "warnings": [_as_dict(item) for item in run.get("warnings") or []],
+        "countries": blocks,
+    }
