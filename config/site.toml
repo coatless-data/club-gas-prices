@@ -1,0 +1,27 @@
+[site]
+notice = "Unofficial. Not affiliated with, endorsed by, or connected to Costco Wholesale Corporation. Prices are collected from Costco's public websites and may differ from the price at the pump."
+release_base_url = "https://github.com/coatless-dashboard/costco-gas-prices/releases"
+# The dashboard uses carto when this repository variable is set, otherwise osm.
+basemap_key_env = "CARTO_BASEMAP_KEY"
+
+# sitedata copies the chosen provider table into meta.json verbatim, adding
+# only "provider", so these key names are the ones the dashboard's Leaflet
+# layer reads: light_url, dark_url, subdomains, max_zoom, dark_filter,
+# attribution.
+[site.basemaps.carto]
+light_url = "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png?key={key}"
+dark_url = "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png?key={key}"
+subdomains = "abcd"
+max_zoom = 20
+# CARTO ships a real dark style, so the tiles are never filtered.
+dark_filter = false
+attribution = "© OpenStreetMap contributors © CARTO"
+
+[site.basemaps.osm]
+light_url = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+dark_url = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+subdomains = ""
+max_zoom = 19
+# OSM has one style only, so dark mode inverts the tile pane in CSS.
+dark_filter = true
+attribution = "© <a href=\"https://www.openstreetmap.org/copyright\">OpenStreetMap contributors</a>"

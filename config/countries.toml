@@ -1,0 +1,292 @@
+# Per-country sources and interpretation tables.
+#
+# url, params and the other fetch keys (batch_size, seen_within_days,
+# fallback_url, fallback_params, ecom_url, ecom_params, ecom_client_identifier)
+# are FETCH config: what to request. They come from the capture bundle when
+# history is rebuilt.
+# price_unit, unit_overrides, bounds, floor, stale_after_days and timezones are
+# INTERPRETATION config: how to read a stored response. They always come from
+# the live checkout, so fixing a bound or a timezone fixes history too.
+#
+# [countries.<CC>.params] holds QUERY PARAMETERS ONLY, flat, all strings: a
+# fetcher urlencodes the whole table into the request. Everything else is a
+# sibling key of the country table.
+#
+# Region keys are the region values the normalizer produces: US and CA use the
+# two-letter state or province code, MX the ISO code without its "MX-" prefix,
+# AU the state token. "*" is the default used when a station's region is null
+# or unlisted; a country with no "*" drops stations whose timezone cannot be
+# resolved rather than guessing one.
+
+# --------------------------------------------------------------------- US ---
+[countries.US]
+url = "https://www.costco.com/AjaxGetGasPricesService"
+price_unit = "USD/gal"
+floor = 585
+stale_after_days = 3
+# AjaxGetGasPricesService processes only the first 10 ids of a request.
+batch_size = 10
+seen_within_days = 30
+ecom_url = "https://ecom-api.costco.com/core/warehouse-locator/v1/warehouses.json"
+# A public id embedded in Costco's own front end; required by ecom-api.
+ecom_client_identifier = "7c71124c-7bf1-44db-bc9d-498584cd66e5"
+fallback_url = "https://www.costco.ca/AjaxWarehouseBrowseLookupView"
+
+# The price service takes its ids as ?warehouseid=<id1>_<id2>_... built per
+# batch, so it has no static query table.
+[countries.US.params]
+
+[countries.US.ecom_params]
+latitude = "0"
+longitude = "0"
+limit = "5000"
+
+[countries.US.fallback_params]
+hasGas = "true"
+populateWarehouseDetails = "true"
+countryCode = "US"
+
+[countries.US.unit_overrides]
+# Puerto Rico retail fuel is sold per litre: #335 regular was 1.097 on
+# 2026-09-15, about 4.15 per US gallon. Inferred, and disclosed on the About page.
+PR = "USD/L"
+
+[countries.US.bounds."USD/gal"]
+min = 2.0
+max = 11.0
+
+[countries.US.bounds."USD/gal".grades.clear]
+min = 2.0
+max = 11.0
+
+[countries.US.bounds."USD/L"]
+min = 0.5
+max = 2.5
+
+# The dominant zone of each state, DC and the territories. Used only when
+# ecom-api, us_extra_ids.csv and stations.csv all lack a timezone.
+[countries.US.timezones]
+AL = "America/Chicago"
+AK = "America/Anchorage"
+AZ = "America/Phoenix"
+AR = "America/Chicago"
+CA = "America/Los_Angeles"
+CO = "America/Denver"
+CT = "America/New_York"
+DC = "America/New_York"
+DE = "America/New_York"
+FL = "America/New_York"
+GA = "America/New_York"
+GU = "Pacific/Guam"
+HI = "Pacific/Honolulu"
+IA = "America/Chicago"
+ID = "America/Boise"
+IL = "America/Chicago"
+IN = "America/Indiana/Indianapolis"
+KS = "America/Chicago"
+KY = "America/New_York"
+LA = "America/Chicago"
+MA = "America/New_York"
+MD = "America/New_York"
+ME = "America/New_York"
+MI = "America/Detroit"
+MN = "America/Chicago"
+MO = "America/Chicago"
+MS = "America/Chicago"
+MT = "America/Denver"
+NC = "America/New_York"
+ND = "America/Chicago"
+NE = "America/Chicago"
+NH = "America/New_York"
+NJ = "America/New_York"
+NM = "America/Denver"
+NV = "America/Los_Angeles"
+NY = "America/New_York"
+OH = "America/New_York"
+OK = "America/Chicago"
+OR = "America/Los_Angeles"
+PA = "America/New_York"
+PR = "America/Puerto_Rico"
+RI = "America/New_York"
+SC = "America/New_York"
+SD = "America/Chicago"
+TN = "America/Chicago"
+TX = "America/Chicago"
+UT = "America/Denver"
+VA = "America/New_York"
+VI = "America/St_Thomas"
+VT = "America/New_York"
+WA = "America/Los_Angeles"
+WI = "America/Chicago"
+WV = "America/New_York"
+WY = "America/Denver"
+
+# --------------------------------------------------------------------- CA ---
+[countries.CA]
+url = "https://www.costco.ca/AjaxWarehouseBrowseLookupView"
+price_unit = "CAD/L"
+floor = 78
+stale_after_days = 3
+batch_size = 10
+seen_within_days = 30
+fallback_url = "https://www.costco.ca/AjaxGetGasPricesService"
+
+[countries.CA.params]
+hasGas = "true"
+populateWarehouseDetails = "true"
+countryCode = "CA"
+
+[countries.CA.unit_overrides]
+
+[countries.CA.bounds."CAD/L"]
+min = 1.0
+max = 3.5
+
+[countries.CA.timezones]
+AB = "America/Edmonton"
+BC = "America/Vancouver"
+MB = "America/Winnipeg"
+NB = "America/Moncton"
+NL = "America/St_Johns"
+NS = "America/Halifax"
+NT = "America/Yellowknife"
+NU = "America/Iqaluit"
+ON = "America/Toronto"
+PE = "America/Halifax"
+QC = "America/Toronto"
+SK = "America/Regina"
+YT = "America/Whitehorse"
+
+# --------------------------------------------------------------------- MX ---
+[countries.MX]
+url = "https://www.costco.com.mx/rest/v2/mexico/stores"
+price_unit = "MXN/L"
+floor = 18
+stale_after_days = 3
+
+[countries.MX.params]
+fields = "FULL"
+radius = "3000000"
+returnAllStores = "true"
+pageSize = "999"
+lang = "es_MX"
+curr = "MXN"
+
+[countries.MX.unit_overrides]
+
+[countries.MX.bounds."MXN/L"]
+min = 15.0
+max = 40.0
+
+[countries.MX.timezones]
+"*" = "America/Mexico_City"
+BCN = "America/Tijuana"
+BCS = "America/Mazatlan"
+CHH = "America/Chihuahua"
+ROO = "America/Cancun"
+SIN = "America/Mazatlan"
+SON = "America/Hermosillo"
+
+# --------------------------------------------------------------------- GB ---
+[countries.GB]
+url = "https://www.costco.co.uk/rest/v2/uk/stores"
+price_unit = "GBp/L"
+floor = 21
+stale_after_days = 3
+
+[countries.GB.params]
+fields = "FULL"
+pageSize = "100"
+lang = "en_GB"
+curr = "GBP"
+
+[countries.GB.unit_overrides]
+
+[countries.GB.bounds."GBp/L"]
+min = 100.0
+max = 250.0
+
+[countries.GB.timezones]
+"*" = "Europe/London"
+
+# --------------------------------------------------------------------- AU ---
+[countries.AU]
+url = "https://www.costco.com.au/rest/v2/australia/stores"
+price_unit = "AUD/L"
+floor = 14
+stale_after_days = 3
+
+# lang, curr and pageSize=100 are unverified for this host: the research
+# verified pageSize=50 with neither lang nor curr, and Japan returns HTTP 400
+# for an unsupported lang. If the first dry run rejects them, cut this table
+# back to fields = "FULL" and pageSize = "50".
+[countries.AU.params]
+fields = "FULL"
+pageSize = "100"
+lang = "en_AU"
+curr = "AUD"
+
+[countries.AU.unit_overrides]
+
+[countries.AU.bounds."AUD/L"]
+min = 1.2
+max = 3.4
+
+[countries.AU.timezones]
+ACT = "Australia/Sydney"
+NSW = "Australia/Sydney"
+NT = "Australia/Darwin"
+QLD = "Australia/Brisbane"
+SA = "Australia/Adelaide"
+TAS = "Australia/Hobart"
+VIC = "Australia/Melbourne"
+WA = "Australia/Perth"
+
+# --------------------------------------------------------------------- JP ---
+[countries.JP]
+url = "https://www.costco.co.jp/rest/v2/japan/stores"
+price_unit = "JPY/L"
+floor = 26
+stale_after_days = 10
+
+[countries.JP.params]
+fields = "FULL"
+pageSize = "100"
+lang = "ja"
+curr = "JPY"
+
+[countries.JP.unit_overrides]
+
+[countries.JP.bounds."JPY/L"]
+min = 90.0
+max = 250.0
+
+# Kerosene is heating fuel, sold far below road fuel, so it needs its own floor.
+[countries.JP.bounds."JPY/L".grades.Kerosene]
+min = 60.0
+max = 250.0
+
+[countries.JP.timezones]
+"*" = "Asia/Tokyo"
+
+# --------------------------------------------------------------------- TW ---
+[countries.TW]
+url = "https://www.costco.com.tw/rest/v2/taiwan/stores"
+price_unit = "TWD/L"
+floor = 3
+stale_after_days = 14
+
+[countries.TW.params]
+fields = "FULL"
+pageSize = "100"
+lang = "zh_TW"
+curr = "TWD"
+
+[countries.TW.unit_overrides]
+
+[countries.TW.bounds."TWD/L"]
+min = 20.0
+max = 45.0
+
+[countries.TW.timezones]
+"*" = "Asia/Taipei"

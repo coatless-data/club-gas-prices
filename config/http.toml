@@ -1,0 +1,53 @@
+# Shared HTTP policy. One Client per capture is built from this file.
+
+[identity]
+# A current desktop Chrome UA with NOTHING appended. On 2026-09-15, appending a
+# project token to this string made www.costco.com reset the connection
+# immediately and made ecom-api.costco.com hang until timeout, while the plain
+# string returned HTTP 200 from both.
+costco_user_agent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+# Non-Costco hosts (Frankfurter, jsDelivr) get an honest project UA instead.
+# Cloudflare blocks the default Python UA on api.frankfurter.dev.
+project_user_agent = "costco-gas-prices/0.1 (+https://github.com/coatless-dashboard/costco-gas-prices)"
+# Sent as X-Project on every Costco request so the operator is identifiable.
+x_project = "https://github.com/coatless-dashboard/costco-gas-prices"
+costco_host_suffixes = [
+  "costco.com",
+  "costco.ca",
+  "costco.com.mx",
+  "costco.co.uk",
+  "costco.com.au",
+  "costco.co.jp",
+  "costco.com.tw",
+]
+
+# read is the per-read deadline and covers the wait for response headers.
+# total is a whole-request deadline enforced while the body streams.
+[profiles.default]
+connect = 10.0
+read = 20.0
+total = 60.0
+
+# For the costco.ca US lookup, which took 30.6 s to answer on 2026-09-15.
+[profiles.bulk]
+connect = 10.0
+read = 150.0
+total = 150.0
+
+[retry]
+max_attempts = 3
+backoff_seconds = [1.0, 2.0]
+jitter = 0.5
+
+[pacing]
+min_interval_seconds = 1.0
+
+[blocks]
+signals_before_abandon = 2
+
+# Seconds. Countries run concurrently, so "country" is per country thread.
+[budgets]
+fx = 90.0
+"ecom-api" = 90.0
+country = 480.0
+capture = 720.0
