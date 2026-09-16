@@ -343,3 +343,107 @@ def test_fx_csv_round_trips_with_ten_significant_digits(tmp_path):
     back = read_csv(path, FX_SCHEMA)
     assert back["fx_usd_per_unit"].item() == 0.00648340249
     assert back["units_per_usd"].item() == 154.24
+
+
+def test_write_csv_validates_stations_before_writing(tmp_path):
+    """write_csv with STATION_SCHEMA validates and rejects duplicate station_key."""
+    stations_dup = pl.DataFrame(
+        [
+            {
+                "station_key": "JP-Tomiya",
+                "country": "JP",
+                "source_station_id": "Tomiya",
+                "alt_id": "costcoJapanTomiyaWarehouse",
+                "name": "Tomiya",
+                "name_local": "富谷",
+                "address": "宮城県富谷市高屋敷26",
+                "city": "富谷市",
+                "region": "宮城県",
+                "postcode": "981-3313",
+                "lat": None,
+                "lon": None,
+                "timezone": "Asia/Tokyo",
+                "grades_seen": "Regular",
+                "first_seen_utc": CAPTURED_AT,
+                "last_seen_utc": CAPTURED_AT,
+                "status": "active",
+                "superseded_by": None,
+            },
+            {
+                "station_key": "JP-Tomiya",
+                "country": "JP",
+                "source_station_id": "Tomiya",
+                "alt_id": "costcoJapanTomiyaWarehouse",
+                "name": "Tomiya",
+                "name_local": "富谷",
+                "address": "宮城県富谷市高屋敷26",
+                "city": "富谷市",
+                "region": "宮城県",
+                "postcode": "981-3313",
+                "lat": None,
+                "lon": None,
+                "timezone": "Asia/Tokyo",
+                "grades_seen": "Regular",
+                "first_seen_utc": CAPTURED_AT,
+                "last_seen_utc": CAPTURED_AT,
+                "status": "active",
+                "superseded_by": None,
+            },
+        ],
+        schema=dict(STATION_SCHEMA),
+        orient="row",
+    )
+    with pytest.raises(SchemaError, match="duplicate key"):
+        write_csv(
+            stations_dup,
+            tmp_path / "never-written.csv",
+            schema=STATION_SCHEMA,
+            sort_by=STATION_SORT,
+        )
+    assert not (tmp_path / "never-written.csv").exists()
+
+
+def test_write_csv_validates_stations_null_in_required_column(tmp_path):
+    """write_csv with STATION_SCHEMA rejects null in required column status."""
+    stations_bad = pl.DataFrame(
+        [
+            {
+                "station_key": "JP-Tomiya",
+                "country": "JP",
+                "source_station_id": "Tomiya",
+                "alt_id": "costcoJapanTomiyaWarehouse",
+                "name": "Tomiya",
+                "name_local": "富谷",
+                "address": "宮城県富谷市高屋敷26",
+                "city": "富谷市",
+                "region": "宮城県",
+                "postcode": "981-3313",
+                "lat": None,
+                "lon": None,
+                "timezone": "Asia/Tokyo",
+                "grades_seen": "Regular",
+                "first_seen_utc": CAPTURED_AT,
+                "last_seen_utc": CAPTURED_AT,
+                "status": None,
+                "superseded_by": None,
+            }
+        ],
+        schema=dict(STATION_SCHEMA),
+        orient="row",
+    )
+    with pytest.raises(SchemaError, match="null values in required column status"):
+        write_csv(
+            stations_bad,
+            tmp_path / "never-written.csv",
+            schema=STATION_SCHEMA,
+            sort_by=STATION_SORT,
+        )
+    assert not (tmp_path / "never-written.csv").exists()
+
+
+def test_write_parquet_validates_sort_by_columns_exist(tmp_path):
+    """write_parquet rejects sort_by columns that don't exist in frame."""
+    df = frame(row())
+    with pytest.raises(SchemaError, match="sort_by columns not in frame: nonexistent"):
+        write_parquet(df, tmp_path / "never-written.parquet", sort_by=["nonexistent"])
+    assert not (tmp_path / "never-written.parquet").exists()

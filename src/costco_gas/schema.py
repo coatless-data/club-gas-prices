@@ -159,14 +159,12 @@ def _check_schema(
         if nulls:
             raise SchemaError(f"null values in required column {name}: {nulls}")
 
-    if df.height and df.select(list(key)).is_duplicated().any():
-        duplicate = (
-            df.select(list(key))
-            .filter(df.select(list(key)).is_duplicated())
-            .head(1)
-            .row(0, named=True)
-        )
-        raise SchemaError(f"duplicate key {tuple(key)}: {duplicate}")
+    if df.height:
+        key_cols = df.select(list(key))
+        duplicated = key_cols.is_duplicated()
+        if duplicated.any():
+            duplicate = key_cols.filter(duplicated).head(1).row(0, named=True)
+            raise SchemaError(f"duplicate key {tuple(key)}: {duplicate}")
 
 
 def validate_rows(df: pl.DataFrame) -> None:
@@ -182,6 +180,26 @@ def validate_stations(df: pl.DataFrame) -> None:
 def validate_fx(df: pl.DataFrame) -> None:
     """Raise SchemaError unless df can be written as fx.csv."""
     _check_schema(df, FX_SCHEMA, FX_KEY, tuple(FX_SCHEMA))
+
+
+def _validate_structure(df: pl.DataFrame, schema: dict[str, pl.DataType]) -> None:
+    """Validate columns and dtypes exist, without key or required-column checks."""
+    expected = set(schema)
+    actual = set(df.columns)
+    missing = sorted(expected - actual)
+    if missing:
+        raise SchemaError(f"missing columns: {', '.join(missing)}")
+    unexpected = sorted(actual - expected)
+    if unexpected:
+        raise SchemaError(f"unexpected columns: {', '.join(unexpected)}")
+
+    wrong = [
+        f"{name}: expected {dtype}, got {df.schema[name]}"
+        for name, dtype in schema.items()
+        if df.schema[name] != dtype
+    ]
+    if wrong:
+        raise SchemaError("wrong dtypes: " + "; ".join(wrong))
 
 
 def cast_to_schema(df: pl.DataFrame, schema: dict[str, pl.DataType]) -> pl.DataFrame:
@@ -280,7 +298,17 @@ def read_rows_csv_gz(path: Path) -> pl.DataFrame:
 def write_csv(
     df: pl.DataFrame, path: Path, *, schema: dict[str, pl.DataType], sort_by: list[str]
 ) -> Path:
-    """Write a plain CSV asset such as stations.csv or fx.csv."""
+    """Write a plain CSV asset such as stations.csv or fx.csv, validating before writing."""
+    # Validate based on schema type
+    if schema is ROW_SCHEMA:
+        validate_rows(df)
+    elif schema is STATION_SCHEMA:
+        validate_stations(df)
+    elif schema is FX_SCHEMA:
+        validate_fx(df)
+    else:
+        _validate_structure(df, schema)
+
     out = _prepare(df, schema, sort_by)
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -300,7 +328,12 @@ def write_parquet(
     sort_by: list[str],
     row_group_size: int | None = None,
 ) -> Path:
-    """Write a Parquet file with an explicit sort and column statistics."""
+    """Write a Parquet file, validating that sort_by columns exist before writing."""
+    # Validate that all sort_by columns exist in the frame
+    missing_sort_cols = [col for col in sort_by if col not in df.columns]
+    if missing_sort_cols:
+        raise SchemaError(f"sort_by columns not in frame: {', '.join(missing_sort_cols)}")
+
     out = round_fx_columns(round_price_columns(df)).sort(sort_by)
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
