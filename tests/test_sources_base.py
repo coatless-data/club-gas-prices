@@ -103,3 +103,45 @@ def test_capture_context_defaults_are_empty_not_shared():
     first.force_fallback.add("US")
     assert second.force_fallback == set()
     assert isinstance(first.previous_stations, pl.DataFrame)
+
+
+def test_sources_registry_covers_the_seven_countries():
+    from costco_gas.sources.base import SOURCES
+
+    assert set(SOURCES) == {"US", "CA", "MX", "GB", "AU", "JP", "TW"}
+    for code, source in SOURCES.items():
+        assert source.country == code
+        assert callable(source.fetch)
+        assert callable(source.parse)
+
+
+def test_lazy_source_imports_its_module_only_when_called(monkeypatch):
+    import sys
+    import types
+
+    from costco_gas.sources.base import _LazySource
+
+    calls: list[str] = []
+
+    class FakeSource:
+        def __init__(self, country: str) -> None:
+            self.country = country
+
+        def fetch(self, client, ctx):
+            calls.append("fetch")
+            return ["fetched"]
+
+        def parse(self, responses, ctx):
+            calls.append("parse")
+            return "parsed"
+
+    module = types.ModuleType("costco_gas_fake_source")
+    module.FakeSource = FakeSource
+    monkeypatch.setitem(sys.modules, "costco_gas_fake_source", module)
+
+    source = _LazySource("ZZ", "costco_gas_fake_source", "FakeSource", pass_country=True)
+    assert source.country == "ZZ"
+    assert calls == []
+    assert source.fetch(None, None) == ["fetched"]
+    assert source.parse([], None) == "parsed"
+    assert calls == ["fetch", "parse"]

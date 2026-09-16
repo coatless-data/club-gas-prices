@@ -112,3 +112,46 @@ class Source(Protocol):
     def parse(
         self, responses: list[RawResponse], ctx: CaptureContext
     ) -> FetchResult: ...
+
+
+@dataclass
+class _LazySource:
+    """A `Source` that imports its implementation module on first use.
+
+    `sources/us.py`, `sources/ca.py` and `sources/occ.py` all import this module,
+    so `base.py` cannot import them at module scope without a circular import.
+    Delegating through this wrapper keeps `SOURCES` a plain, fully populated dict
+    that can be listed and iterated before those modules are even written.
+    """
+
+    country: str
+    module: str
+    factory: str
+    pass_country: bool = False
+    _impl: Source | None = field(default=None, init=False, repr=False, compare=False)
+
+    def _resolve(self) -> Source:
+        if self._impl is None:
+            import importlib
+
+            module = importlib.import_module(self.module)
+            factory = getattr(module, self.factory)
+            self._impl = factory(self.country) if self.pass_country else factory()
+        return self._impl
+
+    def fetch(self, client: Client, ctx: CaptureContext) -> list[RawResponse]:
+        return self._resolve().fetch(client, ctx)
+
+    def parse(self, responses: list[RawResponse], ctx: CaptureContext) -> FetchResult:
+        return self._resolve().parse(responses, ctx)
+
+
+SOURCES: dict[str, Source] = {
+    "US": _LazySource("US", "costco_gas.sources.us", "UsSource"),
+    "CA": _LazySource("CA", "costco_gas.sources.ca", "CaSource"),
+    "MX": _LazySource("MX", "costco_gas.sources.occ", "OccSource", pass_country=True),
+    "GB": _LazySource("GB", "costco_gas.sources.occ", "OccSource", pass_country=True),
+    "AU": _LazySource("AU", "costco_gas.sources.occ", "OccSource", pass_country=True),
+    "JP": _LazySource("JP", "costco_gas.sources.occ", "OccSource", pass_country=True),
+    "TW": _LazySource("TW", "costco_gas.sources.occ", "OccSource", pass_country=True),
+}
