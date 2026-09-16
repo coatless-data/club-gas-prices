@@ -231,6 +231,35 @@ class _BaseStore:
         finally:
             shutil.rmtree(scratch, ignore_errors=True)
 
+    def read_resolved(self, tag: str, name: str, dest: Path) -> Path:
+        """Read `<name>`, or the best temporary stand-in, without changing anything.
+
+        This is for readers that run before recovery has had a chance to run:
+        the capture command and discovery. Everything else reads `download`.
+        Order: `<name>`; then the newest `.next-*` whose bytes hash to its own
+        label; then the newest `.old-*`.
+        """
+        assets = self.list_assets(tag)
+        match = next((a for a in assets if a.name == name), None)
+        if match is not None:
+            return self.download(tag, name, dest)
+
+        for candidate in self._temps_for(assets, name, "next"):
+            if candidate.state != "uploaded" or not candidate.label:
+                continue
+            if candidate.digest is not None and candidate.digest != candidate.label:
+                continue
+            path = self._fetch_asset(tag, candidate, Path(dest))
+            if sha256_label(path) == candidate.label:
+                return path
+
+        olds = self._temps_for(assets, name, "old")
+        for candidate in olds:
+            if candidate.state == "uploaded":
+                return self._fetch_asset(tag, candidate, Path(dest))
+
+        raise AssetNotFound(f"{tag}:{name}")
+
 
 class LocalReleaseStore(_BaseStore):
     """Releases in a local directory: one directory per tag, plus a JSON sidecar.

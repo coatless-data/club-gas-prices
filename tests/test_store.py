@@ -242,3 +242,81 @@ def test_rename_onto_an_existing_name_reports_422(tmp_path: Path):
     with pytest.raises(store.StorageError) as excinfo:
         s.rename("data-2026-09", other.id, "rows.csv")
     assert excinfo.value.status == 422
+
+
+def test_read_resolved_prefers_the_plain_name(tmp_path: Path):
+    s, _ = _seed(tmp_path)
+    live = tmp_path / "live.csv"
+    live.write_bytes(b"live\n")
+    stale = tmp_path / "stale.csv"
+    stale.write_bytes(b"stale\n")
+    s.upload_new("data-2026-09", live, "stations.csv")
+    s.upload_new(
+        "data-2026-09",
+        stale,
+        "stations.csv.next-tok-1",
+        label=store.sha256_label(stale),
+    )
+
+    dest = s.read_resolved("data-2026-09", "stations.csv", tmp_path / "r.csv")
+    assert dest.read_bytes() == b"live\n"
+
+
+def test_read_resolved_takes_the_newest_verifying_next(tmp_path: Path):
+    s, _ = _seed(tmp_path)
+    good = tmp_path / "good.csv"
+    good.write_bytes(b"good\n")
+    torn = tmp_path / "torn.csv"
+    torn.write_bytes(b"torn\n")
+
+    s.upload_new(
+        "data-2026-09", good, "stations.csv.next-tok-1", label=store.sha256_label(good)
+    )
+    # Uploaded later, but its label does not describe its bytes: a torn upload.
+    s.upload_new(
+        "data-2026-09", torn, "stations.csv.next-tok-2", label="sha256:" + "0" * 64
+    )
+
+    dest = s.read_resolved("data-2026-09", "stations.csv", tmp_path / "r.csv")
+    assert dest.read_bytes() == b"good\n"
+
+
+def test_read_resolved_falls_back_to_the_newest_old(tmp_path: Path):
+    s, _ = _seed(tmp_path)
+    older = tmp_path / "older.csv"
+    older.write_bytes(b"older\n")
+    newer = tmp_path / "newer.csv"
+    newer.write_bytes(b"newer\n")
+    torn = tmp_path / "torn.csv"
+    torn.write_bytes(b"torn\n")
+
+    s.upload_new("data-2026-09", older, "stations.csv.old-tok-a")
+    s.upload_new("data-2026-09", newer, "stations.csv.old-tok-b")
+    s.upload_new(
+        "data-2026-09", torn, "stations.csv.next-tok-1", label="sha256:" + "0" * 64
+    )
+
+    dest = s.read_resolved("data-2026-09", "stations.csv", tmp_path / "r.csv")
+    assert dest.read_bytes() == b"newer\n"
+
+
+def test_read_resolved_raises_when_nothing_resolves(tmp_path: Path):
+    s, _ = _seed(tmp_path)
+    with pytest.raises(store.AssetNotFound):
+        s.read_resolved("data-2026-09", "stations.csv", tmp_path / "r.csv")
+    with pytest.raises(store.AssetNotFound):
+        s.read_resolved("data-2030-01", "stations.csv", tmp_path / "r.csv")
+
+
+def test_read_resolved_never_modifies_the_release(tmp_path: Path):
+    s, _ = _seed(tmp_path)
+    good = tmp_path / "good.csv"
+    good.write_bytes(b"good\n")
+    s.upload_new(
+        "data-2026-09", good, "stations.csv.next-tok-1", label=store.sha256_label(good)
+    )
+    before = [(a.name, a.id, a.label) for a in s.list_assets("data-2026-09")]
+
+    s.read_resolved("data-2026-09", "stations.csv", tmp_path / "r.csv")
+
+    assert [(a.name, a.id, a.label) for a in s.list_assets("data-2026-09")] == before
