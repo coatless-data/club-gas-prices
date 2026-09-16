@@ -182,3 +182,36 @@ def validate_stations(df: pl.DataFrame) -> None:
 def validate_fx(df: pl.DataFrame) -> None:
     """Raise SchemaError unless df can be written as fx.csv."""
     _check_schema(df, FX_SCHEMA, FX_KEY, tuple(FX_SCHEMA))
+
+
+def cast_to_schema(df: pl.DataFrame, schema: dict[str, pl.DataType]) -> pl.DataFrame:
+    """Select the schema's columns, in order, casting each to its dtype."""
+    missing = [name for name in schema if name not in df.columns]
+    if missing:
+        raise SchemaError(f"missing columns: {', '.join(missing)}")
+    return df.select(
+        [pl.col(name).cast(dtype, strict=False).alias(name) for name, dtype in schema.items()]
+    )
+
+
+def round_significant(value: float | None, digits: int = FX_SIGNIFICANT_DIGITS) -> float | None:
+    """Round one float to significant digits, exactly as the frame helper does."""
+    if value is None:
+        return None
+    return pl.Series([float(value)]).round_sig_figs(digits).item()
+
+
+def round_price_columns(df: pl.DataFrame, decimals: int = PRICE_DECIMALS) -> pl.DataFrame:
+    """Round the derived price columns that are present."""
+    present = [name for name in PRICE_COLUMNS if name in df.columns]
+    if not present:
+        return df
+    return df.with_columns([pl.col(name).round(decimals) for name in present])
+
+
+def round_fx_columns(df: pl.DataFrame, digits: int = FX_SIGNIFICANT_DIGITS) -> pl.DataFrame:
+    """Round the exchange-rate columns that are present to significant digits."""
+    present = [name for name in FX_RATE_COLUMNS if name in df.columns]
+    if not present:
+        return df
+    return df.with_columns([pl.col(name).round_sig_figs(digits) for name in present])

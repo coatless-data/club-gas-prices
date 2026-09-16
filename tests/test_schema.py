@@ -9,7 +9,11 @@ from costco_gas.schema import (
     ROW_SORT,
     STATION_SCHEMA,
     SchemaError,
+    cast_to_schema,
     empty_frame,
+    round_fx_columns,
+    round_price_columns,
+    round_significant,
     validate_rows,
 )
 
@@ -141,3 +145,99 @@ def test_two_grades_at_one_station_are_not_a_duplicate():
 
 def test_row_sort_is_the_daily_file_order():
     assert ROW_SORT == ["capture_id", "country", "station_key", "grade_raw"]
+
+
+def us_row(**overrides: object) -> dict[str, object]:
+    """One real US row: #1364 regular at 3.999 USD/gal."""
+    litres = 3.999 / GALLON_L
+    base = row(
+        country="US",
+        station_key="US-1364",
+        source_station_id="1364",
+        source="costco-us-gasprices",
+        name="Bloomington",
+        name_local=None,
+        address=None,
+        city="BLOOMINGTON",
+        region="MN",
+        postcode="55425",
+        lat=44.855,
+        lon=-93.239,
+        timezone="America/Chicago",
+        grade_raw="regular",
+        grade="regular",
+        price_raw="3.999",
+        price=3.999,
+        price_unit="USD/gal",
+        currency="USD",
+        price_local_per_litre=litres,
+        fx_usd_per_unit=1.0,
+        fx_source="identity",
+        fx_rate_date=dt.date(2026, 9, 15),
+        local_date=dt.date(2026, 9, 15),
+        price_usd_per_litre=litres,
+        price_usd_per_gallon=litres * GALLON_L,
+    )
+    base.update(overrides)
+    return base
+
+
+def fx_frame() -> pl.DataFrame:
+    return pl.DataFrame(
+        [
+            {
+                "capture_id": CAPTURE_ID,
+                "currency": "JPY",
+                "units_per_usd": JPY_PER_USD,
+                "fx_usd_per_unit": USD_PER_JPY,
+                "fx_rate_date": dt.date(2026, 9, 14),
+                "fx_source": "frankfurter-v2",
+                "fx_fetched_at_utc": CAPTURED_AT,
+            }
+        ],
+        schema=dict(FX_SCHEMA),
+        orient="row",
+    )
+
+
+def test_round_significant_keeps_ten_digits_of_a_small_rate():
+    # 4-decimal rounding would give 0.0065, an error of 0.26%.
+    assert round_significant(USD_PER_JPY) == 0.00648340249
+    assert round_significant(1 / 1.3871) == 0.720928556
+    assert round_significant(None) is None
+    assert round_significant(0.0) == 0.0
+
+
+def test_round_price_columns_rounds_to_four_decimals():
+    out = round_price_columns(frame(row()))
+    assert out["price_usd_per_litre"].item() == 0.966
+    assert out["price_usd_per_gallon"].item() == 3.6568
+
+
+def test_a_usd_per_gallon_row_keeps_its_published_value_after_rounding():
+    # The gallon value travels through litres, so it arrives as
+    # 3.9990000000000006. Rounding at write time restores the published value.
+    out = round_price_columns(frame(us_row()))
+    assert out["price_usd_per_gallon"].item() == 3.999
+    assert out["price_local_per_litre"].item() == 1.0564
+
+
+def test_round_fx_columns_uses_significant_digits():
+    out = round_fx_columns(fx_frame())
+    assert out["units_per_usd"].item() == 154.24
+    assert out["fx_usd_per_unit"].item() == 0.00648340249
+
+
+def test_cast_to_schema_requires_every_column():
+    df = pl.DataFrame({"currency": ["JPY"], "units_per_usd": ["154.24"]})
+    with pytest.raises(SchemaError, match="missing columns"):
+        cast_to_schema(df, FX_SCHEMA)
+
+
+def test_cast_to_schema_reorders_and_casts_strings():
+    df = pl.DataFrame({"country": ["JP"], "lat": ["38.4"], "station_key": ["JP-Tomiya"]})
+    out = cast_to_schema(
+        df, {"station_key": pl.String(), "country": pl.String(), "lat": pl.Float64()}
+    )
+    assert out.columns == ["station_key", "country", "lat"]
+    assert out["lat"].item() == 38.4
