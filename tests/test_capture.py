@@ -188,11 +188,9 @@ def test_taiwan_capture_writes_per_country_and_capture_outputs(workspace: Path):
 
     rows = pl.read_csv(workspace / "out" / "capture" / "rows.csv.gz")
     assert rows.height == 7
-    assert sorted(rows["station_key"].unique().to_list()) == [
-        "TW-Chungli",
-        "TW-North_Taichung",
-        "TW-Xinzhuang",
-    ]
+    # Taiwan is keyed on the warehouse number; the branch name rides along as
+    # the display name and alt_id.
+    assert sorted(rows["station_key"].unique().to_list()) == ["TW-010", "TW-011", "TW-018"]
     assert rows["capture_id"].unique().to_list() == [CAPTURE_ID]
 
     fx_rows = json.loads((workspace / "out" / "capture" / "fx.json").read_text())
