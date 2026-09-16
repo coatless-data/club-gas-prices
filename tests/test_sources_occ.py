@@ -248,3 +248,60 @@ def test_tw_region_comes_from_the_formatted_address():
     ]
     assert station(result, "Xinzhuang").region == "新北市"
     assert station(result, "North_Taichung").region == "台中市"
+
+
+def test_pagination_follows_current_page_until_the_last_one():
+    result, seen = run(
+        "AU",
+        [
+            (FIXTURES / "au_stores_page1.json").read_bytes(),
+            (FIXTURES / "au_stores_page2.json").read_bytes(),
+        ],
+    )
+
+    assert len(seen) == 2
+    assert "currentPage" not in str(seen[0].url)
+    assert "currentPage=1" in str(seen[1].url)
+    assert sorted(s.source_station_id for s in result.stations) == ["103", "109", "116", "118"]
+    assert result.requests == 2
+    assert [r.key for r in result.responses] == ["AU/01-stores", "AU/02-stores"]
+    assert result.warnings == []
+
+
+def test_a_truncated_page_run_reports_deadline_exceeded():
+    source, ctx, responses, _ = fetch_responses(
+        "AU",
+        [
+            (FIXTURES / "au_stores_page1.json").read_bytes(),
+            (FIXTURES / "au_stores_page2.json").read_bytes(),
+        ],
+    )
+
+    # Page 2 never arrived, as if the country budget had run out mid-run.
+    result = source.parse(responses[:1], ctx)
+
+    assert [(w.code, w.detail) for w in result.warnings] == [
+        ("deadline_exceeded", "stopped after page 1 of 2")
+    ]
+    assert len(result.stations) == 2
+
+
+def test_a_failed_request_produces_an_error_and_no_stations():
+    cfg = load_config(ROOT)
+    ctx = make_ctx(cfg)
+    client = Client(
+        cfg.http,
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(403, content=b"<HTML>Access Denied")
+        ),
+    )
+    source = OccSource("TW")
+
+    result = source.parse(source.fetch(client, ctx), ctx)
+
+    assert result.stations == []
+    assert [(e.code, e.http_status, e.host) for e in result.errors] == [
+        ("http_error", 403, "www.costco.com.tw")
+    ]
+    # There is no usable response, so the capture's own clock times the country.
+    assert result.captured_at_utc.strftime("%Y-%m-%dT%H%MZ") == "2026-09-15T1910Z"

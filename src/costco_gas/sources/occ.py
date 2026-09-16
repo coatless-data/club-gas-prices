@@ -11,12 +11,13 @@ import json
 import re
 from datetime import UTC, datetime
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 
 from ..config import CountryConfig
-from ..http import Client
+from ..http import BudgetExceeded, Client
 from .base import (
     CaptureContext,
+    Error,
     FetchResult,
     RawPrice,
     RawResponse,
@@ -126,16 +127,35 @@ class OccSource:
 
     def fetch(self, client: Client, ctx: CaptureContext) -> list[RawResponse]:
         cc = ctx.fetch_config.countries[self.country]
-        url = page_url(cc, 0)
-        if client.abandoned(url):
-            return []
-        response = client.request(
-            f"{self.country}/01-stores",
-            url,
-            headers={"Accept": "application/json"},
-            expect_json=True,
-        )
-        return [response]
+        responses: list[RawResponse] = []
+        page = 0
+        for _ in range(MAX_PAGES):
+            url = page_url(cc, page)
+            if client.abandoned(url):
+                break
+            try:
+                response = client.request(
+                    f"{self.country}/{page + 1:02d}-stores",
+                    url,
+                    headers={"Accept": "application/json"},
+                    expect_json=True,
+                )
+            except BudgetExceeded:
+                break
+            responses.append(response)
+            payload = _payload(response)
+            if payload is None:
+                break
+            pagination = payload.get("pagination") or {}
+            current = _as_int(pagination.get("currentPage"), page)
+            total = _as_int(pagination.get("totalPages"), 1)
+            # ``next_page <= page`` guards against a server that keeps echoing
+            # the same currentPage, which would otherwise loop forever.
+            next_page = current + 1
+            if next_page >= total or next_page <= page:
+                break
+            page = next_page
+        return responses
 
     def parse(self, responses: list[RawResponse], ctx: CaptureContext) -> FetchResult:
         cc = ctx.interp_config.countries[self.country]
@@ -144,20 +164,42 @@ class OccSource:
             key=lambda r: r.key,
         )
         warnings: list[Warning] = []
+        errors: list[Error] = []
         stations: list[RawStation] = []
         captured: datetime | None = None
+        pagination: dict[str, Any] = {}
 
         for response in mine:
-            payload = json.loads(response.body)
+            payload = _payload(response)
+            if payload is None:
+                errors.append(
+                    Error(
+                        code="request_failed" if response.status is None else "http_error",
+                        host=urlsplit(response.url).netloc,
+                        http_status=response.status,
+                        detail=response.error or f"{response.key}: unparseable body",
+                    )
+                )
+                continue
             captured = (
                 response.received_at_utc
                 if captured is None
                 else max(captured, response.received_at_utc)
             )
+            pagination = payload.get("pagination") or pagination
             for store in payload.get("stores") or []:
                 station = self._station(store, cc, warnings)
                 if station is not None:
                     stations.append(station)
+
+        current = _as_int(pagination.get("currentPage"), 0)
+        total = _as_int(pagination.get("totalPages"), 1)
+        if mine and current + 1 < total:
+            warnings.append(
+                Warning(
+                    code="deadline_exceeded", detail=f"stopped after page {current + 1} of {total}"
+                )
+            )
 
         return FetchResult(
             country=self.country,
@@ -167,7 +209,7 @@ class OccSource:
             responses=list(responses),
             requests=len(mine),
             warnings=warnings,
-            errors=[],
+            errors=errors,
         )
 
     def _station(
@@ -247,3 +289,26 @@ def _as_float(value: Any) -> float | None:
 
 def _capture_time(ctx: CaptureContext) -> datetime:
     return datetime.strptime(ctx.capture_id, "%Y-%m-%dT%H%MZ").replace(tzinfo=UTC)
+
+
+def _payload(response: RawResponse) -> dict[str, Any] | None:
+    """The decoded JSON object, or None when the response is unusable.
+
+    Content-Type is deliberately not consulted: Costco's legacy endpoints serve
+    valid JSON as ``text/html``, so only the status, the transport error and the
+    body itself can say whether a response is usable.
+    """
+    if response.error or response.status != 200:
+        return None
+    try:
+        payload = json.loads(response.body)
+    except (ValueError, UnicodeDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _as_int(value: Any, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
