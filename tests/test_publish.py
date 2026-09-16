@@ -359,3 +359,113 @@ def test_an_older_capture_does_not_move_the_stored_status(tmp_path: Path, cfg):
     )
     # Xinzhuang has no rows in the older capture, but its status must not flip.
     assert set(stations["status"].to_list()) == {"active"}
+
+
+DAY2 = datetime(2026, 9, 16, 0, 17, tzinfo=timezone.utc)
+
+
+def test_two_crashes_rebuild_the_manifest_and_reconcile_the_orphan(tmp_path: Path, cfg):
+    store = LocalReleaseStore(tmp_path / "releases")
+    captures = tmp_path / "captures"
+
+    # Capture A published normally.
+    a_dir = make_capture_dir(
+        captures,
+        "2026-09-15T0017Z",
+        datetime(2026, 9, 15, 0, 17, tzinfo=timezone.utc),
+        prices=PRICES,
+    )
+    publish(store, a_dir, cfg, now=NOW)
+
+    # Crash 1: the manifest upload never landed.
+    manifest_asset = next(
+        a for a in store.list_assets("data-2026-09") if a.name == "manifest-2026-09.json"
+    )
+    store.delete("data-2026-09", manifest_asset.id)
+
+    # Crash 2: capture B uploaded its bundle, then died before the daily file.
+    b_dir = make_capture_dir(
+        captures,
+        "2026-09-15T1217Z",
+        datetime(2026, 9, 15, 12, 17, tzinfo=timezone.utc),
+        prices=[("Chungli", "95", "regular", 30.2)],
+    )
+    store.upload_new("data-2026-09", b_dir / "bundle.tar.gz", "capture-2026-09-15T1217Z.tar.gz")
+
+    # The next capture, on a new date.
+    c_dir = make_capture_dir(
+        captures, "2026-09-16T0017Z", DAY2, prices=[("Chungli", "95", "regular", 30.9)]
+    )
+    result = publish(store, c_dir, cfg, now=NOW)
+
+    assert "manifest_rebuilt" in result.warnings
+    assert "reconciled:2026-09-15T1217Z" in result.warnings
+
+    manifest = json.loads(
+        store.download("data-2026-09", "manifest-2026-09.json", tmp_path / "m.json").read_text()
+    )
+    assert set(manifest["captures"]) == {
+        "2026-09-15T0017Z",
+        "2026-09-15T1217Z",
+        "2026-09-16T0017Z",
+    }
+
+    day15 = schema.read_rows_csv_gz(
+        store.download("data-2026-09", "costco-gas-2026-09-15.csv.gz", tmp_path / "d15.csv.gz")
+    )
+    assert sorted(day15["capture_id"].unique().to_list()) == [
+        "2026-09-15T0017Z",
+        "2026-09-15T1217Z",
+    ]
+    day16 = schema.read_rows_csv_gz(
+        store.download("data-2026-09", "costco-gas-2026-09-16.csv.gz", tmp_path / "d16.csv.gz")
+    )
+    assert day16["capture_id"].unique().to_list() == ["2026-09-16T0017Z"]
+
+    captures_all = pl.read_parquet(
+        store.download("current", "costco-gas-all-captures.parquet", tmp_path / "ac.parquet")
+    )
+    assert sorted(captures_all["capture_id"].unique().to_list()) == [
+        "2026-09-15T0017Z",
+        "2026-09-15T1217Z",
+        "2026-09-16T0017Z",
+    ]
+    fx = pl.read_csv(
+        store.download("current", "fx.csv", tmp_path / "fx.csv"), schema=schema.FX_SCHEMA
+    )
+    assert sorted(fx["capture_id"].to_list()) == [
+        "2026-09-15T0017Z",
+        "2026-09-15T1217Z",
+        "2026-09-16T0017Z",
+    ]
+    # Reconciling the orphan must not resurrect it as the newest status.
+    current_manifest = json.loads(
+        store.download("current", "manifest.json", tmp_path / "cm.json").read_text()
+    )
+    assert current_manifest["status"]["capture_id"] == "2026-09-16T0017Z"
+    assert current_manifest["newest_capture_by_country"]["TW"] == "2026-09-16T0017Z"
+
+
+def test_a_missing_daily_file_that_the_manifest_records_raises(tmp_path: Path, cfg):
+    from costco_gas.store import StorageError
+
+    store = LocalReleaseStore(tmp_path / "releases")
+    captures = tmp_path / "captures"
+    a_dir = make_capture_dir(
+        captures,
+        "2026-09-15T0017Z",
+        datetime(2026, 9, 15, 0, 17, tzinfo=timezone.utc),
+        prices=PRICES,
+    )
+    publish(store, a_dir, cfg, now=NOW)
+
+    daily = next(
+        a for a in store.list_assets("data-2026-09") if a.name == "costco-gas-2026-09-15.csv.gz"
+    )
+    store.delete("data-2026-09", daily.id)
+
+    b_dir = make_capture_dir(
+        captures, "2026-09-15T1817Z", DAY1, prices=[("Chungli", "95", "regular", 30.2)]
+    )
+    with pytest.raises(StorageError, match="costco-gas-2026-09-15.csv.gz is missing"):
+        publish(store, b_dir, cfg, now=NOW)
