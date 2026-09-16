@@ -9,6 +9,7 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
+from .alerts import run_alerts
 from .capture import CaptureResult, run_capture
 from .config import load_config
 from .issues import Issues
@@ -148,6 +149,18 @@ def cmd_rebuild(args) -> int:
     return 0
 
 
+def cmd_alerts(args) -> int:
+    run_alerts(
+        Path(args.status),
+        publish_outcome=args.publish_outcome,
+        close_outcome=args.close_outcome,
+        store=open_configured_store(),
+        issues=Issues(os.environ.get("GITHUB_REPOSITORY"), os.environ.get("GITHUB_TOKEN")),
+        now=utc_now(),
+    )
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="costco-gas")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -169,6 +182,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="rebuild the current release in full even if no month closed",
     )
     close.set_defaults(func=cmd_close_periods)
+
+    alerts_cmd = sub.add_parser("alerts", help="open and close the capture issues (spec 10.2)")
+    alerts_cmd.add_argument("status", help="path to the capture's status.json")
+    alerts_cmd.add_argument(
+        "--publish-outcome",
+        default="skipped",
+        help="the publish step's outcome: success, failure, skipped or cancelled",
+    )
+    alerts_cmd.add_argument(
+        "--close-outcome",
+        default="skipped",
+        help="the close-periods step's outcome: success, failure, skipped or cancelled",
+    )
+    alerts_cmd.set_defaults(func=cmd_alerts)
 
     rebuild_parser = sub.add_parser(
         "rebuild", help="re-parse stored capture bundles and rewrite history"
