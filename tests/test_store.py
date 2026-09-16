@@ -1039,3 +1039,79 @@ def test_open_store_builds_both_kinds(tmp_path: Path):
         store.open_store("s3://bucket/prefix")
     with pytest.raises(store.StorageError, match="unsupported store spec"):
         store.open_store("github:no-slash")
+
+
+def _paced_store(fake: FakeGitHub, clock: FakeClock, **kwargs) -> object:
+    return store.GitHubReleaseStore(
+        "acme",
+        "gas",
+        transport=fake.transport(),
+        sleep=clock.sleep,
+        monotonic=clock.now,
+        **kwargs,
+    )
+
+
+def test_writes_are_paced_to_sixty_per_minute(writer_env):
+    fake = FakeGitHub()
+    fake.add_release("current")
+    for i in range(61):
+        fake.add_asset("current", f"asset-{i:03d}.bin", b"x")
+    clock = FakeClock()
+    s = _paced_store(fake, clock)
+
+    for asset in s.list_assets("current"):
+        s.delete("current", asset.id)
+
+    # The 61st write waits for the first one to leave the 60-second window.
+    assert clock.slept == [60.0]
+    assert fake.asset_names("current") == []
+
+
+def test_writes_are_paced_to_450_per_hour(writer_env):
+    fake = FakeGitHub()
+    fake.add_release("current")
+    for i in range(451):
+        fake.add_asset("current", f"asset-{i:03d}.bin", b"x")
+    clock = FakeClock()
+    s = _paced_store(fake, clock)
+
+    for asset in s.list_assets("current"):
+        s.delete("current", asset.id)
+
+    assert clock.slept.count(60.0) == 7  # one per full minute of writes
+    assert clock.slept[-1] == 3180.0  # the 451st waits out the rest of the hour
+    assert fake.asset_names("current") == []
+
+
+def test_retry_after_is_honoured(writer_env):
+    fake = FakeGitHub()
+    fake.add_release("current")
+    fake.add_asset("current", "stations.csv", b"stations-v1\n")
+    fake.rate_limit_queue.append({"retry-after": "7"})
+    clock = FakeClock()
+    s = _paced_store(fake, clock)
+
+    asset_id = s.list_assets("current")[0].id
+    s.delete("current", asset_id)
+
+    assert clock.slept == [7.0]
+    assert fake.asset_names("current") == []
+
+
+def test_x_ratelimit_reset_is_honoured(writer_env):
+    fake = FakeGitHub()
+    fake.add_release("current")
+    fake.add_asset("current", "stations.csv", b"stations-v1\n")
+    epoch = 1_789_000_000.0
+    fake.rate_limit_queue.append(
+        {"x-ratelimit-remaining": "0", "x-ratelimit-reset": str(int(epoch) + 45)}
+    )
+    clock = FakeClock()
+    s = _paced_store(fake, clock, now_epoch=lambda: epoch)
+
+    asset_id = s.list_assets("current")[0].id
+    s.delete("current", asset_id)
+
+    assert clock.slept == [45.0]
+    assert fake.asset_names("current") == []

@@ -24,6 +24,7 @@ import shutil
 import tempfile
 import threading
 import time
+from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -633,6 +634,8 @@ class GitHubReleaseStore(_BaseStore):
         sleep: Callable[[float], None] = time.sleep,
         monotonic: Callable[[], float] = time.monotonic,
         now_epoch: Callable[[], float] = time.time,
+        writes_per_minute: int = 60,
+        writes_per_hour: int = 450,
         user_agent: str = "costco-gas-prices",
     ) -> None:
         self._owner = owner
@@ -643,6 +646,10 @@ class GitHubReleaseStore(_BaseStore):
         self._monotonic = monotonic
         self._now_epoch = now_epoch
         self._user_agent = user_agent
+        self._wpm = writes_per_minute
+        self._wph = writes_per_hour
+        self._writes: deque[float] = deque()
+        self._lock = threading.Lock()
         self._client = httpx.Client(transport=transport, timeout=120.0, follow_redirects=True)
 
     # -- plumbing --------------------------------------------------------
@@ -665,6 +672,44 @@ class GitHubReleaseStore(_BaseStore):
                 "from a local machine is unsupported"
             )
 
+    def _reserve_write_slot(self) -> None:
+        """Hold back a write until it fits inside 60/minute and 450/hour."""
+        with self._lock:
+            while True:
+                now = self._monotonic()
+                while self._writes and now - self._writes[0] >= 3600.0:
+                    self._writes.popleft()
+                minute = [t for t in self._writes if now - t < 60.0]
+                wait = 0.0
+                if len(minute) >= self._wpm:
+                    wait = max(wait, 60.0 - (now - minute[len(minute) - self._wpm]))
+                if len(self._writes) >= self._wph:
+                    oldest = self._writes[len(self._writes) - self._wph]
+                    wait = max(wait, 3600.0 - (now - oldest))
+                if wait <= 0.0:
+                    self._writes.append(now)
+                    return
+                self._sleep(wait)
+
+    def _rate_limit_wait(self, response: httpx.Response) -> float | None:
+        """Seconds to wait after a throttled response, or None if it wasn't one."""
+        if response.status_code not in (403, 429):
+            return None
+        retry_after = response.headers.get("retry-after")
+        if retry_after:
+            try:
+                return max(0.0, float(retry_after))
+            except ValueError:
+                return None
+        if response.headers.get("x-ratelimit-remaining") == "0":
+            reset = response.headers.get("x-ratelimit-reset")
+            if reset:
+                try:
+                    return max(0.0, float(reset) - self._now_epoch())
+                except ValueError:
+                    return None
+        return None
+
     def _request(
         self,
         method: str,
@@ -683,6 +728,8 @@ class GitHubReleaseStore(_BaseStore):
             headers.update(extra_headers)
         attempt = 0
         while True:
+            if method in self.WRITE_METHODS:
+                self._reserve_write_slot()
             response = self._client.request(
                 method,
                 url,
@@ -694,6 +741,10 @@ class GitHubReleaseStore(_BaseStore):
             if response.status_code in ok:
                 return response
             attempt += 1
+            wait = self._rate_limit_wait(response)
+            if wait is not None and attempt <= 3:
+                self._sleep(wait)
+                continue
             if response.status_code >= 500 and attempt <= 3:
                 self._sleep(float(attempt))
                 continue
