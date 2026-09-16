@@ -82,3 +82,29 @@ def test_capture_subcommand_calls_run_capture_and_prints_json(tmp_path, monkeypa
     printed = json.loads(capsys.readouterr().out)
     assert printed["capture_id"] == "2026-09-15T1817Z"
     assert printed["all_failed"] is False
+
+
+def test_publish_subcommand_calls_publish(tmp_path, monkeypatch, capsys):
+    shutil.copytree(REPO_ROOT / "config", tmp_path / "config")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("COSTCO_GAS_STORE", f"local:{tmp_path / 'releases'}")
+
+    seen = {}
+
+    class _Result:
+        capture_id = "2026-09-15T1817Z"
+        warnings: ClassVar[list[str]] = ["reconciled:2026-09-15T1217Z"]
+        assets_written: ClassVar[list[str]] = ["current/manifest.json"]
+
+    def fake_publish(store, capture_dir, cfg, *, now):
+        seen["capture_dir"] = capture_dir
+        return _Result()
+
+    monkeypatch.setattr(cli, "publish", fake_publish)
+    code = cli.main(["publish", "out/capture"])
+
+    assert code == 0
+    assert seen["capture_dir"] == Path("out/capture")
+    printed = json.loads(capsys.readouterr().out)
+    assert printed["capture_id"] == "2026-09-15T1817Z"
+    assert printed["warnings"] == ["reconciled:2026-09-15T1217Z"]

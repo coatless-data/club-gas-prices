@@ -2,18 +2,22 @@
 
 from __future__ import annotations
 
-import gzip
 import hashlib
 import json
+import re
 import shutil
 import tarfile
-from datetime import date, datetime, timedelta, timezone
+from dataclasses import replace as dataclass_replace
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import polars as pl
 import pytest
 
 from costco_gas import rollup, schema
+from costco_gas.config import load_config
+from costco_gas.publish import publish
+from costco_gas.store import LocalReleaseStore
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -59,8 +63,8 @@ def price_row(capture_id, captured_at, station, grade_raw, grade, price):
 
 
 def test_daily_grain_keeps_the_last_capture_of_the_day():
-    early = datetime(2026, 9, 15, 0, 17, tzinfo=timezone.utc)
-    late = datetime(2026, 9, 15, 18, 17, tzinfo=timezone.utc)
+    early = datetime(2026, 9, 15, 0, 17, tzinfo=UTC)
+    late = datetime(2026, 9, 15, 18, 17, tzinfo=UTC)
     rows = pl.DataFrame(
         [
             price_row("2026-09-15T0017Z", early, "Chungli", "95", "regular", 30.0),
@@ -91,11 +95,7 @@ def test_daily_grain_of_an_empty_frame_keeps_the_schema():
     assert dict(empty.schema) == dict(rollup.DAILY_SCHEMA)
 
 
-from costco_gas.config import load_config
-from costco_gas.publish import publish
-from costco_gas.store import AssetNotFound, LocalReleaseStore
-
-NOW = datetime(2026, 9, 15, 18, 20, tzinfo=timezone.utc)
+NOW = datetime(2026, 9, 15, 18, 20, tzinfo=UTC)
 
 STATION_COLUMNS = list(schema.STATION_SCHEMA)
 
@@ -200,7 +200,7 @@ def asset_digests(store, tag, scratch: Path) -> dict[str, str]:
     return out
 
 
-DAY1 = datetime(2026, 9, 15, 18, 17, tzinfo=timezone.utc)
+DAY1 = datetime(2026, 9, 15, 18, 17, tzinfo=UTC)
 PRICES = [
     ("Chungli", "Diesel", "diesel", 28.6),
     ("Chungli", "95", "regular", 30.0),
@@ -285,7 +285,7 @@ def test_a_second_capture_the_same_day_keeps_the_first(tmp_path: Path, cfg):
     first = make_capture_dir(
         tmp_path / "captures",
         "2026-09-15T0017Z",
-        datetime(2026, 9, 15, 0, 17, tzinfo=timezone.utc),
+        datetime(2026, 9, 15, 0, 17, tzinfo=UTC),
         prices=PRICES,
     )
     second = make_capture_dir(
@@ -341,7 +341,7 @@ def test_an_older_capture_does_not_move_the_stored_status(tmp_path: Path, cfg):
     older = make_capture_dir(
         tmp_path / "captures",
         "2026-09-15T0017Z",
-        datetime(2026, 9, 15, 0, 17, tzinfo=timezone.utc),
+        datetime(2026, 9, 15, 0, 17, tzinfo=UTC),
         prices=[("Chungli", "95", "regular", 29.0)],
     )
 
@@ -361,7 +361,7 @@ def test_an_older_capture_does_not_move_the_stored_status(tmp_path: Path, cfg):
     assert set(stations["status"].to_list()) == {"active"}
 
 
-DAY2 = datetime(2026, 9, 16, 0, 17, tzinfo=timezone.utc)
+DAY2 = datetime(2026, 9, 16, 0, 17, tzinfo=UTC)
 
 
 def test_two_crashes_rebuild_the_manifest_and_reconcile_the_orphan(tmp_path: Path, cfg):
@@ -372,7 +372,7 @@ def test_two_crashes_rebuild_the_manifest_and_reconcile_the_orphan(tmp_path: Pat
     a_dir = make_capture_dir(
         captures,
         "2026-09-15T0017Z",
-        datetime(2026, 9, 15, 0, 17, tzinfo=timezone.utc),
+        datetime(2026, 9, 15, 0, 17, tzinfo=UTC),
         prices=PRICES,
     )
     publish(store, a_dir, cfg, now=NOW)
@@ -387,7 +387,7 @@ def test_two_crashes_rebuild_the_manifest_and_reconcile_the_orphan(tmp_path: Pat
     b_dir = make_capture_dir(
         captures,
         "2026-09-15T1217Z",
-        datetime(2026, 9, 15, 12, 17, tzinfo=timezone.utc),
+        datetime(2026, 9, 15, 12, 17, tzinfo=UTC),
         prices=[("Chungli", "95", "regular", 30.2)],
     )
     store.upload_new("data-2026-09", b_dir / "bundle.tar.gz", "capture-2026-09-15T1217Z.tar.gz")
@@ -454,7 +454,7 @@ def test_a_missing_daily_file_that_the_manifest_records_raises(tmp_path: Path, c
     a_dir = make_capture_dir(
         captures,
         "2026-09-15T0017Z",
-        datetime(2026, 9, 15, 0, 17, tzinfo=timezone.utc),
+        datetime(2026, 9, 15, 0, 17, tzinfo=UTC),
         prices=PRICES,
     )
     publish(store, a_dir, cfg, now=NOW)
@@ -467,11 +467,8 @@ def test_a_missing_daily_file_that_the_manifest_records_raises(tmp_path: Path, c
     b_dir = make_capture_dir(
         captures, "2026-09-15T1817Z", DAY1, prices=[("Chungli", "95", "regular", 30.2)]
     )
-    with pytest.raises(StorageError, match="costco-gas-2026-09-15.csv.gz is missing"):
+    with pytest.raises(StorageError, match=re.escape("costco-gas-2026-09-15.csv.gz is missing")):
         publish(store, b_dir, cfg, now=NOW)
-
-
-from dataclasses import replace as dataclass_replace
 
 
 class StateOverrideStore:
@@ -498,7 +495,7 @@ def test_an_incomplete_orphan_bundle_is_deleted(tmp_path: Path, cfg):
     a_dir = make_capture_dir(
         captures,
         "2026-09-15T0017Z",
-        datetime(2026, 9, 15, 0, 17, tzinfo=timezone.utc),
+        datetime(2026, 9, 15, 0, 17, tzinfo=UTC),
         prices=PRICES,
     )
     publish(inner, a_dir, cfg, now=NOW)
@@ -506,7 +503,7 @@ def test_an_incomplete_orphan_bundle_is_deleted(tmp_path: Path, cfg):
     b_dir = make_capture_dir(
         captures,
         "2026-09-15T1217Z",
-        datetime(2026, 9, 15, 12, 17, tzinfo=timezone.utc),
+        datetime(2026, 9, 15, 12, 17, tzinfo=UTC),
         prices=[("Chungli", "95", "regular", 30.2)],
     )
     inner.upload_new("data-2026-09", b_dir / "bundle.tar.gz", "capture-2026-09-15T1217Z.tar.gz")
@@ -533,7 +530,7 @@ def test_an_invalid_orphan_bundle_is_renamed_and_reported(tmp_path: Path, cfg, c
     a_dir = make_capture_dir(
         captures,
         "2026-09-15T0017Z",
-        datetime(2026, 9, 15, 0, 17, tzinfo=timezone.utc),
+        datetime(2026, 9, 15, 0, 17, tzinfo=UTC),
         prices=PRICES,
     )
     publish(store, a_dir, cfg, now=NOW)
@@ -579,7 +576,7 @@ def test_a_late_publish_reopens_a_closed_month(tmp_path: Path, cfg):
     a_dir = make_capture_dir(
         captures,
         "2026-09-15T0017Z",
-        datetime(2026, 9, 15, 0, 17, tzinfo=timezone.utc),
+        datetime(2026, 9, 15, 0, 17, tzinfo=UTC),
         prices=PRICES,
     )
     publish(store, a_dir, cfg, now=NOW)
@@ -601,7 +598,7 @@ def test_recovery_promotes_a_verified_next_asset(tmp_path: Path, cfg):
     a_dir = make_capture_dir(
         captures,
         "2026-09-15T0017Z",
-        datetime(2026, 9, 15, 0, 17, tzinfo=timezone.utc),
+        datetime(2026, 9, 15, 0, 17, tzinfo=UTC),
         prices=PRICES,
     )
     publish(store, a_dir, cfg, now=NOW)
@@ -639,7 +636,7 @@ def test_recovery_rolls_back_to_old_when_no_next_verifies(tmp_path: Path, cfg):
     a_dir = make_capture_dir(
         captures,
         "2026-09-15T0017Z",
-        datetime(2026, 9, 15, 0, 17, tzinfo=timezone.utc),
+        datetime(2026, 9, 15, 0, 17, tzinfo=UTC),
         prices=PRICES,
     )
     publish(store, a_dir, cfg, now=NOW)

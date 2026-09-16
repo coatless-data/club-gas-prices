@@ -189,7 +189,10 @@ def _write_csv_gz(frame: pl.DataFrame, path: Path) -> None:
     `_write_gzip` uses) keeps the bytes identical for identical content, so
     re-publishing a capture never changes this asset's digest.
     """
-    with path.open("wb") as handle, gzip.GzipFile(filename="", mode="wb", fileobj=handle, mtime=0) as gz:
+    with (
+        path.open("wb") as handle,
+        gzip.GzipFile(filename="", mode="wb", fileobj=handle, mtime=0) as gz,
+    ):
         gz.write(frame.write_csv().encode("utf-8"))
 
 
@@ -330,7 +333,13 @@ def upsert_stations(
 
     link_map: dict[str, str] = {}
     if links.height:
-        link_map = dict(zip(links["old_station_key"].to_list(), links["new_station_key"].to_list()))
+        link_map = dict(
+            zip(
+                links["old_station_key"].to_list(),
+                links["new_station_key"].to_list(),
+                strict=True,
+            )
+        )
     for key, record in rows.items():
         record["superseded_by"] = link_map.get(key)
 
@@ -571,9 +580,10 @@ def _update_current(
     # newest_capture_by_country drives the spec 6.3 late-capture rule, so it is
     # part of current/manifest.json and the full rebuild recomputes it too.
     for code, block in (captured.status.get("countries") or {}).items():
-        if block.get("status") in ("ok", "degraded"):
-            if captured.capture_id > (manifest["newest_capture_by_country"].get(code) or ""):
-                manifest["newest_capture_by_country"][code] = captured.capture_id
+        if block.get("status") in ("ok", "degraded") and captured.capture_id > (
+            manifest["newest_capture_by_country"].get(code) or ""
+        ):
+            manifest["newest_capture_by_country"][code] = captured.capture_id
 
     manifest_path = scratch / "out-manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=1, sort_keys=True), encoding="utf-8")

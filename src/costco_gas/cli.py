@@ -11,6 +11,7 @@ from pathlib import Path
 
 from .capture import CaptureResult, run_capture
 from .config import load_config
+from .publish import publish
 from .store import DEFAULT_STORE, open_store
 
 
@@ -70,6 +71,21 @@ def cmd_capture(args) -> int:
     return 0
 
 
+def cmd_publish(args) -> int:
+    cfg = load_config(Path("."))
+    result = publish(open_configured_store(), Path(args.dir), cfg, now=utc_now())
+    print(
+        json.dumps(
+            {
+                "capture_id": result.capture_id,
+                "warnings": result.warnings,
+                "assets_written": result.assets_written,
+            }
+        )
+    )
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="costco-gas")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -79,6 +95,10 @@ def build_parser() -> argparse.ArgumentParser:
     capture.add_argument("--countries", default="all")
     capture.add_argument("--force-fallback", default="")
     capture.set_defaults(func=cmd_capture)
+
+    publish_cmd = sub.add_parser("publish", help="publish a capture directory")
+    publish_cmd.add_argument("dir", help="the capture directory, e.g. out/capture")
+    publish_cmd.set_defaults(func=cmd_publish)
 
     return parser
 
