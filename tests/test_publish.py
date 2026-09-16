@@ -993,3 +993,104 @@ def test_a_months_first_crash_is_not_fabricated_done_by_the_rebuild(tmp_path: Pa
         ).read_text()
     )
     assert set(manifest["captures"]) == {"2026-09-15T0017Z", "2026-09-16T0017Z"}
+
+
+def test_a_crash_after_all_captures_but_before_fx_is_still_reconciled(tmp_path: Path, cfg):
+    """Spec review round 3: costco-gas-all-captures.parquet alone is not proof
+
+    `current` fully reflects a capture -- it is only the third of the seven
+    `current` assets `_update_current` writes. A crash after it succeeds but
+    before `fx.csv` (round 2's fix would have wrongly treated this as
+    "reflected in current", because all-captures.parquet already has the
+    capture's rows at that point) must still leave the capture out of the
+    rebuilt manifest, so `_reconcile` picks its bundle back up and finishes
+    updating `fx.csv`, `stations.csv` and `costco-gas-latest.csv`.
+    """
+    inner = LocalReleaseStore(tmp_path / "releases")
+    captures = tmp_path / "captures"
+
+    # Establish `current` from an earlier month, so this is not the bootstrap
+    # (no current/manifest.json at all) case.
+    zero_dir = make_capture_dir(
+        captures, "2026-08-15T0017Z", datetime(2026, 8, 15, 0, 17, tzinfo=UTC), prices=PRICES
+    )
+    publish(inner, zero_dir, cfg, now=NOW)
+
+    # September's first capture crashes right at fx.csv: costco-gas-all.parquet,
+    # costco-gas-all.csv.gz, costco-gas-all-captures.parquet, costco-gas-latest.csv
+    # and stations.csv all land; fx.csv and manifest.json (and so
+    # merged_captures) never do.
+    crashy = CrashOnceStore(inner, "current", "fx.csv")
+    a_dir = make_capture_dir(
+        captures, "2026-09-15T0017Z", datetime(2026, 9, 15, 0, 17, tzinfo=UTC), prices=PRICES
+    )
+    with pytest.raises(RuntimeError, match="simulated crash"):
+        publish(crashy, a_dir, cfg, now=NOW)
+
+    # Confirm the exact starting shape: all-captures.parquet already has the
+    # crashed capture (this is the state round 2's fix would have accepted
+    # as "done"), but fx.csv and current/manifest.json's merged_captures do
+    # not, and no month manifest was ever written.
+    assert not any(a.name == "manifest-2026-09.json" for a in inner.list_assets("data-2026-09"))
+    captures_all_before = pl.read_parquet(
+        inner.download("current", "costco-gas-all-captures.parquet", tmp_path / "ac-before.parquet")
+    )
+    assert "2026-09-15T0017Z" in captures_all_before["capture_id"].to_list()
+    fx_before = pl.read_csv(
+        inner.download("current", "fx.csv", tmp_path / "fx-before.csv"), schema=schema.FX_SCHEMA
+    )
+    assert "2026-09-15T0017Z" not in fx_before["capture_id"].to_list()
+    current_manifest_before = json.loads(
+        inner.download("current", "manifest.json", tmp_path / "cm-before.json").read_text()
+    )
+    assert "2026-09-15T0017Z" not in current_manifest_before.get("merged_captures", [])
+
+    # September's second capture must trigger a rebuild that leaves the
+    # crashed capture out (it is not in merged_captures) and reconciles it.
+    b_dir = make_capture_dir(
+        captures,
+        "2026-09-16T0017Z",
+        datetime(2026, 9, 16, 0, 17, tzinfo=UTC),
+        prices=[("Chungli", "95", "regular", 30.9)],
+    )
+    result = publish(inner, b_dir, cfg, now=NOW)
+
+    assert "manifest_rebuilt" in result.warnings
+    assert "reconciled:2026-09-15T0017Z" in result.warnings
+
+    all_ids = {"2026-08-15T0017Z", "2026-09-15T0017Z", "2026-09-16T0017Z"}
+
+    fx = pl.read_csv(
+        inner.download("current", "fx.csv", tmp_path / "fx-final.csv"), schema=schema.FX_SCHEMA
+    )
+    assert sorted(fx["capture_id"].to_list()) == sorted(all_ids)
+
+    stations = pl.read_csv(
+        inner.download("current", "stations.csv", tmp_path / "stations-final.csv"),
+        schema=schema.STATION_SCHEMA,
+    )
+    # Xinzhuang only appears in the August/September-15 captures' PRICES list,
+    # so its presence (and "active" status) confirms A's station data landed.
+    assert "TW-Xinzhuang" in stations["station_key"].to_list()
+
+    latest = pl.read_csv(
+        inner.download("current", "costco-gas-latest.csv", tmp_path / "latest-final.csv"),
+        schema=schema.ROW_SCHEMA,
+    )
+    # 09-16 only republishes Chungli/95; Xinzhuang's newest rows must still be
+    # the ones A (09-15, the latest capture to touch Xinzhuang) contributed.
+    xin = latest.filter(pl.col("station_key") == "TW-Xinzhuang")
+    assert xin.height == 2
+    assert xin["capture_id"].unique().to_list() == ["2026-09-15T0017Z"]
+
+    captures_all = pl.read_parquet(
+        inner.download("current", "costco-gas-all-captures.parquet", tmp_path / "ac-final.parquet")
+    )
+    assert set(captures_all["capture_id"].to_list()) == all_ids
+    key_cols = captures_all.select(["capture_id", "station_key", "grade_raw"])
+    assert key_cols.is_duplicated().sum() == 0
+
+    current_manifest = json.loads(
+        inner.download("current", "manifest.json", tmp_path / "cm-final.json").read_text()
+    )
+    assert sorted(current_manifest["merged_captures"]) == sorted(all_ids)

@@ -112,27 +112,29 @@ def read_or_rebuild_manifest(
         if match and asset.state == "uploaded":
             bundles[match.group("capture_id")] = asset
 
-    # A capture id may only get a rebuilt entry once its rows are ALSO in
-    # `current`'s all-captures file -- being in the daily file alone only
-    # means merge_capture reached that far, not that `current` was ever
-    # updated for it. Fabricating an entry from the daily file alone would
-    # mark such a capture "done" and `_reconcile` would then skip its bundle
-    # forever, reproducing the failure spec review Finding 1 closed through a
-    # different path (spec review round 2). When `current` itself has no
-    # all-captures file yet (the genuine first publish ever, nothing has
-    # completed `_update_current` even once), no entries are fabricated at
-    # all and every bundle in these daily files is left for `_reconcile`.
+    # A capture id may only get a rebuilt entry once `current/manifest.json`
+    # itself lists it in `merged_captures` -- being in the daily file alone
+    # only means merge_capture reached that far, not that `current` was ever
+    # fully updated for it. Checking a data file (spec review round 2 checked
+    # costco-gas-all-captures.parquet) is not enough: that file is only the
+    # third of seven `current` assets `_update_current` writes, so a crash
+    # after it but before, say, fx.csv would still fabricate a "done" entry
+    # (spec review round 3). `merged_captures` is written last, as part of
+    # manifest.json, so it is a true commit marker: if a capture id is in it,
+    # every other `current` asset already holds that capture's data. When
+    # `current/manifest.json` itself is absent (the genuine first publish
+    # ever, nothing has completed `_update_current` even once), no entries
+    # are fabricated at all and every bundle in these daily files is left
+    # for `_reconcile`.
     try:
-        current_all_captures = store.download(
-            "current",
-            "costco-gas-all-captures.parquet",
-            scratch / f"{tag}-current-all-captures.parquet",
+        current_manifest_path = store.download(
+            "current", "manifest.json", scratch / f"{tag}-current-manifest.json"
         )
-        current_capture_ids = set(
-            pl.read_parquet(current_all_captures)["capture_id"].unique().to_list()
+        merged_captures = set(
+            json.loads(current_manifest_path.read_text(encoding="utf-8")).get("merged_captures", [])
         )
     except AssetNotFound:
-        current_capture_ids = None
+        merged_captures = None
 
     manifest = _empty_manifest(month)
     for daily_name in daily_names:
@@ -146,11 +148,11 @@ def read_or_rebuild_manifest(
                 raise StorageError(
                     f"{daily_name} holds capture {capture_id} but no uploaded bundle exists"
                 )
-            if current_capture_ids is None or capture_id not in current_capture_ids:
-                # Not (yet) reflected in `current`: leave this capture out of the
-                # rebuilt manifest so `_reconcile` re-merges its bundle. The merge
-                # is idempotent -- it removes this capture id's rows before
-                # re-appending them -- so re-running it is always safe.
+            if merged_captures is None or capture_id not in merged_captures:
+                # Not (yet) fully merged into `current`: leave this capture out
+                # of the rebuilt manifest so `_reconcile` re-merges its bundle.
+                # The merge is idempotent -- it removes this capture id's rows
+                # before re-appending them -- so re-running it is always safe.
                 continue
             bundle_path = store.download(tag, asset.name, scratch / f"{tag}-{asset.name}")
             captured = read_bundle(bundle_path, capture_id)
@@ -527,11 +529,13 @@ def _update_current(
         "closed_years": [],
         "newest_capture_by_country": {},
         "assets": {},
+        "merged_captures": [],
     }
     if not first:
         manifest.update(json.loads(local["manifest.json"].read_text(encoding="utf-8")))
         manifest.setdefault("newest_capture_by_country", {})
         manifest.setdefault("assets", {})
+        manifest.setdefault("merged_captures", [])
 
     all_caps = (
         pl.read_parquet(local["costco-gas-all-captures.parquet"])
@@ -621,6 +625,14 @@ def _update_current(
     new_fx.write_csv(path)
     outputs["fx.csv"] = path
 
+    # Every other `current` asset is durable at this point: all six
+    # replace_atomic calls above have already succeeded. Only now is it safe
+    # to record this capture as merged -- merged_captures is written below as
+    # part of manifest.json, the LAST `current` write, making it a true
+    # commit marker (spec review round 3). Recording it any earlier, or
+    # deriving completeness from one of the data files instead, would let a
+    # crash between two of those six writes fabricate a "done" capture that
+    # `current` does not actually fully reflect.
     for name, path in outputs.items():
         store.replace_atomic("current", path, name, captured.capture_id)
         assets_written.append(f"current/{name}")
@@ -639,6 +651,9 @@ def _update_current(
             manifest["newest_capture_by_country"].get(code) or ""
         ):
             manifest["newest_capture_by_country"][code] = captured.capture_id
+    manifest["merged_captures"] = sorted(
+        {*manifest.get("merged_captures", []), captured.capture_id}
+    )
 
     manifest_path = scratch / "out-manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=1, sort_keys=True), encoding="utf-8")
