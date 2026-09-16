@@ -103,6 +103,12 @@ class CaptureContext:
     interp_config: Config
     previous_stations: pl.DataFrame = field(default_factory=pl.DataFrame)
     previous_fx: pl.DataFrame = field(default_factory=pl.DataFrame)
+    # False when `current/stations.csv` or `current/fx.csv` could not be read, so
+    # `previous_stations` and `previous_fx` above are empty stand-ins rather than
+    # the real previous state. US and CA are the two countries that depend on
+    # them (the `seen` ids, and CA's cached fallback metadata), and §6.5 makes
+    # both degraded when this is False.
+    previous_state_complete: bool = True
     previous_status: dict | None = None
     shared: dict[str, RawResponse] = field(default_factory=dict)
     force_fallback: set[str] = field(default_factory=set)

@@ -414,7 +414,12 @@ def upsert_fx(previous: pl.DataFrame, capture_id: str, fx_rows: list[dict]) -> p
         schema=schema.FX_SCHEMA,
     )
     kept = previous.filter(pl.col("capture_id") != capture_id)
-    return pl.concat([kept, incoming], how="vertical").sort(["capture_id", "currency"])
+    merged = pl.concat([kept, incoming], how="vertical").sort(["capture_id", "currency"])
+    # §6.1: the rates are stored to 10 significant digits. `schema.write_csv`
+    # rounds on the way out, but this frame is also compared against the stored
+    # one (the "would lose rows" guard) and against `rollup._fx_frame`'s, which
+    # rounds here too -- so round here as well and keep the two writers equal.
+    return schema.round_fx_columns(merged)
 
 
 def merge_capture(
@@ -617,12 +622,16 @@ def _update_current(
     new_latest.write_csv(path)
     outputs["costco-gas-latest.csv"] = path
 
+    # Both assets go out through `schema.write_csv`, which validates them against
+    # their schema, re-checks the key, rounds the rate columns and writes the
+    # canonical CSV date formats -- the same guarantees the row files get, rather
+    # than ones each call site has to remember (final review, finding 3).
     path = scratch / "out-stations.csv"
-    new_stations.write_csv(path)
+    schema.write_csv(new_stations, path, schema=schema.STATION_SCHEMA, sort_by=schema.STATION_SORT)
     outputs["stations.csv"] = path
 
     path = scratch / "out-fx.csv"
-    new_fx.write_csv(path)
+    schema.write_csv(new_fx, path, schema=schema.FX_SCHEMA, sort_by=schema.FX_SORT)
     outputs["fx.csv"] = path
 
     # Every other `current` asset is durable at this point: all six

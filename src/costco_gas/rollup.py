@@ -385,10 +385,11 @@ def _read_current_stations(store, work: Path) -> pl.DataFrame:
         path = store.download("current", "stations.csv", work / "stations-existing.csv")
     except AssetNotFound:
         return pl.DataFrame(schema=schema.STATION_SCHEMA)
-    # Polars' own reader, not the strict `schema.read_csv`: this file is written
-    # below with a plain `.write_csv()` (matching publish.py's `_update_current`,
-    # which reads its own `current` CSVs back the same way), so it carries
-    # Polars' default datetime text, not `schema`'s CSV_DATETIME_FORMAT.
+    # Polars' own reader, not the strict `schema.read_csv` (matching publish.py's
+    # `_update_current`, which reads its own `current` CSVs back the same way).
+    # Both writers now emit `schema`'s CSV_DATETIME_FORMAT, but an asset written
+    # before that carries Polars' default datetime text, and this reader accepts
+    # either.
     return pl.read_csv(path, schema=schema.STATION_SCHEMA)
 
 
@@ -600,8 +601,19 @@ def _rebuild_current_impl(store, cfg, *, now: datetime) -> None:
             lambda p: schema.write_parquet(captures, p, sort_by=CAPTURE_SORT),
         )
         put("costco-gas-latest.csv", latest.write_csv)
-        put("stations.csv", stations.write_csv)
-        put("fx.csv", fx.write_csv)
+        # Through `schema.write_csv`, exactly as publish._update_current writes
+        # them: same validation, same key check, same rounding, same canonical
+        # date formats, so the incremental and full writers cannot drift apart.
+        put(
+            "stations.csv",
+            lambda p: schema.write_csv(
+                stations, p, schema=schema.STATION_SCHEMA, sort_by=schema.STATION_SORT
+            ),
+        )
+        put(
+            "fx.csv",
+            lambda p: schema.write_csv(fx, p, schema=schema.FX_SCHEMA, sort_by=schema.FX_SORT),
+        )
         if set(assets) != set(CURRENT_DATA_ASSETS):
             raise ValueError(
                 f"current rebuild wrote {sorted(assets)}, expected {sorted(CURRENT_DATA_ASSETS)}"

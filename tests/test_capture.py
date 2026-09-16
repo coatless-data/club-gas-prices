@@ -552,3 +552,147 @@ def test_a_raising_source_fails_only_that_country_and_records_its_traceback(
     # (no exception escaped run_capture; the CLI would exit 0).
     assert (workspace / "out" / "capture" / "status.json").exists()
     assert result.all_failed is False
+
+
+# ------------------------------------------------- previous_state_unavailable (6.5)
+
+CA_LOOKUP_BODY = (FIXTURES / "ca_lookup.body").read_bytes()
+CA_ECOM_BODY = (FIXTURES / "ca_ecom_warehouses.json").read_bytes()
+
+
+def ca_transport() -> httpx.MockTransport:
+    """Serve the CA lookup and its metadata, so CA reaches `ok` on its primary path."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        host = request.url.host
+        if host == "api.frankfurter.dev":
+            return httpx.Response(
+                200, content=FX_BODY, headers={"Content-Type": "application/json"}
+            )
+        if host == "ecom-api.costco.com":
+            return httpx.Response(
+                200, content=CA_ECOM_BODY, headers={"Content-Type": "application/json"}
+            )
+        if host == "www.costco.ca":
+            return httpx.Response(
+                200, content=CA_LOOKUP_BODY, headers={"Content-Type": "text/html;charset=UTF-8"}
+            )
+        return httpx.Response(404, content=b"{}")
+
+    return httpx.MockTransport(handler)
+
+
+def lower_ca_floor(workspace: Path) -> None:
+    """CA's real floor is 78 stations and `ca_lookup.body` holds a handful.
+
+    Lowering it is what lets this test show the *only* reason CA is degraded,
+    rather than having the floor degrade it whatever the warning does.
+    """
+    path = workspace / "config" / "countries.toml"
+    text = path.read_text(encoding="utf-8")
+    head, marker, tail = text.partition("[countries.CA]\n")
+    assert marker, "no [countries.CA] section"
+    path.write_text(head + marker + tail.replace("floor = 78", "floor = 1", 1), encoding="utf-8")
+
+
+def seed_current_state(store: LocalReleaseStore, workspace: Path) -> None:
+    """Enough of `current` for `_read_previous_state` to read both frames."""
+    store.ensure_release("current", "current", "", False, "true")
+    stations = workspace / "seed-stations.csv"
+    pl.DataFrame({"station_key": ["CA-1324"], "country": ["CA"]}).write_csv(stations)
+    fx = workspace / "seed-fx.csv"
+    pl.DataFrame({"capture_id": ["2026-09-14T1817Z"], "currency": ["CAD"]}).write_csv(fx)
+    store.upload_new("current", stations, "stations.csv")
+    store.upload_new("current", fx, "fx.csv")
+
+
+def run_ca_and_us(workspace: Path, store: LocalReleaseStore, out: str) -> dict:
+    cfg = load_config(workspace)
+    return run_capture(
+        cfg,
+        store,
+        workspace / out,
+        countries=["US", "CA"],
+        force_fallback=set(),
+        now=NOW,
+        client=Client(cfg.http, transport=ca_transport()),
+    ).status
+
+
+def test_an_unreadable_current_degrades_ca_through_its_own_country_block(workspace: Path):
+    """Spec 5.3 step 1 and 6.5: `previous_state_unavailable` makes US and CA degraded.
+
+    `checks.evaluate_country` only ever inspects a country's own `warning_codes`,
+    so recording this on the capture-level list alone left US and CA reporting
+    `ok` while running without their `seen` ids and, for CA, without the cached
+    metadata its fallback needs.
+    """
+    lower_ca_floor(workspace)
+    missing = run_ca_and_us(workspace, LocalReleaseStore(workspace / "releases-empty"), "out-a")
+
+    assert "previous_state_unavailable" in {w["code"] for w in missing["warnings"]}
+    for code in ("US", "CA"):
+        assert "previous_state_unavailable" in {
+            w["code"] for w in missing["countries"][code]["warnings"]
+        }
+    assert missing["countries"]["CA"]["status"] == "degraded"
+    assert missing["countries"]["CA"]["rows"] > 0
+
+    store = LocalReleaseStore(workspace / "releases-seeded")
+    seed_current_state(store, workspace)
+    present = run_ca_and_us(workspace, store, "out-b")
+
+    assert "previous_state_unavailable" not in {w["code"] for w in present["warnings"]}
+    for code in ("US", "CA"):
+        assert "previous_state_unavailable" not in {
+            w["code"] for w in present["countries"][code]["warnings"]
+        }
+    # Same responses, same floor: the only thing that changed is the previous state.
+    assert present["countries"]["CA"]["status"] == "ok"
+    assert present["countries"]["CA"]["rows"] == missing["countries"]["CA"]["rows"]
+
+
+def set_budgets(workspace: Path, **values: float) -> None:
+    """Rewrite config/http.toml's [budgets] table, exactly as an operator would.
+
+    [budgets] is the last table in the file, so replacing everything after its
+    header replaces the whole table; names left out fall back to the built-in
+    defaults.
+    """
+    path = workspace / "config" / "http.toml"
+    head, marker, _rest = path.read_text(encoding="utf-8").partition("[budgets]\n")
+    assert marker, "no [budgets] table"
+    body = "".join(f'"{name}" = {value}\n' for name, value in values.items())
+    path.write_text(head + marker + body, encoding="utf-8")
+
+
+def test_capture_takes_its_deadlines_from_the_budgets_table(workspace: Path):
+    """Editing `[budgets]` has to change what the capture actually does.
+
+    The four numbers were hardcoded in capture.py and fx.py, so the parsed table
+    was dead config: this test sets `fx` and `ecom-api` to zero and nothing else,
+    which exhausts both before their first request.
+    """
+    set_budgets(workspace, fx=0.0, **{"ecom-api": 0.0})
+    cfg = load_config(workspace)
+    assert cfg.http.budgets["country"] == 480.0  # left out above, so still the default
+    store = LocalReleaseStore(workspace / "releases")
+    client = Client(cfg.http, transport=make_transport())
+
+    result = run_capture(
+        cfg,
+        store,
+        workspace / "out",
+        countries=["US"],
+        force_fallback=set(),
+        now=NOW,
+        client=client,
+    )
+
+    assert result.status["fx"] == {"status": "failed", "source": None, "rate_date": None}
+    assert result.status["ecom_api"] == {"attempted": True, "http_status": None}
+    # Neither request ever left: both budgets were spent before the first one.
+    keys = [entry["key"] for entry in client.log]
+    assert not [key for key in keys if key.startswith("fx/") or key == "shared/ecom-api"]
+    # US still ran on the default country budget, which the table left alone.
+    assert [key for key in keys if key.startswith("US/")]

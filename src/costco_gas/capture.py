@@ -40,10 +40,6 @@ ECOM_API_URL = "https://ecom-api.costco.com/core/warehouse-locator/v1/warehouses
 ECOM_API_PARAMS = {"latitude": "0", "longitude": "0", "limit": "5000"}
 ECOM_CLIENT_IDENTIFIER = "7c71124c-7bf1-44db-bc9d-498584cd66e5"
 
-ECOM_BUDGET_S = 90.0
-COUNTRY_BUDGET_S = 480.0
-CAPTURE_BUDGET_S = 720.0
-
 DROP_SCHEMA = {
     "source_station_id": pl.String,
     "reason": pl.String,
@@ -54,6 +50,11 @@ US_ID_SET_SCHEMA = {
     "id_origin": pl.String,
     "ecom_state": pl.String,
 }
+
+# The countries that run off the previous `current/stations.csv`: US takes its
+# `seen` ids from it and CA takes its fallback's cached metadata from it, so
+# spec 5.3 step 1 makes both degraded when it could not be read.
+PREVIOUS_STATE_COUNTRIES = ("US", "CA")
 
 
 @dataclass
@@ -152,7 +153,7 @@ def _fetch_ecom(client: Client, cfg: Config) -> tuple[RawResponse | None, dict]:
     """Fetch the shared warehouse locator once (spec 5.3 step 3)."""
     url, identifier = _ecom_request(cfg)
     try:
-        with client.budget("ecom-api", ECOM_BUDGET_S):
+        with client.budget("ecom-api"):
             resp = client.request("shared/ecom-api", url, headers={"client-identifier": identifier})
     except BudgetExceeded:
         return None, {"attempted": True, "http_status": None}
@@ -214,6 +215,7 @@ def run_capture(
         interp_config=cfg.interp_view(),
         previous_stations=prev_stations,
         previous_fx=prev_fx,
+        previous_state_complete=complete,
         previous_status=prev_status,
         shared={},
         force_fallback=set(force_fallback),
@@ -319,7 +321,7 @@ def run_country(
         source = SOURCES[country]
         extra: list[Warning] = []
         try:
-            with client.budget(f"country-{country}", COUNTRY_BUDGET_S):
+            with client.budget(f"country-{country}", key="country"):
                 responses = source.fetch(client, ctx)
         except BudgetExceeded:
             # A source that catches this itself returns its partial responses;
@@ -348,6 +350,14 @@ def run_country(
         )
         normalized = None
         us_id_set = None
+
+    if country in PREVIOUS_STATE_COUNTRIES and not ctx.previous_state_complete:
+        # `checks.evaluate_country` only ever inspects this country's own warning
+        # list, so the capture-level warning `run_capture` records has to be
+        # repeated here or spec 6.5's "makes US and CA degraded" never fires.
+        # Appended after the try/except so it survives the failure path too,
+        # which builds a fresh FetchResult with no warnings.
+        result.warnings.append(Warning(code="previous_state_unavailable"))
 
     block = checks.evaluate_country(country, result, normalized, ctx, now)
 
@@ -391,7 +401,7 @@ def _run_countries(
         return blocks, collected
     try:
         with (
-            client.budget("capture", CAPTURE_BUDGET_S),
+            client.budget("capture"),
             ThreadPoolExecutor(max_workers=len(countries)) as pool,
         ):
             futures = {

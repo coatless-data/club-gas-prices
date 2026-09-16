@@ -31,7 +31,6 @@ from .schema import (
     ROW_SCHEMA,
     ROW_SORT,
     STATION_SCHEMA,
-    read_csv,
     validate_rows,
     write_rows_csv_gz,
 )
@@ -80,9 +79,36 @@ def _parse_utc(text: str) -> datetime:
 
 
 def _read_input_csv(path: Path, schema: dict) -> pl.DataFrame:
-    if not path.exists() or path.stat().st_size == 0:
+    """Read one `inputs/` frame back from a capture bundle.
+
+    The producer is `capture._write_bundle`, which writes these with a bare
+    `DataFrame.write_csv`: its datetimes carry Polars' own text
+    (`2026-09-15T18:17:40.000000+0000`), not `schema.CSV_DATETIME_FORMAT`.
+    `pl.read_csv(schema=...)` parses both forms; the strict `schema.read_csv`
+    parses only the canonical one and raises `InvalidOperationError` on the
+    other, which would abort every rebuild of a real bundle.
+
+    A capture with no previous state writes a frame with no data rows: a header
+    line on its own, or a bare newline when the frame has no columns either
+    (`pl.DataFrame().write_csv()`, the >0-byte case the old `st_size` guard
+    missed). Both mean "empty", and only the second would reach `pl.read_csv`,
+    which raises `NoDataError` on it.
+
+    `schema=` assigns columns by position and ignores the header, so the header
+    is checked first. These bundles are read years after they were written: if
+    a future column order ever disagrees with the one a bundle was written
+    with, that has to fail loudly here rather than quietly load a column's
+    values into its neighbour.
+    """
+    if not path.exists():
         return pl.DataFrame(schema=schema)
-    return read_csv(path, schema)
+    raw = path.read_bytes()
+    if not raw.strip():
+        return pl.DataFrame(schema=schema)
+    header = raw.split(b"\n", 1)[0].decode("utf-8").strip().split(",")
+    if header != list(schema):
+        raise ValueError(f"{path}: column order is {header}, expected {list(schema)}")
+    return pl.read_csv(raw, schema=schema)
 
 
 def _load_responses(

@@ -14,9 +14,10 @@ from pathlib import Path
 import polars as pl
 import pytest
 
+from costco_gas import publish as publish_module
 from costco_gas import rollup, schema
 from costco_gas.config import load_config
-from costco_gas.publish import publish
+from costco_gas.publish import publish, upsert_stations
 from costco_gas.store import LocalReleaseStore, StorageError, sha256_file
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -1094,3 +1095,132 @@ def test_a_crash_after_all_captures_but_before_fx_is_still_reconciled(tmp_path: 
         inner.download("current", "manifest.json", tmp_path / "cm-final.json").read_text()
     )
     assert sorted(current_manifest["merged_captures"]) == sorted(all_ids)
+
+
+def test_current_stations_and_fx_go_out_through_the_schema_writer(tmp_path: Path, cfg):
+    """§6.1/§6.4: the published CSV assets are written by `schema.write_csv`.
+
+    Reading them back with the strict `schema.read_csv` is the check: it accepts
+    only CSV_DATE_FORMAT and CSV_DATETIME_FORMAT, so a bare `DataFrame.write_csv`
+    -- which also skips validation, the key check and the rounding -- cannot pass.
+    """
+    store = LocalReleaseStore(tmp_path / "releases")
+    capture_dir = make_capture_dir(tmp_path / "captures", "2026-09-15T1817Z", DAY1, prices=PRICES)
+
+    publish(store, capture_dir, cfg, now=NOW)
+
+    fx = schema.read_csv(store.download("current", "fx.csv", tmp_path / "fx.csv"), schema.FX_SCHEMA)
+    assert fx["capture_id"].to_list() == ["2026-09-15T1817Z"]
+    assert fx["fx_fetched_at_utc"].to_list() == [DAY1]
+    # 1/31.709 is 0.031536787662808666; fx.csv carries 10 significant digits.
+    assert fx["fx_usd_per_unit"].to_list() == [schema.round_significant(USD_PER_TWD)]
+    assert fx["fx_usd_per_unit"][0] != USD_PER_TWD
+
+    stations = schema.read_csv(
+        store.download("current", "stations.csv", tmp_path / "s.csv"), schema.STATION_SCHEMA
+    )
+    assert stations["station_key"].to_list() == ["TW-Chungli", "TW-Xinzhuang"]
+    assert stations["first_seen_utc"].to_list() == [DAY1, DAY1]
+
+
+def test_the_incremental_and_full_writers_of_current_agree_byte_for_byte(tmp_path: Path, cfg):
+    """`publish.upsert_fx` and `rollup._fx_frame` both write `current/fx.csv`.
+
+    They disagreed about rounding -- publish wrote the raw reciprocal, the full
+    rebuild rounded it to 10 significant digits -- so every month close silently
+    rewrote the asset's values. Both go through `schema.write_csv` now, which is
+    where the rounding and the canonical date formats live.
+    """
+    store = LocalReleaseStore(tmp_path / "releases")
+    capture_dir = make_capture_dir(tmp_path / "captures", "2026-09-15T1817Z", DAY1, prices=PRICES)
+    publish(store, capture_dir, cfg, now=NOW)
+    before = {
+        name: store.download("current", name, tmp_path / f"before-{name}").read_bytes()
+        for name in ("fx.csv", "stations.csv")
+    }
+
+    rollup.rebuild_current(store, cfg, now=NOW)
+
+    after = {
+        name: store.download("current", name, tmp_path / f"after-{name}").read_bytes()
+        for name in ("fx.csv", "stations.csv")
+    }
+    assert after == before
+
+
+def test_a_merge_that_would_drop_a_capture_date_refuses_to_write(tmp_path: Path, cfg):
+    """`current` may never come out of a merge holding fewer capture dates.
+
+    Everything upstream is meant to make this impossible -- the merge keeps
+    every date but the capture's own and puts that day's merged rows back --
+    so this is the check that catches the case where it did not: a day whose
+    daily file came back empty, a merge that produced the wrong frame, a
+    `capture_date` that did not round-trip. Publishing that frame would delete
+    a day of history from the only copy on the release, and nothing downstream
+    would notice, so `_update_current` raises before it writes anything.
+    """
+    store = LocalReleaseStore(tmp_path / "releases")
+    first = make_capture_dir(tmp_path / "captures", "2026-09-15T1817Z", DAY1, prices=PRICES)
+    publish(store, first, cfg, now=NOW)
+
+    # A later capture on the same day whose merge lost the day it was for.
+    later = make_capture_dir(
+        tmp_path / "captures",
+        "2026-09-15T2317Z",
+        datetime(2026, 9, 15, 23, 17, tzinfo=UTC),
+        prices=PRICES,
+    )
+    captured = publish_module.load_capture_dir(later)
+    empty = pl.DataFrame(schema=schema.ROW_SCHEMA)
+    before = store.download("current", "costco-gas-all-captures.parquet", tmp_path / "before.pq")
+    digest = sha256_file(before)
+
+    with pytest.raises(StorageError, match=r"all-captures would lose capture dates"):
+        publish_module._update_current(store, cfg, captured, empty, tmp_path / "scratch", [])
+
+    after = store.download("current", "costco-gas-all-captures.parquet", tmp_path / "after.pq")
+    assert sha256_file(after) == digest
+
+
+def test_a_late_capture_leaves_station_metadata_and_status_alone(cfg):
+    """Spec 6.3: a capture older than its country's newest merged capture
+    touches only first_seen_utc, last_seen_utc and grades_seen.
+
+    Metadata, alt_id and status stay as the newest capture left them. Without
+    that gate a late publish -- a rerun, a replayed bundle, a slow country
+    thread -- would quietly reinstate a stale name, a stale position, and an
+    `active` status for a station the newest capture recorded as missing.
+    """
+    late_at = datetime(2026, 9, 15, 0, 17, tzinfo=UTC)
+    stored = station_row("Chungli", DAY1, {"95", "98"})
+    stored.update(name="Chungli renamed", alt_id="560", city="Taoyuan", status="missing")
+    previous = pl.DataFrame([stored], schema=schema.STATION_SCHEMA)
+    arriving = station_row("Chungli", late_at, {"Diesel"})
+    arriving.update(name="Chungli", alt_id="111", city=None, status="active")
+    incoming = pl.DataFrame([arriving], schema=schema.STATION_SCHEMA)
+    status = {"countries": {"TW": {"status": "ok"}}}
+    newest = {"TW": "2026-09-15T1817Z"}
+
+    late = upsert_stations(
+        previous, incoming, status, cfg.station_links, newest, "2026-09-15T0017Z"
+    ).to_dicts()[0]
+
+    assert late["name"] == "Chungli renamed"
+    assert late["alt_id"] == "560"
+    assert late["city"] == "Taoyuan"
+    assert late["status"] == "missing"
+    # The three columns a late capture does move.
+    assert late["first_seen_utc"] == late_at
+    assert late["last_seen_utc"] == DAY1
+    assert late["grades_seen"] == "95|98|Diesel"
+
+    # The same rows from a capture that is the newest: metadata moves, and the
+    # station comes back to active.
+    fresh = upsert_stations(
+        previous, incoming, status, cfg.station_links, newest, "2026-09-15T2317Z"
+    ).to_dicts()[0]
+
+    assert fresh["name"] == "Chungli"
+    assert fresh["alt_id"] == "111"
+    assert fresh["city"] is None
+    assert fresh["status"] == "active"

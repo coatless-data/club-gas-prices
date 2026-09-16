@@ -83,6 +83,20 @@ def _default_budgets() -> dict[str, float]:
     return {"fx": 90.0, "ecom-api": 90.0, "country": 480.0, "capture": 720.0}
 
 
+def _budget_overrides(raw: dict, path: Path) -> dict[str, float]:
+    """The `[budgets]` table, checked against the budgets that exist."""
+    known = _default_budgets()
+    out: dict[str, float] = {}
+    for key, value in raw.get("budgets", {}).items():
+        name = str(key)
+        if name not in known:
+            raise ConfigError(
+                f"{path}: unknown budget {name!r}; known budgets are {', '.join(sorted(known))}"
+            )
+        out[name] = float(value)
+    return out
+
+
 CHROME_UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
@@ -113,7 +127,15 @@ class HttpConfig:
     backoff_jitter: float = 0.5
     min_interval_seconds: float = 1.0
     block_signals_before_abandon: int = 2
+    # Seconds per named budget, from config/http.toml's [budgets] table. Every
+    # deadline the capture opens is looked up here, so editing that file is the
+    # only way any of them changes.
     budgets: dict[str, float] = field(default_factory=_default_budgets)
+
+    def budget_seconds(self, name: str) -> float:
+        """The length of one named budget, falling back to the built-in default."""
+        value = self.budgets.get(name)
+        return float(value) if value is not None else _default_budgets()[name]
 
 
 @dataclass(frozen=True)
@@ -351,7 +373,13 @@ def _load_http(path: Path) -> HttpConfig:
             block_signals_before_abandon=int(
                 raw.get("blocks", {}).get("signals_before_abandon", 2)
             ),
-            budgets={str(k): float(v) for k, v in raw.get("budgets", {}).items()},
+            # Merged over the defaults, so a table that names only some of the
+            # budgets still leaves the rest at their documented values. An
+            # unknown key is rejected rather than merged: silently ignoring one
+            # is how this table came to be dead config in the first place, and
+            # a typo would leave the real budget at its default with nothing
+            # to show for the edit.
+            budgets={**_default_budgets(), **_budget_overrides(raw, path)},
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise ConfigError(f"{path}: {exc}") from exc

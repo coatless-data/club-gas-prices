@@ -142,7 +142,7 @@ between them compares different fuels.
 
 **Exchange rates.** One rate per currency is fetched at capture time and stored with
 every row of that capture. `units_per_usd` is the provider's raw rate and
-`fx_usd_per_unit` is its reciprocal, written with 10 significant digits, because
+`fx_usd_per_unit` is its reciprocal; both are written with 10 significant digits, because
 rounding a rate like 154.24 JPY per USD to 4 decimals would shift the converted price
 by 0.26%. The primary source is the Frankfurter v2 daily reference rate; if it fails,
 a dated jsDelivr currency-api file for the capture date or the day before; if that

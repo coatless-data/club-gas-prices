@@ -79,8 +79,23 @@ class Client:
 
     # -- budgets -----------------------------------------------------------
 
+    def budget_seconds(self, name: str) -> float:
+        """The length of a named budget, from config/http.toml's [budgets]."""
+        return self.cfg.budget_seconds(name)
+
     @contextmanager
-    def budget(self, name: str, seconds: float) -> Iterator[None]:
+    def budget(
+        self, name: str, seconds: float | None = None, *, key: str | None = None
+    ) -> Iterator[None]:
+        """Open a named deadline.
+
+        With no explicit `seconds` the length comes from the config file's
+        [budgets] table, under `key` when the budget's name carries a suffix
+        that the table does not (`country-AU` is looked up as `country`, so a
+        BudgetExceeded still names the country that ran out).
+        """
+        if seconds is None:
+            seconds = self.budget_seconds(key or name)
         entry = (name, time.monotonic() + seconds)
         stack = self._budget_stack()
         stack.append(entry)
