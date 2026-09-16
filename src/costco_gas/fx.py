@@ -30,10 +30,7 @@ if TYPE_CHECKING:
 CURRENCIES: tuple[str, ...] = ("CAD", "MXN", "GBP", "AUD", "JPY", "TWD")
 FX_BUDGET_SECONDS = 90.0
 FRANKFURTER_URL = "https://api.frankfurter.dev/v2/rates?base=USD&quotes=" + ",".join(CURRENCIES)
-FAWAZ_URL = (
-    "https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@{day}"
-    "/v1/currencies/usd.json"
-)
+FAWAZ_URL = "https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@{day}/v1/currencies/usd.json"
 SOURCE_FRANKFURTER = "frankfurter-v2"
 SOURCE_FAWAZ = "fawazahmed0-currency-api"
 SOURCE_IDENTITY = "identity"

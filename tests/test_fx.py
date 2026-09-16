@@ -242,9 +242,7 @@ def previous_fx_frame() -> pl.DataFrame:
 
 def test_carry_forward_copies_the_newest_uncarried_row_within_seven_days(make_client):
     calls: list[str] = []
-    fx = fetch_rates(
-        make_client(all_network_fails_handler(calls)), make_ctx(previous_fx_frame())
-    )
+    fx = fetch_rates(make_client(all_network_fails_handler(calls)), make_ctx(previous_fx_frame()))
 
     assert fx.status == "carried-forward"
     # JPY's stored rate date is 14 days before the capture, so it is not carried.
@@ -299,3 +297,88 @@ def test_every_source_failing_gives_status_failed_and_an_empty_fx_json(make_clie
     # normalize() turns a missing row into null USD columns; the capture still wins.
     assert fx.for_currency("CAD") is None
     assert fx.for_currency("USD").fx_usd_per_unit == 1.0
+
+
+class BudgetStubClient:
+    """A stand-in for http.Client whose first request exhausts the FX budget.
+
+    A real 90-second budget cannot be exercised in a unit test, so this records
+    the budget fx.py opens and raises BudgetExceeded from inside it.
+    """
+
+    def __init__(self) -> None:
+        self.budgets: list[tuple[str, float]] = []
+        self.requests: list[str] = []
+
+    def budget(self, name: str, seconds: float):
+        self.budgets.append((name, seconds))
+        return contextlib.nullcontext()
+
+    def abandoned(self, url: str) -> bool:
+        return False
+
+    def request(self, key, url, *, profile="default", headers=None, expect_json=True):
+        from costco_gas.http import BudgetExceeded
+
+        self.requests.append(url)
+        raise BudgetExceeded(f"fx budget exhausted before {key}")
+
+
+def test_fx_runs_inside_a_ninety_second_budget_and_still_carries_forward():
+    client = BudgetStubClient()
+
+    fx = fetch_rates(client, make_ctx(previous_fx_frame()))
+
+    assert client.budgets == [("fx", 90.0)]
+    assert len(client.requests) == 1
+    assert fx.status == "carried-forward"
+    assert fx.for_currency("CAD").units_per_usd == 1.3871
+
+
+def test_an_exhausted_budget_without_previous_rates_fails_softly():
+    client = BudgetStubClient()
+
+    fx = fetch_rates(client, make_ctx())
+
+    assert fx.status == "failed"
+    assert fx.rows == []
+    assert client.budgets == [("fx", 90.0)]
+
+
+def test_fx_rates_json_round_trip():
+    from costco_gas.fx import FxRates
+
+    original = FxRates(
+        status="ok",
+        rows=[
+            FxRates(status="ok", rows=[]).for_currency("USD"),
+        ],
+        capture_date=CAPTURE_DATE,
+    )
+    assert original.rows[0].currency == "USD"
+
+    # fx.json is a JSON array of rate rows and stores no status, so from_json
+    # takes the array plus the status the caller read from status.json.
+    rows = [
+        {
+            "currency": "JPY",
+            "units_per_usd": 154.24,
+            "fx_rate_date": "2026-09-14",
+            "fx_source": "frankfurter-v2",
+            "fx_fetched_at_utc": "2026-09-15T18:17:42Z",
+        }
+    ]
+    restored = FxRates.from_json(rows, status="ok")
+    assert restored.status == "ok"
+    assert restored.capture_date is None
+    assert restored.for_currency("JPY").fx_usd_per_unit == pytest.approx(1 / 154.24)
+    assert restored.for_currency("JPY").fx_rate_date == date(2026, 9, 14)
+    assert restored.for_currency("JPY").fx_fetched_at_utc == datetime(
+        2026, 9, 15, 18, 17, 42, tzinfo=UTC
+    )
+    assert restored.to_json() == rows
+
+    # capture_date is optional and only dates the synthetic USD identity row.
+    with_date = FxRates.from_json(rows, status="fallback", capture_date=CAPTURE_DATE)
+    assert with_date.status == "fallback"
+    assert with_date.for_currency("USD").fx_rate_date == CAPTURE_DATE
