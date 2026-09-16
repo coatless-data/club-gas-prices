@@ -1,0 +1,45 @@
+country,grade_raw,price_raw,price_unit
+AU,Diesel,$2.407,AUD/L
+AU,Diesel,$2.567,AUD/L
+AU,E10,$2.087,AUD/L
+AU,E10,$2.127,AUD/L
+AU,Premium 98,$2.227,AUD/L
+AU,Premium 98,$2.347,AUD/L
+AU,Unleaded 91,$2.027,AUD/L
+AU,Unleaded 91,$2.147,AUD/L
+CA,diesel,2.179,CAD/L
+CA,diesel,2.649,CAD/L
+CA,premium,1.699,CAD/L
+CA,premium,2.269,CAD/L
+CA,regular,1.449,CAD/L
+CA,regular,2.049,CAD/L
+GB,5301,154.9,GBp/L
+GB,5301,165.9,GBp/L
+GB,5302,166.9,GBp/L
+GB,5302,176.9,GBp/L
+GB,5303,173.9,GBp/L
+GB,5303,188.9,GBp/L
+JP,Diesel,¥129,JPY/L
+JP,Diesel,¥140,JPY/L
+JP,Kerosene,¥119,JPY/L
+JP,Kerosene,¥125,JPY/L
+JP,Premium,¥155,JPY/L
+JP,Premium,¥163,JPY/L
+JP,Regular,¥144,JPY/L
+JP,Regular,¥152,JPY/L
+MX,Premium,$25.39,MXN/L
+MX,Premium,$28.89,MXN/L
+MX,Regular,$20.89,MXN/L
+MX,Regular,$23.99,MXN/L
+TW,95,$30.0,TWD/L
+TW,98,$31.5,TWD/L
+TW,Diesel,$28.6,TWD/L
+US,clear,5.699,USD/gal
+US,diesel,5.299,USD/gal
+US,diesel,7.999,USD/gal
+US,premium,1.267,USD/L
+US,premium,2.129,USD/gal
+US,premium,6.599,USD/gal
+US,regular,1.097,USD/L
+US,regular,1.929,USD/gal
+US,regular,6.199,USD/gal
