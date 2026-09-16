@@ -12,7 +12,9 @@ in ``n_stations_usd``.
 
 from __future__ import annotations
 
+import json
 from datetime import date, datetime
+from pathlib import Path
 
 import polars as pl
 
@@ -67,3 +69,100 @@ def _json_default(value: object) -> object:
     if isinstance(value, date):
         return value.isoformat()
     raise TypeError(f"cannot serialise {type(value).__name__} to JSON")
+
+
+LATEST_NUMERIC = (
+    "price",
+    "price_local_per_litre",
+    "price_usd_per_litre",
+    "price_usd_per_gallon",
+    "fx_usd_per_unit",
+    "lat",
+    "lon",
+)
+STATION_NUMERIC = ("lat", "lon")
+GRADE_FIELDS = (
+    "grade_raw",
+    "price_raw",
+    "price",
+    "price_unit",
+    "currency",
+    "price_local_per_litre",
+    "price_usd_per_litre",
+    "price_usd_per_gallon",
+    "fx_usd_per_unit",
+    "fx_rate_date",
+    "fx_source",
+)
+STATION_CORE = ("station_key", "country", "name", "name_local", "city", "region", "lat", "lon")
+STATION_JSON_FIELDS = (
+    *STATION_CORE,
+    "status",
+    "first_seen_utc",
+    "last_seen_utc",
+    "superseded_by",
+)
+CORE_GRADES = ("regular", "premium", "diesel")
+
+
+def build_site_data(current_dir: Path, out_dir: Path, cfg, *, now: datetime) -> None:
+    current_dir = Path(current_dir)
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    stations = _read_csv(current_dir / "stations.csv", STATION_NUMERIC)
+    latest = _read_csv(current_dir / "costco-gas-latest.csv", LATEST_NUMERIC)
+
+    _write_json(out_dir / "latest.json", _latest_records(latest, stations))
+    _write_json(out_dir / "stations.json", _station_records(stations))
+
+
+def _read_csv(path: Path, numeric: tuple[str, ...]) -> pl.DataFrame:
+    frame = pl.read_csv(path, try_parse_dates=True)
+    return frame.with_columns(
+        [pl.col(name).cast(pl.Float64, strict=False) for name in numeric if name in frame.columns]
+    )
+
+
+def _latest_records(latest: pl.DataFrame, stations: pl.DataFrame) -> list[dict]:
+    meta = {row["station_key"]: row for row in stations.to_dicts()}
+    records: dict[str, dict] = {}
+    seen: set[tuple[str, str]] = set()
+    for row in latest.to_dicts():
+        if row.get("lat") is None or row.get("lon") is None:
+            continue
+        key = row["station_key"]
+        record = records.get(key)
+        if record is None:
+            info = meta.get(key, {})
+            record = {field: row.get(field) for field in STATION_CORE}
+            record["status"] = info.get("status")
+            record["first_seen_utc"] = info.get("first_seen_utc")
+            record["captured_at_utc"] = row.get("captured_at_utc")
+            record["grades"] = {}
+            record["other"] = {}
+            records[key] = record
+        price = {field: row.get(field) for field in GRADE_FIELDS}
+        grade = row.get("grade")
+        if grade in CORE_GRADES:
+            if (key, grade) in seen:
+                raise ValueError(
+                    f"costco-gas-latest.csv has more than one {grade!r} row for {key}"
+                )
+            seen.add((key, grade))
+            record["grades"][grade] = price
+        else:
+            record["other"][row.get("grade_raw")] = price
+    return list(records.values())
+
+
+def _station_records(stations: pl.DataFrame) -> list[dict]:
+    return [
+        {field: row.get(field) for field in STATION_JSON_FIELDS} for row in stations.to_dicts()
+    ]
+
+
+def _write_json(path: Path, payload: object) -> None:
+    with path.open("w", encoding="utf-8") as handle:
+        json.dump(payload, handle, ensure_ascii=False, separators=(",", ":"), default=_json_default)
+        handle.write("\n")
