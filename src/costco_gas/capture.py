@@ -23,7 +23,7 @@ from .fx import FxRates, fetch_rates
 from .http import BudgetExceeded, Client
 from .normalize import normalize
 from .sources import us as us_source
-from .sources.base import SOURCES, CaptureContext, RawResponse, Warning
+from .sources.base import SOURCES, CaptureContext, Error, FetchResult, RawResponse, Warning
 from .store import ReleaseStore, sha256_file
 
 # Paths are relative to the repository checkout the CLI runs in (capture.yml
@@ -257,7 +257,17 @@ def run_capture(
         json.dumps(status, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
 
-    _write_bundle(out, capture_out, ctx, run, collected)
+    try:
+        _write_bundle(out, capture_out, ctx, run, collected)
+    except Exception as exc:
+        # status.json is already durable at this point; a bundle failure must
+        # be visible there, not fatal to the capture (spec review finding 1b,
+        # Task 13). The workflow still uploads out/ as an artifact either way.
+        detail = f"{type(exc).__name__}: {exc}"
+        status["warnings"].append({"code": "bundle_failed", "detail": detail})
+        (capture_out / "status.json").write_text(
+            json.dumps(status, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
 
     all_failed = not any(
         block.get("status") in ("ok", "degraded") for block in status.get("countries", {}).values()
@@ -286,18 +296,27 @@ def run_country(
 ) -> dict:
     """Fetch, parse, normalize, check and write one country (spec 5.3 step 4).
 
-    Everything is inside one try block so an exception marks only this country
-    failed (spec 10.1), and the outputs land in `out/countries/<CC>/` as soon
-    as the country finishes, before the other threads are done.
+    From the output directory's creation onward, everything is inside one try
+    block, so an exception anywhere in this country's pipeline -- including an
+    unknown-country lookup or a crash inside fetch/parse -- marks only this
+    country failed (spec 10.1) instead of aborting the whole capture. Outputs
+    land in `out/countries/<CC>/` as soon as the country finishes, before the
+    other threads are done.
+
+    For US, the polled-id frame for `inputs/us_id_set.csv` is computed here,
+    once, inside this same guard (review finding 1, Task 13): `fetch_us` makes
+    the identical call as its first statement, so if the ecom-api metadata is
+    malformed this call fails exactly where that one would, and is caught by
+    the same `except` below. `_write_bundle` must never recompute it.
     """
     directory = out / "countries" / country
-    directory.mkdir(parents=True, exist_ok=True)
-    source = SOURCES[country]
     responses: list[RawResponse] = []
-    result = None
+    result: FetchResult | None = None
     normalized = None
-    failure: str | None = None
+    us_id_set: pl.DataFrame | None = None
     try:
+        directory.mkdir(parents=True, exist_ok=True)
+        source = SOURCES[country]
         extra: list[Warning] = []
         try:
             with client.budget(f"country-{country}", COUNTRY_BUDGET_S):
@@ -311,17 +330,26 @@ def run_country(
         result = source.parse(responses, ctx)
         result.warnings.extend(extra)
         normalized = normalize(result, fx, ctx)
+        if country == "US":
+            us_id_set = us_source.polled_id_frame(ctx)
     except Exception as exc:  # isolation is the point
-        failure = f"{type(exc).__name__}: {exc}"
+        detail = f"{type(exc).__name__}: {exc}"
+        directory.mkdir(parents=True, exist_ok=True)
         (directory / "traceback.txt").write_text(traceback.format_exc(), encoding="utf-8")
-        result = None
+        result = FetchResult(
+            country=country,
+            source="error",
+            captured_at_utc=now,
+            stations=[],
+            responses=list(responses),
+            requests=len(responses),
+            warnings=[],
+            errors=[Error(code="exception", host=None, http_status=None, detail=detail)],
+        )
         normalized = None
+        us_id_set = None
 
     block = checks.evaluate_country(country, result, normalized, ctx, now)
-    if failure is not None:
-        block.setdefault("errors", []).append(
-            {"code": "exception", "host": None, "http_status": None, "detail": failure}
-        )
 
     rows = normalized.rows if normalized else pl.DataFrame(schema=schema.ROW_SCHEMA)
     stations = normalized.stations if normalized else pl.DataFrame(schema=schema.STATION_SCHEMA)
@@ -339,7 +367,13 @@ def run_country(
     (directory / "country.json").write_text(
         json.dumps(block, indent=2, sort_keys=True), encoding="utf-8"
     )
-    return {"block": block, "rows": rows, "stations": stations, "result": result}
+    return {
+        "block": block,
+        "rows": rows,
+        "stations": stations,
+        "result": result,
+        "us_id_set": us_id_set,
+    }
 
 
 def _run_countries(
@@ -373,16 +407,26 @@ def _run_countries(
     return blocks, collected
 
 
-def _us_id_set(ctx: CaptureContext, captured: list[str]) -> pl.DataFrame:
+def _us_id_set(collected: dict[str, dict]) -> pl.DataFrame:
     """``inputs/us_id_set.csv``: every id the US fetcher POLLED, not every id it priced.
 
     `discover` (spec 10.4) subtracts this file from its candidate range, so it has to
     hold the polled set. Deriving it from `FetchResult.stations` instead would omit
     every id that answered `{}`, and discovery would re-sweep those ids every month.
+
+    The frame was already computed once, inside `run_country`'s guarded US path,
+    and carried here in `collected["US"]["us_id_set"]`. This function only reads
+    it back -- it must never call `polled_id_frame` itself, because that call
+    would run after `status.json` is already durable and unguarded by the try
+    that isolates one country's failure from the rest of the capture (spec
+    review finding 1, Task 13). US skipped, US failed, or a synthetic result
+    with no `us_id_set` all fall back to an empty, correctly-shaped frame.
     """
-    if "US" not in captured:
+    us = collected.get("US")
+    frame = us.get("us_id_set") if us else None
+    if frame is None:
         return pl.DataFrame(schema=US_ID_SET_SCHEMA)
-    return us_source.polled_id_frame(ctx)
+    return frame
 
 
 def _write_bundle(
@@ -425,7 +469,7 @@ def _write_bundle(
     (stage / "inputs" / "status_previous.json").write_text(
         json.dumps(ctx.previous_status, indent=2, sort_keys=True), encoding="utf-8"
     )
-    _us_id_set(ctx, list(collected)).write_csv(stage / "inputs" / "us_id_set.csv")
+    _us_id_set(collected).write_csv(stage / "inputs" / "us_id_set.csv")
 
     countries_dir = out / "countries"
     if countries_dir.is_dir():
