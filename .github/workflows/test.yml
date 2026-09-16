@@ -16,7 +16,7 @@ concurrency:
 jobs:
   test:
     name: Lint and test
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
       GITHUB_TOKEN: ${{ github.token }}

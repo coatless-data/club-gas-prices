@@ -339,18 +339,20 @@ def test_rebuild_accepts_both_artifact_layouts():
     assert "dirs=(artifact/*/capture artifact/capture)" not in text
 
 
-def test_every_workflow_pins_the_runner_image():
-    """`ubuntu-latest` follows the newest GA image and moves without a commit.
+def test_every_workflow_runs_on_the_same_image():
+    """One runner label across the fleet, whatever it is.
 
-    The smoke test drives the runner's preinstalled Google Chrome, and Playwright
-    only knows the distros its release shipped against, so the OS moving under
-    the deploy gate is a real failure mode rather than a theoretical one.
+    The workflows hand work to each other -- Capture uploads an artifact Rebuild
+    reads, and both trigger Render -- so a split fleet means "passes in test,
+    fails in deploy" with no reason to suspect the OS. This asserts they agree,
+    not which one they agree on.
     """
+    labels = {}
     for name in ("test.yml", "capture.yml", "discover.yml", "rebuild.yml", "render.yml"):
-        text = read(name)
-        assert "runs-on: ubuntu-24.04\n" in text, name
-        # the phrase may still appear in a comment explaining the pin
-        assert "runs-on: ubuntu-latest" not in text, name
+        found = re.findall(r"^\s*runs-on:\s*(\S+)", read(name), re.M)
+        assert len(found) == 1, (name, found)
+        labels[name] = found[0]
+    assert len(set(labels.values())) == 1, labels
 
 
 def test_render_only_deploys_from_the_default_branch():
