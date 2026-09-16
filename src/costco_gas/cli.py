@@ -11,7 +11,9 @@ from pathlib import Path
 
 from .capture import CaptureResult, run_capture
 from .config import load_config
+from .issues import Issues
 from .publish import publish
+from .rollup import CloseResult, close_periods
 from .store import DEFAULT_STORE, open_store
 
 
@@ -86,6 +88,43 @@ def cmd_publish(args) -> int:
     return 0
 
 
+def cmd_close_periods(args) -> int:
+    cfg = load_config(Path("."))
+    store = open_configured_store()
+    issues = Issues(os.environ.get("GITHUB_REPOSITORY"), os.environ.get("GITHUB_TOKEN"))
+    now = utc_now()
+    try:
+        result: CloseResult = close_periods(
+            store, cfg, now=now, rebuild_current=args.rebuild_current, issues=issues
+        )
+    except Exception as exc:
+        print(f"close-periods failed: {exc}", file=sys.stderr)
+        try:
+            issues.ensure_open(
+                "Period close failing",
+                f"`close-periods` raised at {now:%Y-%m-%dT%H%MZ}:\n\n```\n{exc}\n```",
+                ["period-close"],
+            )
+        except Exception as issue_exc:
+            print(f"::warning::issue call failed: {issue_exc}")
+        return 1
+    try:
+        issues.close("Period close failing", f"close-periods exited 0 at {now:%Y-%m-%dT%H%MZ}.")
+    except Exception as issue_exc:
+        print(f"::warning::issue call failed: {issue_exc}")
+    print(
+        json.dumps(
+            {
+                "closed_months": result.closed_months,
+                "closed_years": result.closed_years,
+                "blocked_months": result.blocked_months,
+                "rebuilt_current": result.rebuilt_current,
+            }
+        )
+    )
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="costco-gas")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -99,6 +138,14 @@ def build_parser() -> argparse.ArgumentParser:
     publish_cmd = sub.add_parser("publish", help="publish a capture directory")
     publish_cmd.add_argument("dir", help="the capture directory, e.g. out/capture")
     publish_cmd.set_defaults(func=cmd_publish)
+
+    close = sub.add_parser("close-periods", help="close finished months and years")
+    close.add_argument(
+        "--rebuild-current",
+        action="store_true",
+        help="rebuild the current release in full even if no month closed",
+    )
+    close.set_defaults(func=cmd_close_periods)
 
     return parser
 
