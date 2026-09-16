@@ -469,3 +469,105 @@ def test_a_missing_daily_file_that_the_manifest_records_raises(tmp_path: Path, c
     )
     with pytest.raises(StorageError, match="costco-gas-2026-09-15.csv.gz is missing"):
         publish(store, b_dir, cfg, now=NOW)
+
+
+from dataclasses import replace as dataclass_replace
+
+
+class StateOverrideStore:
+    """LocalReleaseStore with one asset forced to a non-uploaded state."""
+
+    def __init__(self, inner, asset_name: str, state: str):
+        self._inner = inner
+        self._asset_name = asset_name
+        self._state = state
+
+    def list_assets(self, tag):
+        return [
+            dataclass_replace(a, state=self._state) if a.name == self._asset_name else a
+            for a in self._inner.list_assets(tag)
+        ]
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+
+def test_an_incomplete_orphan_bundle_is_deleted(tmp_path: Path, cfg):
+    inner = LocalReleaseStore(tmp_path / "releases")
+    captures = tmp_path / "captures"
+    a_dir = make_capture_dir(
+        captures,
+        "2026-09-15T0017Z",
+        datetime(2026, 9, 15, 0, 17, tzinfo=timezone.utc),
+        prices=PRICES,
+    )
+    publish(inner, a_dir, cfg, now=NOW)
+
+    b_dir = make_capture_dir(
+        captures,
+        "2026-09-15T1217Z",
+        datetime(2026, 9, 15, 12, 17, tzinfo=timezone.utc),
+        prices=[("Chungli", "95", "regular", 30.2)],
+    )
+    inner.upload_new("data-2026-09", b_dir / "bundle.tar.gz", "capture-2026-09-15T1217Z.tar.gz")
+    store = StateOverrideStore(inner, "capture-2026-09-15T1217Z.tar.gz", "starter")
+
+    c_dir = make_capture_dir(
+        captures, "2026-09-16T0017Z", DAY2, prices=[("Chungli", "95", "regular", 30.9)]
+    )
+    result = publish(store, c_dir, cfg, now=NOW)
+
+    assert "discarded_incomplete_bundle:2026-09-15T1217Z" in result.warnings
+    assert "capture-2026-09-15T1217Z.tar.gz" not in {
+        a.name for a in inner.list_assets("data-2026-09")
+    }
+    day15 = schema.read_rows_csv_gz(
+        inner.download("data-2026-09", "costco-gas-2026-09-15.csv.gz", tmp_path / "d15.csv.gz")
+    )
+    assert day15["capture_id"].unique().to_list() == ["2026-09-15T0017Z"]
+
+
+def test_an_invalid_orphan_bundle_is_renamed_and_reported(tmp_path: Path, cfg, capsys):
+    store = LocalReleaseStore(tmp_path / "releases")
+    captures = tmp_path / "captures"
+    a_dir = make_capture_dir(
+        captures,
+        "2026-09-15T0017Z",
+        datetime(2026, 9, 15, 0, 17, tzinfo=timezone.utc),
+        prices=PRICES,
+    )
+    publish(store, a_dir, cfg, now=NOW)
+
+    broken = tmp_path / "broken.tar.gz"
+    broken.write_bytes(b"not a tar archive at all")
+    store.upload_new("data-2026-09", broken, "capture-2026-09-15T1217Z.tar.gz")
+
+    c_dir = make_capture_dir(
+        captures, "2026-09-16T0017Z", DAY2, prices=[("Chungli", "95", "regular", 30.9)]
+    )
+    result = publish(store, c_dir, cfg, now=NOW)
+
+    names = {a.name for a in store.list_assets("data-2026-09")}
+    assert "capture-2026-09-15T1217Z.tar.gz.invalid" in names
+    assert "reconciled:2026-09-15T1217Z" not in result.warnings
+    # The no_github_env fixture clears GITHUB_REPOSITORY/GITHUB_TOKEN, so the
+    # issue helper stays in its dry mode and only prints. No network call.
+    assert "Invalid capture bundle: 2026-09-15T1217Z" in capsys.readouterr().out
+
+
+def test_a_capture_id_collision_fails(tmp_path: Path, cfg):
+    from costco_gas.store import StorageError
+
+    store = LocalReleaseStore(tmp_path / "releases")
+    captures = tmp_path / "captures"
+    a_dir = make_capture_dir(captures, "2026-09-15T1817Z", DAY1, prices=PRICES)
+    publish(store, a_dir, cfg, now=NOW)
+
+    different = make_capture_dir(
+        tmp_path / "other",
+        "2026-09-15T1817Z",
+        DAY1,
+        prices=[("Chungli", "95", "regular", 99.0)],
+    )
+    with pytest.raises(StorageError, match="capture_id_collision"):
+        publish(store, different, cfg, now=NOW)
