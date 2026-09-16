@@ -18,7 +18,7 @@ from costco_gas.normalize import (
     parse_price,
     round_significant,
 )
-from costco_gas.schema import ROW_SCHEMA, STATION_SCHEMA
+from costco_gas.schema import ROW_SCHEMA, STATION_SCHEMA, round_fx_columns, round_price_columns
 from costco_gas.sources.base import CaptureContext, FetchResult, RawPrice, RawStation
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -290,19 +290,24 @@ def test_every_fixture_price_sits_at_least_20_percent_inside_its_maximum():
 
 
 def test_us_gallon_row_keeps_its_published_value_per_gallon():
+    """normalize() carries unrounded intermediates (spec 6.1); price_local_per_litre
+    and price_usd_per_litre are exactly price / LITRES_PER_US_GALLON, not a 4-decimal
+    rounding of it. See test_schema_rounds_price_and_fx_columns for the rounding
+    guarantee, which now lives in schema.py alone."""
     result = fetch_result("US", "costco-us-gasprices", [station("1364", [("regular", "3.999")])])
     out = normalize(result, fx_rates(), context())
     row = out.rows.row(0, named=True)
+    litre = 3.999 / LITRES_PER_US_GALLON
     assert row["price"] == 3.999
     assert row["price_unit"] == "USD/gal"
     assert row["currency"] == "USD"
-    assert row["price_local_per_litre"] == pytest.approx(1.0564)
+    assert row["price_local_per_litre"] == litre
     assert row["fx_usd_per_unit"] == 1.0
     assert row["fx_source"] == "identity"
     assert row["fx_rate_date"] == CAPTURE_DATE
     assert row["fx_fetched_at_utc"] == CAPTURED_AT
     assert row["price_usd_per_gallon"] == 3.999
-    assert row["price_usd_per_litre"] == pytest.approx(1.0564)
+    assert row["price_usd_per_litre"] == litre
 
 
 def test_puerto_rico_uses_the_per_litre_region_override():
@@ -333,16 +338,22 @@ def test_gb_pence_become_major_units_per_litre():
     )
     out = normalize(result, fx_rates(), context())
     row = out.rows.row(0, named=True)
+    fx = 1.0 / 0.73996
+    usd_litre = 1.609 * fx
     assert row["price"] == 160.9
     assert row["price_unit"] == "GBp/L"
     assert row["currency"] == "GBP"
     assert row["price_local_per_litre"] == 1.609
-    assert row["fx_usd_per_unit"] == 1.351424401
-    assert row["price_usd_per_litre"] == pytest.approx(2.1744)
-    assert row["price_usd_per_gallon"] == pytest.approx(8.2312)
+    assert row["fx_usd_per_unit"] == fx
+    assert row["price_usd_per_litre"] == usd_litre
+    assert row["price_usd_per_gallon"] == usd_litre * LITRES_PER_US_GALLON
 
 
-def test_jp_keeps_ten_significant_fx_digits_and_a_next_day_local_date():
+def test_jp_keeps_the_unrounded_fx_rate_and_a_next_day_local_date():
+    """normalize() no longer rounds fx_usd_per_unit to 10 significant digits itself
+    (spec 6.1) - it stores the FxRow value as fx.py computed it. See
+    test_schema_rounds_price_and_fx_columns for where the 10-significant-digit
+    guarantee is actually enforced."""
     result = fetch_result(
         "JP",
         "costco-occ",
@@ -358,12 +369,33 @@ def test_jp_keeps_ten_significant_fx_digits_and_a_next_day_local_date():
     )
     out = normalize(result, fx_rates(), context())
     row = out.rows.filter(pl.col("grade") == "regular").row(0, named=True)
+    fx = 1.0 / 154.24
     assert row["local_date"] == date(2026, 9, 16)
     assert row["capture_date"] == date(2026, 9, 15)
-    assert row["fx_usd_per_unit"] == 0.00648340249
+    assert row["fx_usd_per_unit"] == fx
     assert row["fx_source"] == "frankfurter-v2"
     assert row["fx_rate_date"] == date(2026, 9, 14)
-    assert row["price_usd_per_litre"] == pytest.approx(0.966)
+    assert row["price_usd_per_litre"] == 149.0 * fx
+
+
+def test_schema_rounds_price_and_fx_columns():
+    """normalize() itself never rounds (spec 6.1); schema.py's round_price_columns
+    and round_fx_columns are the only place the 4-decimal and 10-significant-digit
+    guarantees are applied, and only at write time."""
+    result = fetch_result(
+        "JP",
+        "costco-occ",
+        [station("Tomiya", [("Regular", "¥149")], timezone_name="Asia/Tokyo")],
+    )
+    out = normalize(result, fx_rates(), context())
+    row = out.rows.row(0, named=True)
+    assert row["fx_usd_per_unit"] != 0.00648340249  # unrounded coming out of normalize()
+
+    rounded = round_fx_columns(round_price_columns(out.rows))
+    row = rounded.row(0, named=True)
+    assert row["price_local_per_litre"] == 149.0
+    assert row["fx_usd_per_unit"] == 0.00648340249
+    assert row["price_usd_per_litre"] == 0.966
 
 
 def test_missing_fx_row_leaves_the_usd_columns_null():
@@ -444,6 +476,36 @@ def test_grade_conflict_keeps_the_higher_priority_label():
     conflicts = [w for w in out.warnings if w.code == "grade_conflict"]
     assert len(conflicts) == 1
     assert conflicts[0].detail == "AU-109:regular:E10"
+
+
+def test_grade_conflict_resolves_before_the_loser_could_be_saved_by_bounds():
+    """spec 7.0: grade mapping and the conflict rule (step 3) run before unit
+    conversion and bounds (step 4). Unleaded 91 (priority 2, $5.999) is out of
+    AU's AUD/L bounds (1.2-3.4); E10 (priority 1, $2.127) is in bounds. If bounds
+    ran first, the out-of-bounds Unleaded 91 would already be gone by the time
+    priority is compared, and E10 would win the "regular" slot uncontested, with
+    neither a grade_conflict nor a no_regular warning. In the correct order, the
+    conflict is resolved on both raw entries first - Unleaded 91 wins on priority
+    and is then dropped by bounds, leaving E10 demoted to "other" with both
+    warnings recorded."""
+    result = fetch_result(
+        "AU",
+        "costco-occ",
+        [
+            station(
+                "109",
+                [("E10", "$2.127"), ("Unleaded 91", "$5.999")],
+                timezone_name="Australia/Sydney",
+            )
+        ],
+    )
+    out = normalize(result, fx_rates(), context())
+    got = dict(zip(out.rows["grade_raw"], out.rows["grade"], strict=True))
+    assert got == {"E10": "other"}
+    assert reasons(out.drops) == ["out_of_bounds"]
+    assert codes(out.warnings) == ["grade_conflict", "no_regular"]
+    assert out.warnings[0].detail == "AU-109:regular:E10"
+    assert out.warnings[1].detail == "109"
 
 
 # --- source filters (spec 7.0 step 1) ----------------------------------------

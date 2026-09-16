@@ -308,15 +308,15 @@ def normalize(result: FetchResult, fx: FxRates, ctx: CaptureContext) -> Normaliz
                     "price": item["price"],
                     "price_unit": unit,
                     "currency": currency,
-                    "price_local_per_litre": round(litre, 4),
-                    "fx_usd_per_unit": (
-                        None if fx_usd_per_unit is None else round_significant(fx_usd_per_unit, 10)
-                    ),
+                    # Unrounded intermediates: schema.py's round_price_columns and
+                    # round_fx_columns are the only place rounding happens (spec 6.1).
+                    "price_local_per_litre": litre,
+                    "fx_usd_per_unit": fx_usd_per_unit,
                     "fx_rate_date": fx_rate_date,
                     "fx_source": fx_source,
                     "fx_fetched_at_utc": fx_fetched_at,
-                    "price_usd_per_litre": (None if usd_litre is None else round(usd_litre, 4)),
-                    "price_usd_per_gallon": (None if usd_gallon is None else round(usd_gallon, 4)),
+                    "price_usd_per_litre": usd_litre,
+                    "price_usd_per_gallon": usd_gallon,
                 }
             )
 
