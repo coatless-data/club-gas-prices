@@ -238,3 +238,73 @@ def ids_in_url(url: str) -> list[str]:
     _, _, query = url.partition("warehouseid=")
     query = query.split("&", 1)[0]
     return [part for part in query.split("_") if part]
+
+
+# --------------------------------------------------------------------------- ecom-api
+
+
+@dataclass(frozen=True)
+class EcomWarehouse:
+    warehouse_id: str
+    country: str
+    name: str
+    sub_type: str | None
+    line1: str | None
+    city: str | None
+    territory: str | None
+    postal_code: str | None
+    lat: float | None
+    lon: float | None
+    timezone: str | None
+    opening_date: date | None
+    has_gas: bool
+
+
+def parse_ecom(response: RawResponse | None) -> dict[str, EcomWarehouse] | None:
+    """Return the warehouse index, or ``None`` when step 1 is unusable."""
+    if response is None or response.error or response.status != 200:
+        return None
+    try:
+        payload = json.loads(response.body.decode("utf-8", "replace"))
+        warehouses = payload["warehouses"]
+    except (json.JSONDecodeError, KeyError, TypeError, UnicodeError):
+        return None
+    if not isinstance(warehouses, list):
+        return None
+    index: dict[str, EcomWarehouse] = {}
+    for item in warehouses:
+        if not isinstance(item, dict):
+            continue
+        warehouse_id = _clean(item.get("warehouseId"))
+        if warehouse_id is None:
+            continue
+        address = item.get("address") or {}
+        names = item.get("name") or []
+        services = item.get("services") or []
+        index[warehouse_id] = EcomWarehouse(
+            warehouse_id=warehouse_id,
+            country=_clean(address.get("countryName")) or "",
+            name=_clean(names[0].get("value")) if names else warehouse_id,
+            sub_type=_clean((item.get("subType") or {}).get("code")),
+            line1=_clean(address.get("line1")),
+            city=_clean(address.get("city")),
+            territory=_clean(address.get("territory")),
+            postal_code=_clean(address.get("postalCode")),
+            lat=_as_float(address.get("latitude")),
+            lon=_as_float(address.get("longitude")),
+            timezone=_clean(item.get("timeZone")),
+            opening_date=_iso_date(item.get("openingDate")),
+            has_gas=any(_clean(s.get("code")) == "gas" for s in services if isinstance(s, dict)),
+        )
+    return index
+
+
+def ecom_state(index: dict[str, EcomWarehouse] | None, warehouse_id: str) -> str:
+    if index is None:
+        return "unavailable"
+    warehouse = index.get(warehouse_id)
+    if warehouse is None:
+        return "absent"
+    if warehouse.country == COUNTRY and warehouse.has_gas:
+        return "gas"
+    return "no_gas"

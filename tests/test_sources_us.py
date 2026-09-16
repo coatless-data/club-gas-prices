@@ -314,3 +314,37 @@ def test_parse_price_batch_accepts_json_served_as_text_html():
     assert parsed["1364"] == {"premium": "4.629", "regular": "3.999"}
     assert parsed["120"] == {"premium": "3.829"}
     assert parsed["140"]["clear"] == "5.699"
+
+
+# --------------------------------------------------------------------------- ecom state
+
+
+def test_ecom_state_classification():
+    index = us.parse_ecom(ecom_ok())
+    assert us.ecom_state(index, "1364") == "gas"
+    assert us.ecom_state(index, "335") == "gas"
+    assert us.ecom_state(index, "120") == "no_gas"
+    assert us.ecom_state(index, "1324") == "no_gas"
+    assert us.ecom_state(index, "1680") == "absent"
+    assert us.ecom_state(None, "1364") == "unavailable"
+
+
+def test_parse_ecom_reads_the_fields_the_spec_uses():
+    index = us.parse_ecom(ecom_ok())
+    kona = index["140"]
+    assert kona.name == "Kona"
+    assert kona.city == "KAILUA KONA"
+    assert kona.territory == "HI"
+    assert kona.postal_code == "96740-2630"
+    assert kona.timezone == "Pacific/Honolulu"
+    assert kona.lat == pytest.approx(19.68545677)
+    assert index["1838"].opening_date == date(2026, 10, 2)
+    assert index["729"].sub_type == "Business Center"
+    assert index["1324"].country == "CA"
+
+
+def test_parse_ecom_returns_none_for_a_failed_step_one():
+    assert us.parse_ecom(ecom_failed()) is None
+    assert us.parse_ecom(response("shared/01-ecom-api", "u", body=b"", status=401)) is None
+    assert us.parse_ecom(response("shared/01-ecom-api", "u", body=b"<html>")) is None
+    assert us.parse_ecom(None) is None
