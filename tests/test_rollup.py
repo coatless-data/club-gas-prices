@@ -467,3 +467,139 @@ def test_full_rebuild_recomputes_merged_captures_to_match_the_rebuilt_captures_f
         "2026-08-31T1817Z",
         "2026-09-15T1817Z",
     ]
+
+
+def _close_both_months_of_2026(store, cfg, tmp_path):
+    _seed_august(store, tmp_path)
+    seed_month(
+        store,
+        "2026-09",
+        {"2026-09-15": _us_rows("2026-09-15T1817Z", 4.099)},
+        captures={
+            "2026-09-15T1817Z": {
+                "status": _status("2026-09-15T1817Z"),
+                "rows_by_capture_date": {"2026-09-15": 2},
+            }
+        },
+        work=tmp_path / "seed-09",
+    )
+    close_periods(
+        store,
+        cfg,
+        now=datetime(2026, 10, 1, 3, 17, tzinfo=UTC),
+        issues=RecordingIssues(),
+    )
+
+
+def test_year_close_creates_the_release_first_and_the_manifest_last(tmp_path):
+    store = RecordingStore(open_store(f"local:{tmp_path / 'releases'}"))
+    cfg = stub_config(tmp_path)
+    _close_both_months_of_2026(store, cfg, tmp_path)
+    store.log.clear()
+
+    result = close_periods(
+        store,
+        cfg,
+        now=datetime(2027, 1, 5, 3, 17, tzinfo=UTC),
+        issues=RecordingIssues(),
+    )
+
+    assert result.closed_years == ["2026"]
+    assert store.get_release("data-2026").prerelease is False
+    names = {a.name for a in store.list_assets("data-2026")}
+    assert {
+        "costco-gas-2026.parquet",
+        "costco-gas-2026.csv.gz",
+        "costco-gas-2026-captures.parquet",
+        "manifest-2026.json",
+    } <= names
+    caps = pl.read_parquet(
+        store.download("data-2026", "costco-gas-2026-captures.parquet", tmp_path / "y.parquet")
+    )
+    assert caps.height == 6
+    assert store.log.index("ensure_release:data-2026") < store.log.index(
+        "replace_atomic:data-2026:costco-gas-2026.parquet"
+    )
+    assert store.log.index("replace_atomic:data-2026:manifest-2026.json") == max(
+        i for i, entry in enumerate(store.log) if entry.startswith("replace_atomic:data-2026:")
+    )
+
+
+def test_year_close_does_nothing_when_the_month_shas_already_match(tmp_path):
+    store = open_store(f"local:{tmp_path / 'releases'}")
+    cfg = stub_config(tmp_path)
+    _close_both_months_of_2026(store, cfg, tmp_path)
+    now = datetime(2027, 1, 5, 3, 17, tzinfo=UTC)
+    close_periods(store, cfg, now=now, issues=RecordingIssues())
+
+    again = close_periods(store, cfg, now=now, issues=RecordingIssues())
+
+    assert again.closed_years == []
+
+
+def test_year_close_is_skipped_while_a_month_is_blocked(tmp_path):
+    store = open_store(f"local:{tmp_path / 'releases'}")
+    cfg = stub_config(tmp_path)
+    _seed_august(store, tmp_path)
+    close_periods(
+        store,
+        cfg,
+        now=datetime(2026, 9, 1, 3, 17, tzinfo=UTC),
+        issues=RecordingIssues(),
+    )
+    seed_month(
+        store,
+        "2026-09",
+        {"2026-09-15": _us_rows("2026-09-15T1817Z", 4.099)},
+        captures={
+            "2026-09-15T1817Z": {
+                "status": _status("2026-09-15T1817Z"),
+                "rows_by_capture_date": {"2026-09-15": 2},
+            }
+        },
+        orphan_bundles=["capture-2026-09-16T1817Z.tar.gz"],
+        work=tmp_path / "seed-09",
+    )
+
+    result = close_periods(
+        store,
+        cfg,
+        now=datetime(2027, 1, 5, 3, 17, tzinfo=UTC),
+        issues=RecordingIssues(),
+    )
+
+    assert result.blocked_months == ["2026-09"]
+    assert result.closed_years == []
+    assert store.get_release("data-2026") is None
+
+
+def test_rebuild_current_flag_runs_without_a_close_and_restores_latest(tmp_path):
+    store = open_store(f"local:{tmp_path / 'releases'}")
+    cfg = stub_config(tmp_path)
+    store.ensure_release("current", "Current", "", False, "false")
+    seed_month(
+        store,
+        "2026-09",
+        {"2026-09-15": _us_rows("2026-09-15T1817Z", 4.099)},
+        captures={
+            "2026-09-15T1817Z": {
+                "status": _status("2026-09-15T1817Z"),
+                "rows_by_capture_date": {"2026-09-15": 2},
+            }
+        },
+        work=tmp_path / "seed-09",
+    )
+
+    result = close_periods(
+        store,
+        cfg,
+        now=datetime(2026, 9, 15, 19, 0, tzinfo=UTC),
+        rebuild_current=True,
+        issues=RecordingIssues(),
+    )
+
+    assert result.closed_months == []
+    assert result.rebuilt_current is True
+    assert store.get_release("current").is_latest is True
+    names = {a.name for a in store.list_assets("current")}
+    assert "costco-gas-all.parquet" in names and "manifest.json" in names

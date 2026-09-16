@@ -598,5 +598,96 @@ def _refresh_current_periods(store, *, token: str) -> None:
         store.replace_atomic("current", path, "manifest.json", token)
 
 
+def _year_body(year: str, months: list[str], cfg) -> str:
+    listed = "\n".join(f"- `{tag}`" for tag in months)
+    return (
+        f"# Costco gas prices {year}\n\n"
+        f"Concatenated from the closed month releases:\n\n{listed}\n\n"
+        f"- `costco-gas-{year}.parquet`, `costco-gas-{year}.csv.gz` — daily grain\n"
+        f"- `costco-gas-{year}-captures.parquet` — capture grain\n"
+        f"- `manifest-{year}.json` — the SHA-256 of each input month file\n\n"
+        f"Schema: {SCHEMA_URL}\n\n{cfg.site.notice}\n"
+    )
+
+
 def _close_years(store, cfg, *, now: datetime, token: str) -> list[str]:
-    return []
+    releases = {r.tag: r for r in store.list_releases()}
+    by_year: dict[str, list[str]] = {}
+    for tag in month_tags(store):
+        by_year.setdefault(MONTH_TAG.match(tag).group(1), []).append(tag)
+    closed: list[str] = []
+    with tempfile.TemporaryDirectory() as td:
+        work = Path(td)
+        for year in sorted(by_year):
+            if int(year) >= now.year:
+                continue
+            months = sorted(by_year[year])
+            if any(releases[tag].prerelease for tag in months):
+                continue
+            shas: dict[str, dict[str, str]] = {}
+            paths: dict[str, Path] = {}
+            for tag in months:
+                month = tag.removeprefix("data-")
+                entry = {}
+                for name in (
+                    f"costco-gas-{month}.parquet",
+                    f"costco-gas-{month}-captures.parquet",
+                ):
+                    path = store.download(tag, name, work / name)
+                    entry[name] = sha256_file(path)
+                    paths[name] = path
+                shas[month] = entry
+            year_tag = f"data-{year}"
+            recorded = None
+            if year_tag in releases:
+                try:
+                    path = store.download(
+                        year_tag,
+                        f"manifest-{year}.json",
+                        work / f"manifest-{year}.json",
+                    )
+                    recorded = json.loads(path.read_text("utf-8")).get("months")
+                except AssetNotFound:
+                    recorded = None
+            if recorded == shas:
+                continue
+            store.ensure_release(
+                year_tag, f"Data {year}", _year_body(year, months, cfg), False, "false"
+            )
+            grain = pl.concat(
+                [
+                    pl.read_parquet(paths[f"costco-gas-{tag.removeprefix('data-')}.parquet"])
+                    for tag in months
+                ],
+                how="vertical",
+            )
+            caps = pl.concat(
+                [
+                    pl.read_parquet(
+                        paths[f"costco-gas-{tag.removeprefix('data-')}-captures.parquet"]
+                    )
+                    for tag in months
+                ],
+                how="vertical",
+            )
+            parquet = work / f"costco-gas-{year}.parquet"
+            schema.write_parquet(grain, parquet, sort_by=DAILY_SORT)
+            store.replace_atomic(year_tag, parquet, parquet.name, token)
+            csv_gz = work / f"costco-gas-{year}.csv.gz"
+            _write_csv_gz(grain.sort(DAILY_SORT), csv_gz)
+            store.replace_atomic(year_tag, csv_gz, csv_gz.name, token)
+            caps_path = work / f"costco-gas-{year}-captures.parquet"
+            schema.write_parquet(caps, caps_path, sort_by=CAPTURE_SORT)
+            store.replace_atomic(year_tag, caps_path, caps_path.name, token)
+            manifest = work / f"manifest-{year}.json"
+            manifest.write_text(
+                json.dumps(
+                    {"schema_version": 1, "year": year, "months": shas},
+                    indent=1,
+                    sort_keys=True,
+                ),
+                "utf-8",
+            )
+            store.replace_atomic(year_tag, manifest, manifest.name, token)
+            closed.append(year)
+    return closed
