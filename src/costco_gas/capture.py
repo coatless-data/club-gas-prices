@@ -11,7 +11,7 @@ import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlencode
 
@@ -66,7 +66,7 @@ class CaptureResult:
 
 def capture_id_for(now: datetime) -> str:
     """The capture id: UTC start time truncated to the minute (spec 6.1)."""
-    return now.astimezone(timezone.utc).strftime("%Y-%m-%dT%H%MZ")
+    return now.astimezone(UTC).strftime("%Y-%m-%dT%H%MZ")
 
 
 def github_output(key: str, value: str) -> None:
@@ -79,7 +79,7 @@ def github_output(key: str, value: str) -> None:
 
 
 def _utc_text(value: datetime) -> str:
-    return value.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return value.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def write_response(directory: Path, resp: RawResponse, name: str) -> None:
@@ -143,9 +143,7 @@ def _ecom_request(cfg: Config) -> tuple[str, str]:
     country = cfg.countries.get("US")
     base = getattr(country, "ecom_url", None) or ECOM_API_URL
     query = dict(getattr(country, "ecom_params", None) or ECOM_API_PARAMS)
-    identifier = (
-        getattr(country, "ecom_client_identifier", None) or ECOM_CLIENT_IDENTIFIER
-    )
+    identifier = getattr(country, "ecom_client_identifier", None) or ECOM_CLIENT_IDENTIFIER
     url = f"{base}?{urlencode(query)}" if query else base
     return url, identifier
 
@@ -155,9 +153,7 @@ def _fetch_ecom(client: Client, cfg: Config) -> tuple[RawResponse | None, dict]:
     url, identifier = _ecom_request(cfg)
     try:
         with client.budget("ecom-api", ECOM_BUDGET_S):
-            resp = client.request(
-                "shared/ecom-api", url, headers={"client-identifier": identifier}
-            )
+            resp = client.request("shared/ecom-api", url, headers={"client-identifier": identifier})
     except BudgetExceeded:
         return None, {"attempted": True, "http_status": None}
     return resp, {"attempted": True, "http_status": resp.status}
@@ -192,7 +188,7 @@ def run_capture(
 ) -> CaptureResult:
     """Collect every selected country into `out` (spec 5.3)."""
     out = Path(out)
-    started = now.astimezone(timezone.utc)
+    started = now.astimezone(UTC)
     capture_id = capture_id_for(started)
     github_output("capture_id", capture_id)
 
@@ -264,8 +260,7 @@ def run_capture(
     _write_bundle(out, capture_out, ctx, run, collected)
 
     all_failed = not any(
-        block.get("status") in ("ok", "degraded")
-        for block in status.get("countries", {}).values()
+        block.get("status") in ("ok", "degraded") for block in status.get("countries", {}).values()
     )
     github_output("all_failed", "true" if all_failed else "false")
     return CaptureResult(
@@ -316,11 +311,9 @@ def run_country(
         result = source.parse(responses, ctx)
         result.warnings.extend(extra)
         normalized = normalize(result, fx, ctx)
-    except Exception as exc:  # noqa: BLE001 - isolation is the point
+    except Exception as exc:  # isolation is the point
         failure = f"{type(exc).__name__}: {exc}"
-        (directory / "traceback.txt").write_text(
-            traceback.format_exc(), encoding="utf-8"
-        )
+        (directory / "traceback.txt").write_text(traceback.format_exc(), encoding="utf-8")
         result = None
         normalized = None
 
@@ -331,9 +324,7 @@ def run_country(
         )
 
     rows = normalized.rows if normalized else pl.DataFrame(schema=schema.ROW_SCHEMA)
-    stations = (
-        normalized.stations if normalized else pl.DataFrame(schema=schema.STATION_SCHEMA)
-    )
+    stations = normalized.stations if normalized else pl.DataFrame(schema=schema.STATION_SCHEMA)
     drops = normalized.drops if normalized else []
     schema.write_rows_csv_gz(rows, directory / "rows.csv.gz")
     stations.write_csv(directory / "stations.csv")
@@ -365,16 +356,17 @@ def _run_countries(
     if not countries:
         return blocks, collected
     try:
-        with client.budget("capture", CAPTURE_BUDGET_S):
-            with ThreadPoolExecutor(max_workers=len(countries)) as pool:
-                futures = {
-                    pool.submit(run_country, cc, client, ctx, fx, out, now): cc
-                    for cc in countries
-                }
-                for future in as_completed(futures):
-                    country = futures[future]
-                    collected[country] = future.result()
-                    blocks[country] = collected[country]["block"]
+        with (
+            client.budget("capture", CAPTURE_BUDGET_S),
+            ThreadPoolExecutor(max_workers=len(countries)) as pool,
+        ):
+            futures = {
+                pool.submit(run_country, cc, client, ctx, fx, out, now): cc for cc in countries
+            }
+            for future in as_completed(futures):
+                country = futures[future]
+                collected[country] = future.result()
+                blocks[country] = collected[country]["block"]
     except BudgetExceeded:
         if not any(item.code == "deadline_exceeded" for item in warnings):
             warnings.append(Warning(code="deadline_exceeded"))
