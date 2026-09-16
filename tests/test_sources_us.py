@@ -746,3 +746,28 @@ def test_budget_exhaustion_is_recorded_and_triggers_the_fallback():
     assert "US/02-gasprices-001" in warning_details(result, "deadline_exceeded")
     assert "US/03-lookup-us" in [r.key for r in responses]
     assert result.errors == []
+
+
+# --------------------------------------------------------------------------- protocol
+
+
+def test_us_source_is_wired_to_the_module_functions():
+    source = us.UsSource()
+    assert source.country == "US"
+    ctx = make_ctx(ecom=ecom_ok(), force_fallback={"US"})
+    client = FakeClient(fallback_responder)
+    responses = source.fetch(client, ctx)
+    result = source.parse(responses, ctx)
+    assert result.country == "US"
+    assert result.requests == len(responses) == 2
+    assert result.source == "costco-ca-lookup-us"
+    assert len(result.stations) == 9
+
+
+def test_lazy_registry_resolves_us_without_touching_base():
+    assert SOURCES["US"].country == "US"
+    ctx = make_ctx(ecom=ecom_ok(), force_fallback={"US"})
+    client = FakeClient(fallback_responder)
+    result = SOURCES["US"].parse(SOURCES["US"].fetch(client, ctx), ctx)
+    assert result.country == "US"
+    assert result.source == "costco-ca-lookup-us"

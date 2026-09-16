@@ -741,3 +741,13 @@ def fetch_us(client, ctx: CaptureContext) -> list[RawResponse]:
             responses.append(_deadline_response(ctx, KEY_TOPUP.format(n=number), url))
             break
     return responses
+
+
+class UsSource:
+    country = COUNTRY
+
+    def fetch(self, client, ctx: CaptureContext) -> list[RawResponse]:
+        return fetch_us(client, ctx)
+
+    def parse(self, responses: list[RawResponse], ctx: CaptureContext) -> FetchResult:
+        return parse_us(responses, ctx)
