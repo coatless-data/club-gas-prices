@@ -12,8 +12,8 @@ from costco_gas.store import open_store
 
 NOW = datetime(2026, 10, 2, 3, 41, tzinfo=UTC)
 
-# Trimmed from docs/superpowers/research/2026-09-15/responses/us_ecom_warehouses.body.
-# 1838 is the highest US id and 1775 the highest Canadian id in that response.
+# Trimmed from a real warehouse-locator response captured on 2026-09-15, in which
+# 1838 is the highest US id and 1775 the highest Canadian id.
 ECOM_BODY = {
     "warehouses": [
         {
