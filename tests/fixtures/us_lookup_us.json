@@ -1,0 +1,263 @@
+
+[
+ false,
+ {
+  "stlocID": 1364,
+  "displayName": "1364",
+  "locationName": "Bradenton",
+  "address1": "805 LIGHTHOUSE DRIVE",
+  "city": "BRADENTON",
+  "state": "FL",
+  "country": "US",
+  "zipCode": "34212",
+  "openDate": "Aug 21, 2019",
+  "latitude": 27.495,
+  "longitude": -82.47,
+  "hasGasDepartment": true,
+  "gasStationHours": [
+   {
+    "title": "Mon-Fri. ",
+    "code": "open",
+    "time": "6:00am - 10:00pm"
+   },
+   {
+    "title": "Sat. ",
+    "code": "open",
+    "time": "6:00am - 8:30pm"
+   },
+   {
+    "title": "Sun. ",
+    "code": "open",
+    "time": "6:00am - 7:30pm"
+   }
+  ],
+  "gasPrices": {
+   "warehouseid": "1364",
+   "regular": "3.999",
+   "premium": "4.629",
+   "oid": {
+    "dao": "dao/gasprice"
+   }
+  }
+ },
+ {
+  "stlocID": 140,
+  "displayName": "140",
+  "locationName": "Kona",
+  "address1": "73-5600 MAIAU ST",
+  "city": "KAILUA KONA",
+  "state": "HI",
+  "country": "US",
+  "zipCode": "96740-2630",
+  "openDate": "Nov 22, 1993",
+  "latitude": 19.685,
+  "longitude": -156.017,
+  "hasGasDepartment": true,
+  "gasStationHours": [
+   {
+    "title": "Mon-Fri. ",
+    "code": "open",
+    "time": "4:30am - 10:00pm"
+   },
+   {
+    "title": "Sat. ",
+    "code": "open",
+    "time": "4:30am - 8:30pm"
+   },
+   {
+    "title": "Sun. ",
+    "code": "open",
+    "time": "4:30am - 7:30pm"
+   }
+  ],
+  "gasPrices": {
+   "warehouseid": "140",
+   "diesel": "6.899",
+   "regular": "4.899",
+   "premium": "5.699",
+   "clear": "5.699",
+   "oid": {
+    "dao": "dao/gasprice"
+   }
+  }
+ },
+ {
+  "stlocID": 335,
+  "displayName": "335",
+  "locationName": "Carolina",
+  "address1": "1185 AVE 65 INFANTERIA",
+  "city": "SAN JUAN",
+  "state": "PR",
+  "country": "US",
+  "zipCode": "00924-3403",
+  "openDate": "Nov 22, 2002",
+  "latitude": 18.4,
+  "longitude": -65.997,
+  "hasGasDepartment": true,
+  "gasStationHours": [
+   {
+    "title": "Mon-Fri. ",
+    "code": "open",
+    "time": "6:00am - 10:00pm"
+   },
+   {
+    "title": "Sat. ",
+    "code": "open",
+    "time": "6:00am - 8:30pm"
+   },
+   {
+    "title": "Sun. ",
+    "code": "open",
+    "time": "6:00am - 7:30pm"
+   }
+  ],
+  "gasPrices": {
+   "warehouseid": "335",
+   "regular": "1.097",
+   "premium": "1.267",
+   "oid": {
+    "dao": "dao/gasprice"
+   }
+  }
+ },
+ {
+  "stlocID": 1838,
+  "displayName": "1838",
+  "locationName": "Lees Summit",
+  "address1": "10 SE OLDHAM PARKWAY",
+  "city": "LEES SUMMIT",
+  "state": "MO",
+  "country": "US",
+  "zipCode": "64081-2986",
+  "openDate": "Oct 2, 2026",
+  "latitude": 38.901,
+  "longitude": -94.371,
+  "hasGasDepartment": true,
+  "gasStationHours": [
+   {
+    "title": "Mon-Fri. ",
+    "code": "close",
+    "time": "None"
+   },
+   {
+    "title": "Sat. ",
+    "code": "close",
+    "time": "None"
+   },
+   {
+    "title": "Sun. ",
+    "code": "close",
+    "time": "None"
+   }
+  ],
+  "gasPrices": {
+   "warehouseid": "1838",
+   "regular": "3.999",
+   "premium": "5.999",
+   "oid": {
+    "dao": "dao/gasprice"
+   }
+  }
+ },
+ {
+  "stlocID": 1680,
+  "displayName": "1680",
+  "locationName": "Camarillo",
+  "address1": "431 W. VENTURA BLVD",
+  "city": "CAMARILLO",
+  "state": "CA",
+  "country": "US",
+  "zipCode": "93010-9122",
+  "openDate": "Oct 30, 2026",
+  "latitude": 34.218,
+  "longitude": -119.081,
+  "hasGasDepartment": true,
+  "gasStationHours": [],
+  "gasPrices": {
+   "warehouseid": "1680",
+   "regular": "5.799",
+   "premium": "6.099",
+   "oid": {
+    "dao": "dao/gasprice"
+   }
+  }
+ },
+ {
+  "stlocID": 651,
+  "displayName": "651",
+  "locationName": "Orlando Business Centre",
+  "address1": "2101 WATERBRIDGE BLVD",
+  "city": "ORLANDO",
+  "state": "FL",
+  "country": "US",
+  "zipCode": "32837-9283",
+  "openDate": "Aug 26, 2016",
+  "latitude": 28.404,
+  "longitude": -81.406,
+  "hasGasDepartment": true,
+  "gasStationHours": [
+   {
+    "title": "Mon-Fri. ",
+    "code": "open",
+    "time": "6:00am - 10:00pm"
+   },
+   {
+    "title": "Sat. ",
+    "code": "open",
+    "time": "6:00am - 8:30pm"
+   },
+   {
+    "title": "Sun. ",
+    "code": "open",
+    "time": "6:00am - 7:30pm"
+   }
+  ],
+  "gasPrices": {
+   "warehouseid": "651",
+   "regular": "3.929",
+   "premium": "4.649",
+   "oid": {
+    "dao": "dao/gasprice"
+   }
+  }
+ },
+ {
+  "stlocID": 1,
+  "displayName": "1",
+  "locationName": "Seattle",
+  "address1": "4401 4TH AVE S",
+  "city": "SEATTLE",
+  "state": "WA",
+  "country": "US",
+  "zipCode": "98134-2311",
+  "openDate": "Sep 15, 1983",
+  "latitude": 47.565,
+  "longitude": -122.331,
+  "hasGasDepartment": true,
+  "gasStationHours": [
+   {
+    "title": "Mon-Fri. ",
+    "code": "open",
+    "time": "6:00am - 10:00pm"
+   },
+   {
+    "title": "Sat. ",
+    "code": "open",
+    "time": "6:00am - 8:30pm"
+   },
+   {
+    "title": "Sun. ",
+    "code": "open",
+    "time": "6:00am - 7:30pm"
+   }
+  ],
+  "gasPrices": {
+   "warehouseid": "1",
+   "regular": "5.399",
+   "premium": "5.899",
+   "oid": {
+    "dao": "dao/gasprice"
+   }
+  }
+ }
+]
