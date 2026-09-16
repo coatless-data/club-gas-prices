@@ -1,0 +1,240 @@
+"""United States source: ecom-api metadata + AjaxGetGasPricesService, costco.ca US fallback."""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+from datetime import UTC, date, datetime, timedelta
+from typing import Any
+from urllib.parse import urlencode
+
+import polars as pl
+
+from costco_gas.http import BudgetExceeded
+from costco_gas.sources.base import (
+    CaptureContext,
+    Error,
+    FetchResult,
+    RawPrice,
+    RawResponse,
+    RawStation,
+    Warning,
+)
+
+COUNTRY = "US"
+DEFAULT_BATCH_SIZE = 10
+DEFAULT_SEEN_WINDOW_DAYS = 30
+ECOM_SHARED_KEY = "ecom-api"
+PRICE_SOURCE = "costco-us-gasprices"
+LOOKUP_SOURCE = "costco-ca-lookup-us"
+
+DEFAULT_PRICE_URL = "https://www.costco.com/AjaxGetGasPricesService"
+DEFAULT_LOOKUP_URL = "https://www.costco.ca/AjaxWarehouseBrowseLookupView"
+DEFAULT_LOOKUP_PARAMS = {
+    "hasGas": "true",
+    "populateWarehouseDetails": "true",
+    "countryCode": "US",
+}
+
+KEY_PRICE = "US/02-gasprices-{n:03d}"
+KEY_LOOKUP = "US/03-lookup-us"
+KEY_TOPUP = "US/04-gasprices-fb-{n:03d}"
+
+NON_GRADE_KEYS = frozenset({"warehouseid", "oid"})
+LOOKUP_MONTHS = {
+    "Jan": 1,
+    "Feb": 2,
+    "Mar": 3,
+    "Apr": 4,
+    "May": 5,
+    "Jun": 6,
+    "Jul": 7,
+    "Aug": 8,
+    "Sep": 9,
+    "Oct": 10,
+    "Nov": 11,
+    "Dec": 12,
+}
+
+
+# --------------------------------------------------------------------------- helpers
+
+
+def _clean(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _as_float(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _iso_date(value: Any) -> date | None:
+    text = _clean(value)
+    if text is None:
+        return None
+    try:
+        return date.fromisoformat(text[:10])
+    except ValueError:
+        return None
+
+
+def lookup_open_date(value: Any) -> date | None:
+    """Parse the costco.ca lookup's ``"Aug 23, 1995"`` opening dates."""
+    text = _clean(value)
+    if text is None:
+        return None
+    parts = text.replace(",", " ").split()
+    if len(parts) != 3 or parts[0][:3] not in LOOKUP_MONTHS:
+        return None
+    try:
+        return date(int(parts[2]), LOOKUP_MONTHS[parts[0][:3]], int(parts[1]))
+    except ValueError:
+        return None
+
+
+def _as_date(value: Any) -> date | None:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    return _iso_date(value)
+
+
+def _id_sort(warehouse_id: str) -> tuple[int, int, str]:
+    if warehouse_id.isdigit():
+        return (0, int(warehouse_id), "")
+    return (1, 0, warehouse_id)
+
+
+def _capture_start(ctx: CaptureContext) -> datetime:
+    """The capture start, recovered from ``capture_id`` so no module reads the clock."""
+    try:
+        return datetime.strptime(ctx.capture_id, "%Y-%m-%dT%H%MZ").replace(tzinfo=UTC)
+    except ValueError:
+        return datetime.combine(ctx.capture_date, datetime.min.time(), tzinfo=UTC)
+
+
+def _country_cfg(cfg: Any) -> Any:
+    countries = getattr(cfg, "countries", None) or {}
+    return countries.get(COUNTRY)
+
+
+def _str_params(params: Any) -> dict[str, str]:
+    if not isinstance(params, dict):
+        return {}
+    return {str(k): str(v) for k, v in params.items() if v is not None}
+
+
+def _with_query(url: str, params: dict[str, str]) -> str:
+    if not params:
+        return url
+    return url + ("&" if "?" in url else "?") + urlencode(params)
+
+
+def _positive_int(value: Any, default: int) -> int:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return default
+    return number if number > 0 else default
+
+
+def price_url(ctx: CaptureContext) -> str:
+    """``CountryConfig.url``: the AjaxGetGasPricesService endpoint, without a query."""
+    cfg = _country_cfg(ctx.fetch_config)
+    return _clean(getattr(cfg, "url", None)) or DEFAULT_PRICE_URL
+
+
+def price_params(ctx: CaptureContext) -> dict[str, str]:
+    """``CountryConfig.params``: query parameters only, flattened (US ships none)."""
+    cfg = _country_cfg(ctx.fetch_config)
+    return _str_params(getattr(cfg, "params", None))
+
+
+def batch_url(ctx: CaptureContext, batch: list[str]) -> str:
+    """The price-service URL for one batch: ``warehouseid`` first, config params after."""
+    return _with_query(price_url(ctx), {"warehouseid": "_".join(batch), **price_params(ctx)})
+
+
+def lookup_url(ctx: CaptureContext) -> str:
+    """``CountryConfig.fallback_url`` + ``fallback_params``: the costco.ca US lookup."""
+    cfg = _country_cfg(ctx.fetch_config)
+    base = _clean(getattr(cfg, "fallback_url", None))
+    if base is None:
+        return _with_query(DEFAULT_LOOKUP_URL, DEFAULT_LOOKUP_PARAMS)
+    return _with_query(base, _str_params(getattr(cfg, "fallback_params", None)))
+
+
+def batch_size(ctx: CaptureContext) -> int:
+    """``CountryConfig.batch_size`` (10), the protocol limit of the price service."""
+    cfg = _country_cfg(ctx.fetch_config)
+    return _positive_int(getattr(cfg, "batch_size", None), DEFAULT_BATCH_SIZE)
+
+
+def seen_window_days(ctx: CaptureContext) -> int:
+    """``CountryConfig.seen_within_days`` (30): how far back a cached id is still polled."""
+    cfg = _country_cfg(ctx.fetch_config)
+    return _positive_int(getattr(cfg, "seen_within_days", None), DEFAULT_SEEN_WINDOW_DAYS)
+
+
+def _timezone_for_region(ctx: CaptureContext, region: str | None) -> str | None:
+    """The country's region table, always through ``CountryConfig.timezone_for_region``."""
+    cfg = _country_cfg(ctx.interp_config)
+    resolver = getattr(cfg, "timezone_for_region", None)
+    if resolver is None:
+        return None
+    return _clean(resolver(region))
+
+
+def batches(ids: list[str], size: int = DEFAULT_BATCH_SIZE) -> list[list[str]]:
+    """Split the polled IDs into request batches.
+
+    The service processes ONLY the first 10 IDs of a request (verified on
+    2026-09-15: 654 IDs in one call still returned 10 entries), so the batch
+    size is a hard protocol limit, not a politeness knob.
+    """
+    return [ids[i : i + size] for i in range(0, len(ids), size)]
+
+
+# --------------------------------------------------------------------------- responses
+
+
+def parse_price_batch(response: RawResponse | None) -> dict[str, dict[str, str]] | None:
+    """Parse one AjaxGetGasPricesService body, or ``None`` when the batch failed.
+
+    The endpoint serves valid JSON with ``Content-Type: text/html;charset=UTF-8``,
+    so the content type is never consulted here or anywhere else.
+    """
+    if response is None or response.error or response.status != 200:
+        return None
+    text = response.body.decode("utf-8", "replace").lstrip("﻿ \t\r\n")
+    if not text.startswith("{"):
+        return None
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict) or "errorMessage" in payload:
+        return None
+    parsed: dict[str, dict[str, str]] = {}
+    for warehouse_id, grades in payload.items():
+        if not isinstance(grades, dict):
+            continue
+        parsed[str(warehouse_id)] = {
+            str(k): str(v)
+            for k, v in grades.items()
+            if str(k).lower() not in NON_GRADE_KEYS and isinstance(v, (str, int, float))
+        }
+    return parsed
+
+
+def ids_in_url(url: str) -> list[str]:
+    _, _, query = url.partition("warehouseid=")
+    query = query.split("&", 1)[0]
+    return [part for part in query.split("_") if part]
