@@ -1,0 +1,41 @@
+name: Discover
+
+on:
+  # The schedule stays commented out until the pre-launch checks pass.
+  # Uncommenting the two lines below runs discovery on the 2nd of each month.
+  # schedule:
+  #   - cron: "41 3 2 * *"
+  workflow_dispatch:
+
+concurrency:
+  group: costco-gas-data
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  discover:
+    name: Discover
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+      GH_TOKEN: ${{ github.token }}
+      CONTACT_EMAIL: ${{ vars.CONTACT_EMAIL }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          enable-cache: true
+
+      - name: Install the project
+        run: uv sync --locked
+
+      - name: Discover US station IDs
+        timeout-minutes: 15
+        run: uv run costco-gas discover

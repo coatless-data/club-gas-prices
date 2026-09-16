@@ -256,3 +256,18 @@ def test_render_verify_script_rejects_a_missing_asset(tmp_path):
     done = run_verify(tmp_path)
     assert done.returncode != 0
     assert "stations.csv is missing" in done.stderr
+
+
+def test_discover_conventions_and_settings():
+    assert_conventions("discover.yml")
+    text = read("discover.yml")
+    assert text.startswith("name: Discover\n")
+    assert SERIAL_CONCURRENCY in text
+    assert "permissions:\n  contents: read\n  issues: write\n" in text
+    assert '- cron: "41 3 2 * *"' in text
+    assert "    timeout-minutes: 20\n" in text
+    # `discover` takes only an optional --root, which defaults to the working
+    # directory, so the workflow passes no flag at all.
+    assert "run: uv run costco-gas discover\n" in text
+    # discover only reads releases, so it must never claim the writer flag.
+    assert "COSTCO_GAS_WRITER" not in text
