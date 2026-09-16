@@ -205,3 +205,147 @@ def test_candidate_range_runs_to_the_highest_id_plus_200(tmp_path):
     for polled in (140, 1680, 1765, 1772, 1793):
         assert polled not in ids
     assert len(ids) == 2038 - 6  # 5 polled ids plus the Canadian 1775
+
+
+from costco_gas.config import Bounds  # noqa: E402
+from costco_gas.discover import US_PRICE_URL, discover  # noqa: E402
+from costco_gas.issues import Issues  # noqa: E402
+from costco_gas.sources.base import RawResponse  # noqa: E402
+
+FIXTURE = Path(__file__).resolve().parent / "fixtures" / "us_gasprices_discover.json"
+
+
+class FakeClient:
+    """Stands in for http.Client: no network, no pacing, records every batch."""
+
+    def __init__(self, prices: dict[str, dict], abandon_after: int | None = None):
+        self.prices = prices
+        self.abandon_after = abandon_after
+        self.requested: list[list[int]] = []
+
+    def abandoned(self, url: str) -> bool:
+        return self.abandon_after is not None and len(self.requested) >= self.abandon_after
+
+    def request(
+        self, key, url, *, profile="default", headers=None, expect_json=True
+    ) -> RawResponse:
+        ids = url.split("warehouseid=", 1)[1].split("_")
+        self.requested.append([int(value) for value in ids])
+        body = {value: self.prices.get(value, {}) for value in ids}
+        return RawResponse(
+            key=key,
+            url=url,
+            status=200,
+            # The endpoint really does serve JSON as text/html; never use this
+            # header to decide whether the body is JSON.
+            headers={"Content-Type": "text/html;charset=UTF-8"},
+            received_at_utc=NOW,
+            elapsed_ms=120,
+            body=json.dumps(body).encode(),
+            error=None,
+        )
+
+
+def _cfg() -> SimpleNamespace:
+    """The shape config.load_config produces: bounds keyed by price unit, each
+    a Bounds dataclass with .for_grade()."""
+    return SimpleNamespace(
+        countries={
+            "US": SimpleNamespace(
+                url=US_PRICE_URL,
+                price_unit="USD/gal",
+                bounds={
+                    "USD/gal": Bounds(min=2.00, max=11.00, grade_overrides={}),
+                    "USD/L": Bounds(min=0.50, max=2.50, grade_overrides={}),
+                },
+            )
+        },
+        us_extra_ids=pl.DataFrame(
+            {"source_station_id": ["1680", "1765", "1772"], "city": ["a", "b", "c"]}
+        ),
+    )
+
+
+def test_sweep_reports_only_plausible_new_stations(tmp_path):
+    store = _seed(
+        tmp_path,
+        entries={"2026-10-01T0617Z": _entry("2026-10-01T0617Z", "ok")},
+        bundles=["2026-10-01T0617Z"],
+    )
+    client = FakeClient(json.loads(FIXTURE.read_text(encoding="utf-8")))
+    issues = Issues(None, None)
+
+    result = discover(store, client, _cfg(), issues, now=NOW)
+
+    assert result.skipped_reason is None
+    assert [c["warehouse_id"] for c in result.candidates] == ["1364"]
+    assert result.candidates[0]["prices"] == {"premium": "4.629", "regular": "3.999"}
+    assert "ensure_open: US station discovery 2026-10" in issues.actions
+
+
+def test_sweep_batches_by_ten_and_skips_excluded_ids(tmp_path):
+    store = _seed(
+        tmp_path,
+        entries={"2026-10-01T0617Z": _entry("2026-10-01T0617Z", "ok")},
+        bundles=["2026-10-01T0617Z"],
+    )
+    client = FakeClient(json.loads(FIXTURE.read_text(encoding="utf-8")))
+    discover(store, client, _cfg(), Issues(None, None), now=NOW)
+
+    assert all(len(batch) <= 10 for batch in client.requested)
+    swept = [value for batch in client.requested for value in batch]
+    assert swept[0] == 1
+    assert max(swept) == 2038
+    assert 1775 not in swept
+    for polled in (140, 1680, 1765, 1772, 1793):
+        assert polled not in swept
+
+
+def test_no_usable_bundle_warns_and_reports_nothing(tmp_path, capsys):
+    store = _seed(
+        tmp_path,
+        entries={"2026-10-01T1817Z": _entry("2026-10-01T1817Z", "failed")},
+        bundles=["2026-10-01T1817Z"],
+    )
+    client = FakeClient({})
+    issues = Issues(None, None)
+
+    result = discover(store, client, _cfg(), issues, now=NOW)
+
+    assert result.candidates == []
+    assert result.skipped_reason == "no_bundle"
+    assert client.requested == []
+    assert issues.actions == []
+    assert "::warning::" in capsys.readouterr().out
+
+
+def test_no_candidates_opens_no_issue(tmp_path):
+    store = _seed(
+        tmp_path,
+        entries={"2026-10-01T0617Z": _entry("2026-10-01T0617Z", "ok")},
+        bundles=["2026-10-01T0617Z"],
+    )
+    # Only the placeholders and the out-of-range prices answer.
+    prices = {
+        key: value
+        for key, value in json.loads(FIXTURE.read_text(encoding="utf-8")).items()
+        if key in ("120", "335", "1090", "1838")
+    }
+    issues = Issues(None, None)
+    result = discover(store, client := FakeClient(prices), _cfg(), issues, now=NOW)
+    assert result.candidates == []
+    assert issues.actions == []
+    assert client.requested  # the sweep still ran
+
+
+def test_sweep_stops_when_the_host_is_abandoned(tmp_path, capsys):
+    store = _seed(
+        tmp_path,
+        entries={"2026-10-01T0617Z": _entry("2026-10-01T0617Z", "ok")},
+        bundles=["2026-10-01T0617Z"],
+    )
+    client = FakeClient(json.loads(FIXTURE.read_text(encoding="utf-8")), abandon_after=3)
+    result = discover(store, client, _cfg(), Issues(None, None), now=NOW)
+    assert len(client.requested) == 3
+    assert result.candidates == []
+    assert "abandoned" in capsys.readouterr().out
