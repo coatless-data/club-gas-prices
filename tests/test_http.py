@@ -1,0 +1,393 @@
+"""The shared HTTP client. No test here touches the network."""
+
+from __future__ import annotations
+
+import threading
+import time
+from pathlib import Path
+
+import httpx
+import pytest
+
+from costco_gas.config import HttpConfig, TimeoutProfile
+from costco_gas.http import BudgetExceeded, Client
+
+FIXTURES = Path(__file__).resolve().parent / "fixtures"
+US_BATCH = FIXTURES / "us" / "gasprices_batch.json"
+AKAMAI = FIXTURES / "blocks" / "akamai_access_denied.html"
+
+# Real policy, minus the waiting, so the suite stays fast.
+FAST = HttpConfig(backoff_seconds=(0.0, 0.0), min_interval_seconds=0.0)
+
+PRICE_URL = "https://www.costco.com/AjaxGetGasPricesService?warehouseid=1364"
+ECOM_URL = "https://ecom-api.costco.com/core/warehouse-locator/v1/warehouses.json"
+FX_URL = "https://api.frankfurter.dev/v2/rates?base=USD"
+
+
+def json_ok(request: httpx.Request) -> httpx.Response:
+    """Costco's legacy endpoints serve JSON as text/html. That is normal."""
+    return httpx.Response(
+        200,
+        content=US_BATCH.read_bytes(),
+        headers={"Content-Type": "text/html;charset=UTF-8"},
+    )
+
+
+def test_costco_hosts_get_the_browser_ua_and_x_project(monkeypatch):
+    monkeypatch.delenv("CONTACT_EMAIL", raising=False)
+    seen: dict[str, dict[str, str]] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen[str(request.url)] = dict(request.headers)
+        return json_ok(request)
+
+    with Client(FAST, transport=httpx.MockTransport(handler)) as client:
+        client.request("US/01-gasprices", PRICE_URL)
+        client.request("fx/01-frankfurter", FX_URL)
+
+    costco = seen[PRICE_URL]
+    assert costco["user-agent"] == FAST.costco_user_agent
+    assert costco["user-agent"].endswith("Safari/537.36")
+    # Appending a project token to the UA made this host reset the connection.
+    assert "costco-gas-prices" not in costco["user-agent"]
+    assert costco["x-project"] == FAST.x_project
+    assert costco["accept"] == "application/json"
+    assert costco["accept-encoding"] == "gzip"
+    assert "from" not in costco
+
+    other = seen[FX_URL]
+    assert other["user-agent"] == FAST.project_user_agent
+    assert "x-project" not in other
+    assert other["accept"] == "application/json"
+
+
+def test_caller_headers_are_passed_through(monkeypatch):
+    monkeypatch.delenv("CONTACT_EMAIL", raising=False)
+    seen: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.update(dict(request.headers))
+        return json_ok(request)
+
+    with Client(FAST, transport=httpx.MockTransport(handler)) as client:
+        client.request(
+            "shared/ecom-api",
+            ECOM_URL,
+            headers={"client-identifier": "7c71124c-7bf1-44db-bc9d-498584cd66e5"},
+        )
+
+    assert seen["client-identifier"] == "7c71124c-7bf1-44db-bc9d-498584cd66e5"
+    # ecom-api.costco.com is a Costco host by suffix.
+    assert seen["user-agent"] == FAST.costco_user_agent
+
+
+def test_from_header_follows_contact_email(monkeypatch):
+    seen: list[dict[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(dict(request.headers))
+        return json_ok(request)
+
+    monkeypatch.setenv("CONTACT_EMAIL", "ops@example.org")
+    with Client(FAST, transport=httpx.MockTransport(handler)) as client:
+        client.request("US/01", PRICE_URL)
+    assert seen[-1]["from"] == "ops@example.org"
+
+    monkeypatch.setenv("CONTACT_EMAIL", "")
+    with Client(FAST, transport=httpx.MockTransport(handler)) as client:
+        client.request("US/01", PRICE_URL)
+    assert "from" not in seen[-1]
+
+
+def test_retries_5xx_429_and_timeouts_but_not_other_4xx():
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        host = request.url.host
+        calls.append(host)
+        if host == "five.test":
+            return httpx.Response(503, content=b"unavailable")
+        if host == "slow.test":
+            raise httpx.ReadTimeout("read timeout", request=request)
+        if host == "rate.test":
+            return httpx.Response(429, content=b"slow down")
+        return httpx.Response(404, content=b"missing")
+
+    with Client(FAST, transport=httpx.MockTransport(handler)) as client:
+        five = client.request("k", "https://five.test/x")
+        slow = client.request("k", "https://slow.test/x")
+        rate = client.request("k", "https://rate.test/x")
+        gone = client.request("k", "https://gone.test/x")
+
+    assert five.status == 503
+    assert calls.count("five.test") == 3
+    assert slow.status is None
+    assert slow.error is not None and "timeout" in slow.error
+    assert calls.count("slow.test") == 3
+    assert rate.status == 429
+    assert calls.count("rate.test") == 3
+    assert gone.status == 404
+    assert calls.count("gone.test") == 1
+
+
+def test_connection_errors_are_retried_and_then_reported():
+    calls: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(1)
+        raise httpx.ConnectError("connection reset", request=request)
+
+    with Client(FAST, transport=httpx.MockTransport(handler)) as client:
+        result = client.request("US/01", PRICE_URL)
+
+    assert len(calls) == 3
+    assert result.status is None
+    assert "ConnectError" in result.error
+    assert result.body == b""
+    # A reset connection is not a block signal; only 403/429, cpr_chlge,
+    # timeouts and HTML-where-JSON-was-expected are.
+    assert client.signals.get("www.costco.com", 0) == 0
+
+
+def test_headers_that_arrive_after_30s_need_the_bulk_profile():
+    """read covers the wait for response headers, so the profile decides."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        read = request.extensions["timeout"]["read"]
+        if read < 30.0:
+            raise httpx.ReadTimeout("headers after 30 s", request=request)
+        return httpx.Response(200, content=b"[]")
+
+    url = "https://www.costco.ca/AjaxWarehouseBrowseLookupView?countryCode=US"
+    with Client(FAST, transport=httpx.MockTransport(handler)) as client:
+        bulk = client.request("US/00-lookup", url, profile="bulk")
+        default = client.request("US/00-lookup", url)
+
+    assert bulk.status == 200
+    assert default.status is None
+    assert "timeout" in default.error
+
+
+def test_total_deadline_aborts_a_trickled_body():
+    cfg = HttpConfig(
+        backoff_seconds=(0.0, 0.0),
+        min_interval_seconds=0.0,
+        profiles={"default": TimeoutProfile(connect=1.0, read=5.0, total=0.3)},
+    )
+
+    def trickle():
+        for _ in range(40):
+            time.sleep(0.02)
+            yield b"x"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=trickle())
+
+    with Client(cfg, transport=httpx.MockTransport(handler)) as client:
+        result = client.request("k", "https://trickle.test/x")
+
+    assert result.status is None
+    assert result.error == "total_timeout"
+
+
+def test_budget_refuses_before_a_request_is_sent():
+    calls: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(1)
+        return json_ok(request)
+
+    with (
+        Client(FAST, transport=httpx.MockTransport(handler)) as client,
+        pytest.raises(BudgetExceeded, match="ecom-api"),
+        client.budget("ecom-api", 0.0),
+    ):
+        client.request("shared/ecom-api", ECOM_URL)
+
+    assert calls == []
+
+
+def test_budget_aborts_an_in_flight_request():
+    def trickle():
+        for _ in range(40):
+            time.sleep(0.02)
+            yield b"x"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=trickle())
+
+    with Client(FAST, transport=httpx.MockTransport(handler)) as client:
+        started = time.monotonic()
+        with pytest.raises(BudgetExceeded, match="fx"), client.budget("fx", 0.15):
+            client.request("fx/01", "https://fx.test/rates")
+        assert time.monotonic() - started < 0.6
+
+
+def test_budget_ends_when_its_block_ends():
+    with Client(FAST, transport=httpx.MockTransport(json_ok)) as client:
+        with client.budget("fx", 0.0), pytest.raises(BudgetExceeded):
+            client.request("fx/01", "https://fx.test/rates")
+        # Outside the block the client works normally again.
+        assert client.request("US/01", PRICE_URL).status == 200
+
+
+def test_json_served_as_text_html_is_not_a_block_signal():
+    with Client(FAST, transport=httpx.MockTransport(json_ok)) as client:
+        result = client.request("US/01-gasprices", PRICE_URL)
+        assert result.status == 200
+        assert result.body.startswith(b'{"1090"')
+        assert client.signals.get("www.costco.com", 0) == 0
+        assert client.abandoned(PRICE_URL) is False
+
+
+def test_a_json_array_after_leading_crlf_is_not_a_block_signal():
+    """The costco.ca lookup body starts with \\r\\n before its JSON array."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=b'\r\n[false,{"stlocID":530}]',
+            headers={"Content-Type": "text/html;charset=UTF-8"},
+        )
+
+    url = "https://www.costco.ca/AjaxWarehouseBrowseLookupView?countryCode=CA"
+    with Client(FAST, transport=httpx.MockTransport(handler)) as client:
+        assert client.request("CA/01-lookup", url).status == 200
+        assert client.signals.get("www.costco.ca", 0) == 0
+
+
+def test_two_block_signals_abandon_the_host_for_every_thread():
+    calls: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(1)
+        return httpx.Response(
+            403,
+            content=AKAMAI.read_bytes(),
+            headers={"Content-Type": "text/html"},
+        )
+
+    with Client(FAST, transport=httpx.MockTransport(handler)) as client:
+        first = client.request("US/01", PRICE_URL)
+        assert first.status == 403
+        assert client.signals["www.costco.com"] == 1
+        assert client.abandoned(PRICE_URL) is False
+
+        client.request("US/02", PRICE_URL)
+        assert client.signals["www.costco.com"] == 2
+        assert client.abandoned(PRICE_URL) is True
+
+        result: dict[str, object] = {}
+
+        def from_another_thread() -> None:
+            result["response"] = client.request("US/03", PRICE_URL)
+
+        thread = threading.Thread(target=from_another_thread)
+        thread.start()
+        thread.join()
+
+    aborted = result["response"]
+    assert aborted.status is None
+    assert aborted.error == "host_abandoned"
+    assert aborted.body == b""
+    # 403 is not retried, and the abandoned request never reached the transport.
+    assert len(calls) == 2
+    # Another host is unaffected.
+    assert client.abandoned("https://www.costco.ca/x") is False
+
+
+def test_a_request_gives_at_most_one_block_signal():
+    def handler(request: httpx.Request) -> httpx.Response:
+        # 429 and cpr_chlge and a body starting with "<": still one signal.
+        return httpx.Response(429, content=b'<x>{"cpr_chlge":"true"}</x>')
+
+    with Client(FAST, transport=httpx.MockTransport(handler)) as client:
+        client.request("US/01", PRICE_URL)
+        assert client.signals["www.costco.com"] == 1
+        assert client.abandoned(PRICE_URL) is False
+
+
+def test_cpr_chlge_in_a_200_body_is_a_block_signal():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b'{"cpr_chlge":"true"}')
+
+    with Client(FAST, transport=httpx.MockTransport(handler)) as client:
+        client.request("US/01", PRICE_URL)
+        assert client.signals["www.costco.com"] == 1
+
+
+def test_html_is_not_a_signal_when_json_was_not_expected():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"<html>a page</html>")
+
+    with Client(FAST, transport=httpx.MockTransport(handler)) as client:
+        client.request("US/01", PRICE_URL, expect_json=False)
+        assert client.signals.get("www.costco.com", 0) == 0
+
+
+def test_pacing_is_per_host_and_shared_across_threads():
+    cfg = HttpConfig(backoff_seconds=(0.0, 0.0), min_interval_seconds=0.2)
+
+    with Client(cfg, transport=httpx.MockTransport(json_ok)) as client:
+        started = time.monotonic()
+        threads = [
+            threading.Thread(target=lambda: client.request("k", "https://paced.test/x"))
+            for _ in range(2)
+        ]
+        for thread in threads:
+            thread.start()
+        client.request("k", "https://paced.test/x")
+        for thread in threads:
+            thread.join()
+        assert time.monotonic() - started >= 0.4
+
+        started = time.monotonic()
+        client.request("k", "https://one.test/x")
+        client.request("k", "https://two.test/x")
+        assert time.monotonic() - started < 0.2
+
+
+def test_raw_response_records_the_key_and_the_interesting_headers():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=US_BATCH.read_bytes(),
+            headers={
+                "Content-Type": "text/html;charset=UTF-8",
+                "Date": "Tue, 15 Sep 2026 19:10:16 GMT",
+                "Server-Timing": 'ak_p; desc="1789499415803_388408362";dur=1',
+                "Set-Cookie": "bm_sz=0F6251C6; Domain=.costco.com; Path=/",
+            },
+        )
+
+    with Client(FAST, transport=httpx.MockTransport(handler)) as client:
+        result = client.request("US/03-gasprices", PRICE_URL)
+
+    assert result.key == "US/03-gasprices"
+    assert result.url == PRICE_URL
+    assert result.status == 200
+    assert result.error is None
+    assert result.headers["content-type"] == "text/html;charset=UTF-8"
+    assert result.headers["date"] == "Tue, 15 Sep 2026 19:10:16 GMT"
+    assert result.headers["server-timing"].startswith("ak_p;")
+    # Cookies are not recorded: capture bundles are published publicly.
+    assert "set-cookie" not in result.headers
+    assert result.received_at_utc.tzinfo is not None
+    assert result.elapsed_ms >= 0
+    assert result.body == US_BATCH.read_bytes()
+
+
+def test_the_client_logs_one_entry_per_logical_request():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, content=b"unavailable")
+
+    with Client(FAST, transport=httpx.MockTransport(handler)) as client:
+        client.request("US/01", PRICE_URL)
+
+    assert len(client.log) == 1
+    entry = client.log[0]
+    assert entry["key"] == "US/01"
+    assert entry["host"] == "www.costco.com"
+    assert entry["attempts"] == 3
+    assert entry["status"] == 503
+    assert entry["block_signal"] is False
