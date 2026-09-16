@@ -448,3 +448,216 @@ def lookup_prices(row: dict[str, Any]) -> dict[str, str]:
         for k, v in gas_prices.items()
         if str(k).lower() not in NON_GRADE_KEYS and isinstance(v, (str, int, float))
     }
+
+
+# --------------------------------------------------------------------------- metadata
+
+
+@dataclass
+class Meta:
+    name: str | None = None
+    address: str | None = None
+    city: str | None = None
+    region: str | None = None
+    postcode: str | None = None
+    lat: float | None = None
+    lon: float | None = None
+    timezone: str | None = None
+    opening_date: date | None = None
+    alt_id: str | None = None
+
+
+def _meta_from_ecom(warehouse: EcomWarehouse) -> Meta:
+    return Meta(
+        name=warehouse.name,
+        address=warehouse.line1,
+        city=warehouse.city,
+        region=warehouse.territory,
+        postcode=warehouse.postal_code,
+        lat=warehouse.lat,
+        lon=warehouse.lon,
+        timezone=warehouse.timezone,
+        opening_date=warehouse.opening_date,
+    )
+
+
+def _meta_from_row(row: dict[str, Any]) -> Meta:
+    return Meta(
+        name=_clean(row.get("name")),
+        address=_clean(row.get("address")),
+        city=_clean(row.get("city")),
+        region=_clean(row.get("region")),
+        postcode=_clean(row.get("postcode")),
+        lat=_as_float(row.get("lat")),
+        lon=_as_float(row.get("lon")),
+        timezone=_clean(row.get("timezone")),
+        alt_id=_clean(row.get("alt_id")),
+    )
+
+
+def _meta_from_lookup(row: dict[str, Any]) -> Meta:
+    return Meta(
+        name=_clean(row.get("locationName")) or _clean(row.get("displayName")),
+        address=_clean(row.get("address1")),
+        city=_clean(row.get("city")),
+        region=_clean(row.get("state")),
+        postcode=_clean(row.get("zipCode")),
+        lat=_as_float(row.get("latitude")),
+        lon=_as_float(row.get("longitude")),
+        opening_date=lookup_open_date(row.get("openDate")),
+    )
+
+
+def _merge(chain: list[Meta]) -> Meta:
+    merged = Meta()
+    for field_name in Meta.__dataclass_fields__:
+        for candidate in chain:
+            value = getattr(candidate, field_name)
+            if value is not None:
+                setattr(merged, field_name, value)
+                break
+    return merged
+
+
+# --------------------------------------------------------------------------- source
+
+
+def parse_us(responses: list[RawResponse], ctx: CaptureContext) -> FetchResult:
+    polled = polled_id_set(ctx)
+    origins = {p.source_station_id: p.id_origin for p in polled}
+    states = {p.source_station_id: p.ecom_state for p in polled}
+    index = parse_ecom(ctx.shared.get(ECOM_SHARED_KEY))
+    extras = _extra_rows(ctx)
+    previous = _previous_rows(ctx)
+
+    warnings: list[Warning] = []
+    errors: list[Error] = []
+    if index is None and previous:
+        warnings.append(Warning(code="metadata_from_cache", detail=COUNTRY))
+
+    grades_by_id: dict[str, dict[str, str]] = {}
+    origin_by_id: dict[str, str] = {}
+    lookup_rows: dict[str, dict[str, Any]] = {}
+    received: list[datetime] = []
+
+    for response in sorted(responses, key=lambda r: r.key):
+        if response.error == "deadline_exceeded":
+            warnings.append(Warning(code="deadline_exceeded", detail=response.key))
+            continue
+        if "gasprices" in response.key:
+            parsed = parse_price_batch(response)
+            if parsed is None:
+                errors.append(
+                    Error(
+                        code="price_batch_failed",
+                        host="www.costco.com",
+                        http_status=response.status,
+                        detail=response.key,
+                    )
+                )
+                continue
+            received.append(response.received_at_utc)
+            for warehouse_id, grades in parsed.items():
+                if grades and warehouse_id not in grades_by_id:
+                    grades_by_id[warehouse_id] = grades
+                    origin_by_id[warehouse_id] = origins.get(warehouse_id, "seen")
+        elif "lookup" in response.key:
+            rows = parse_lookup(response)
+            if rows is None:
+                errors.append(
+                    Error(
+                        code="lookup_failed",
+                        host="www.costco.ca",
+                        http_status=response.status,
+                        detail=response.key,
+                    )
+                )
+                continue
+            received.append(response.received_at_utc)
+            lookup_rows = rows
+            for warehouse_id, row in rows.items():
+                if warehouse_id not in origins:
+                    continue
+                grades = lookup_prices(row)
+                if grades and warehouse_id not in grades_by_id:
+                    grades_by_id[warehouse_id] = grades
+                    origin_by_id[warehouse_id] = "lookup"
+
+    use_all_lookup = index is None and not previous
+    emitted: list[str] = list(origins)
+    if use_all_lookup:
+        for warehouse_id, row in lookup_rows.items():
+            if warehouse_id in origins:
+                continue
+            grades = lookup_prices(row)
+            if not grades:
+                continue
+            grades_by_id[warehouse_id] = grades
+            origin_by_id[warehouse_id] = "lookup"
+            emitted.append(warehouse_id)
+
+    stations: list[RawStation] = []
+    for warehouse_id in emitted:
+        grades = grades_by_id.get(warehouse_id, {})
+        origin = origin_by_id.get(warehouse_id, origins.get(warehouse_id, "lookup"))
+        state = states.get(warehouse_id, "unavailable")
+        is_extra = warehouse_id in extras
+        lookup_row = lookup_rows.get(warehouse_id)
+
+        chain: list[Meta] = []
+        if state == "gas" and index is not None and warehouse_id in index:
+            chain.append(_meta_from_ecom(index[warehouse_id]))
+        if is_extra:
+            chain.append(_meta_from_row(extras[warehouse_id]))
+        if warehouse_id in previous:
+            chain.append(_meta_from_row(previous[warehouse_id]))
+        if lookup_row is not None:
+            chain.append(_meta_from_lookup(lookup_row))
+        meta = _merge(chain)
+
+        if state == "absent" and grades:
+            warnings.append(Warning(code="not_in_ecom_api", detail=warehouse_id))
+
+        tz = meta.timezone
+        if tz is None:
+            tz = _timezone_for_region(ctx, meta.region)
+            if tz is not None:
+                warnings.append(Warning(code="timezone_from_region", detail=warehouse_id))
+
+        opening_date = None if is_extra else meta.opening_date
+        has_hours = None
+        if origin == "lookup" and lookup_row is not None and not is_extra:
+            has_hours = bool(lookup_row.get("gasStationHours"))
+
+        stations.append(
+            RawStation(
+                source_station_id=warehouse_id,
+                alt_id=meta.alt_id,
+                id_origin=origin,
+                ecom_state=state,
+                name=meta.name or warehouse_id,
+                name_local=None,
+                address=meta.address,
+                city=meta.city,
+                region=meta.region,
+                postcode=meta.postcode,
+                lat=meta.lat,
+                lon=meta.lon,
+                timezone=tz,
+                opening_date=opening_date,
+                has_hours=has_hours,
+                prices=tuple(RawPrice(grade_raw=g, price_raw=p) for g, p in grades.items()),
+            )
+        )
+
+    used_lookup = any(s.id_origin == "lookup" for s in stations)
+    return FetchResult(
+        country=COUNTRY,
+        source=LOOKUP_SOURCE if used_lookup else PRICE_SOURCE,
+        captured_at_utc=max(received) if received else _capture_start(ctx),
+        stations=stations,
+        responses=list(responses),
+        requests=len(responses),
+        warnings=warnings,
+        errors=errors,
+    )

@@ -448,3 +448,173 @@ def test_lookup_open_date_parsing():
 def test_parse_lookup_rejects_a_failed_response():
     assert us.parse_lookup(response("US/03-lookup-us", "u", body=b"", status=403)) is None
     assert us.parse_lookup(response("US/03-lookup-us", "u", body=b"<html>")) is None
+
+
+# --------------------------------------------------------------------------- happy path
+
+
+def happy_ctx() -> CaptureContext:
+    previous = stations_frame(
+        [
+            {
+                "station_key": "US-120",
+                "country": "US",
+                "source_station_id": "120",
+                "name": "Hawaii Kai",
+                "region": "HI",
+                "timezone": "Pacific/Honolulu",
+                "last_seen_utc": "2026-09-14T18:17:00Z",
+            },
+        ]
+    )
+    return make_ctx(ecom=ecom_ok(), previous=previous)
+
+
+def happy_result():
+    ctx = happy_ctx()
+    batch = response(
+        "US/02-gasprices-001",
+        "https://www.costco.com/AjaxGetGasPricesService?warehouseid="
+        "1772_335_1680_1765_1793_140_1838_120_1090_1364",
+        fixture="us_gasprices_batch_ua.json",
+        offset=5,
+    )
+    return us.parse_us([batch], ctx), ctx
+
+
+def test_step_two_prices_and_source():
+    result, _ = happy_result()
+    stations = by_id(result)
+    assert result.source == "costco-us-gasprices"
+    assert result.captured_at_utc == CAPTURE_START + timedelta(seconds=5)
+    assert grades_of(stations["1364"]) == {"premium": "4.629", "regular": "3.999"}
+    assert grades_of(stations["140"]) == {
+        "diesel": "6.899",
+        "premium": "5.699",
+        "clear": "5.699",
+        "regular": "4.899",
+    }
+    assert stations["1364"].id_origin == "ecom"
+    assert stations["1364"].lat == pytest.approx(27.49462445)
+
+
+def test_puerto_rico_carries_the_region_marker_for_the_unit_override():
+    result, _ = happy_result()
+    station = by_id(result)["335"]
+    assert station.region == "PR"
+    assert grades_of(station) == {"premium": "1.267", "regular": "1.097"}
+
+
+def test_pre_opening_station_keeps_its_opening_date():
+    result, _ = happy_result()
+    station = by_id(result)["1838"]
+    assert station.opening_date == date(2026, 10, 2)
+    assert grades_of(station) == {"premium": "5.999", "regular": "3.999"}
+
+
+def test_no_gas_seen_id_is_emitted_with_its_state():
+    result, _ = happy_result()
+    station = by_id(result)["120"]
+    assert station.id_origin == "seen"
+    assert station.ecom_state == "no_gas"
+    assert grades_of(station) == {"premium": "3.829"}
+
+
+def test_absent_priced_ids_warn_not_in_ecom_api():
+    result, _ = happy_result()
+    assert sorted(warning_details(result, "not_in_ecom_api")) == [
+        "1680",
+        "1765",
+        "1772",
+    ]
+
+
+def test_timezone_falls_back_to_the_region_table_with_a_warning():
+    result, _ = happy_result()
+    stations = by_id(result)
+    assert stations["1765"].timezone == "America/Phoenix"
+    assert stations["1772"].timezone == "America/Los_Angeles"
+    assert warning_details(result, "timezone_from_region") == ["1772"]
+
+
+def test_unpolled_ids_in_a_batch_are_ignored():
+    result, _ = happy_result()
+    assert "1090" not in by_id(result)
+
+
+def test_station_keys_are_unique():
+    result, _ = happy_result()
+    ids = [s.source_station_id for s in result.stations]
+    assert len(ids) == len(set(ids))
+
+
+# --------------------------------------------------------------------------- cached path
+
+
+def test_step_one_failure_uses_cached_metadata():
+    rows = [
+        {
+            "station_key": f"US-{i}",
+            "country": "US",
+            "source_station_id": str(i),
+            "name": f"Store {i}",
+            "region": "TX",
+            "timezone": "America/Chicago",
+            "last_seen_utc": "2026-09-14T18:17:00Z",
+        }
+        for i in range(1, 601)
+    ]
+    ctx = make_ctx(ecom=ecom_failed(), previous=stations_frame(rows))
+    polled = us.polled_id_set(ctx)
+    assert len(polled) == 603
+    assert {p.ecom_state for p in polled} == {"unavailable"}
+    assert polled[0].id_origin == "cache"
+
+    body = b'{"1":{"premium":"5.899","regular":"5.399"}}'
+    batch = response(
+        "US/02-gasprices-001",
+        "https://www.costco.com/AjaxGetGasPricesService?warehouseid=1",
+        body=body,
+    )
+    result = us.parse_us([batch], ctx)
+    assert len(result.stations) >= 585
+    assert warning_details(result, "metadata_from_cache") == ["US"]
+    assert by_id(result)["1"].timezone == "America/Chicago"
+
+
+def test_lookup_only_rows_are_used_when_step_one_failed_with_no_cache():
+    ctx = make_ctx(ecom=ecom_failed())
+    lookup = response(
+        "US/03-lookup-us", us.DEFAULT_LOOKUP_URL, fixture="us_lookup_us.json", offset=30
+    )
+    result = us.parse_us([lookup], ctx)
+    stations = by_id(result)
+    assert stations["1364"].id_origin == "lookup"
+    assert stations["1364"].ecom_state == "unavailable"
+    assert stations["1680"].id_origin == "lookup"
+    assert stations["1"].region == "WA"
+    assert stations["1"].timezone == "America/Los_Angeles"
+    assert warning_details(result, "metadata_from_cache") == []
+
+
+def test_merge_rule_keeps_step_two_prices_and_fills_only_unpriced_ids():
+    ctx = make_ctx(ecom=ecom_ok())
+    step_two = response(
+        "US/02-gasprices-001",
+        "https://www.costco.com/AjaxGetGasPricesService?warehouseid="
+        "1772_335_1680_1765_1793_140_1838_120_1090_1364",
+        fixture="us_gasprices_batch_ua.json",
+        offset=5,
+    )
+    lookup = response(
+        "US/03-lookup-us", us.DEFAULT_LOOKUP_URL, fixture="us_lookup_us.json", offset=30
+    )
+    result = us.parse_us([step_two, lookup], ctx)
+    stations = by_id(result)
+    assert stations["140"].id_origin == "ecom"
+    assert grades_of(stations["140"])["regular"] == "4.899"
+    assert stations["651"].id_origin == "lookup"
+    assert grades_of(stations["651"]) == {"regular": "3.929", "premium": "4.649"}
+    ids = [s.source_station_id for s in result.stations]
+    assert len(ids) == len(set(ids))
+    assert "1" not in stations
