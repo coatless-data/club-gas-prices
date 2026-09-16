@@ -462,3 +462,42 @@ def test_the_client_logs_one_entry_per_logical_request():
     assert entry["attempts"] == 3
     assert entry["status"] == 503
     assert entry["block_signal"] is False
+
+
+def test_a_budget_with_no_explicit_length_comes_from_the_config_file():
+    """`config/http.toml`'s [budgets] table is the only place the numbers live.
+
+    The capture, fx and ecom budgets are named exactly as they are in the file;
+    a country budget is named `country-<CC>` so a BudgetExceeded says which
+    country ran out, and takes its length from the shared `country` entry.
+    """
+    calls: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(1)
+        return json_ok(request)
+
+    cfg = HttpConfig(
+        backoff_seconds=(0.0, 0.0),
+        min_interval_seconds=0.0,
+        budgets={"fx": 90.0, "ecom-api": 0.0, "country": 0.0, "capture": 720.0},
+    )
+    with Client(cfg, transport=httpx.MockTransport(handler)) as client:
+        assert client.budget_seconds("ecom-api") == 0.0
+        with pytest.raises(BudgetExceeded, match="ecom-api"), client.budget("ecom-api"):
+            client.request("shared/ecom-api", ECOM_URL)
+        with (
+            pytest.raises(BudgetExceeded, match="country-AU"),
+            client.budget("country-AU", key="country"),
+        ):
+            client.request("AU/01-stores", PRICE_URL)
+        # An entry with room left does not abort anything.
+        with client.budget("fx"):
+            assert client.request("fx/01", FX_URL).status == 200
+
+    assert calls == [1]
+
+
+def test_a_budget_name_the_config_file_does_not_carry_falls_back_to_the_default():
+    with Client(HttpConfig(budgets={}), transport=httpx.MockTransport(json_ok)) as client:
+        assert client.budget_seconds("capture") == 720.0

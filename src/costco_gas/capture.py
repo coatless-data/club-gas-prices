@@ -40,10 +40,6 @@ ECOM_API_URL = "https://ecom-api.costco.com/core/warehouse-locator/v1/warehouses
 ECOM_API_PARAMS = {"latitude": "0", "longitude": "0", "limit": "5000"}
 ECOM_CLIENT_IDENTIFIER = "7c71124c-7bf1-44db-bc9d-498584cd66e5"
 
-ECOM_BUDGET_S = 90.0
-COUNTRY_BUDGET_S = 480.0
-CAPTURE_BUDGET_S = 720.0
-
 DROP_SCHEMA = {
     "source_station_id": pl.String,
     "reason": pl.String,
@@ -157,7 +153,7 @@ def _fetch_ecom(client: Client, cfg: Config) -> tuple[RawResponse | None, dict]:
     """Fetch the shared warehouse locator once (spec 5.3 step 3)."""
     url, identifier = _ecom_request(cfg)
     try:
-        with client.budget("ecom-api", ECOM_BUDGET_S):
+        with client.budget("ecom-api"):
             resp = client.request("shared/ecom-api", url, headers={"client-identifier": identifier})
     except BudgetExceeded:
         return None, {"attempted": True, "http_status": None}
@@ -325,7 +321,7 @@ def run_country(
         source = SOURCES[country]
         extra: list[Warning] = []
         try:
-            with client.budget(f"country-{country}", COUNTRY_BUDGET_S):
+            with client.budget(f"country-{country}", key="country"):
                 responses = source.fetch(client, ctx)
         except BudgetExceeded:
             # A source that catches this itself returns its partial responses;
@@ -405,7 +401,7 @@ def _run_countries(
         return blocks, collected
     try:
         with (
-            client.budget("capture", CAPTURE_BUDGET_S),
+            client.budget("capture"),
             ThreadPoolExecutor(max_workers=len(countries)) as pool,
         ):
             futures = {

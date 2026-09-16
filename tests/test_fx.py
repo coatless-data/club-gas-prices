@@ -11,7 +11,7 @@ import httpx
 import polars as pl
 import pytest
 
-from costco_gas.config import load_config
+from costco_gas.config import HttpConfig, load_config
 from costco_gas.fx import fetch_rates
 from costco_gas.http import Client
 from costco_gas.sources.base import CaptureContext
@@ -304,14 +304,22 @@ class BudgetStubClient:
     """A stand-in for http.Client whose first request exhausts the FX budget.
 
     A real 90-second budget cannot be exercised in a unit test, so this records
-    the budget fx.py opens and raises BudgetExceeded from inside it.
+    the budget fx.py opens and raises BudgetExceeded from inside it. It resolves
+    an unspecified length from `cfg.budgets` exactly as the real client does, so
+    the recorded number is the one config/http.toml carries.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, cfg: HttpConfig | None = None) -> None:
+        self.cfg = cfg if cfg is not None else HttpConfig()
         self.budgets: list[tuple[str, float]] = []
         self.requests: list[str] = []
 
-    def budget(self, name: str, seconds: float):
+    def budget_seconds(self, name: str) -> float:
+        return self.cfg.budget_seconds(name)
+
+    def budget(self, name: str, seconds: float | None = None, *, key: str | None = None):
+        if seconds is None:
+            seconds = self.budget_seconds(key or name)
         self.budgets.append((name, seconds))
         return contextlib.nullcontext()
 
@@ -334,6 +342,15 @@ def test_fx_runs_inside_a_ninety_second_budget_and_still_carries_forward():
     assert len(client.requests) == 1
     assert fx.status == "carried-forward"
     assert fx.for_currency("CAD").units_per_usd == 1.3871
+
+
+def test_the_fx_budget_is_the_one_the_config_file_carries():
+    """`fetch_rates` opened a hardcoded 90 seconds, so [budgets] was dead config."""
+    client = BudgetStubClient(HttpConfig(budgets={"fx": 12.5}))
+
+    fetch_rates(client, make_ctx())
+
+    assert client.budgets == [("fx", 12.5)]
 
 
 def test_an_exhausted_budget_without_previous_rates_fails_softly():

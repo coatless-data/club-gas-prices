@@ -113,7 +113,15 @@ class HttpConfig:
     backoff_jitter: float = 0.5
     min_interval_seconds: float = 1.0
     block_signals_before_abandon: int = 2
+    # Seconds per named budget, from config/http.toml's [budgets] table. Every
+    # deadline the capture opens is looked up here, so editing that file is the
+    # only way any of them changes.
     budgets: dict[str, float] = field(default_factory=_default_budgets)
+
+    def budget_seconds(self, name: str) -> float:
+        """The length of one named budget, falling back to the built-in default."""
+        value = self.budgets.get(name)
+        return float(value) if value is not None else _default_budgets()[name]
 
 
 @dataclass(frozen=True)
@@ -351,7 +359,12 @@ def _load_http(path: Path) -> HttpConfig:
             block_signals_before_abandon=int(
                 raw.get("blocks", {}).get("signals_before_abandon", 2)
             ),
-            budgets={str(k): float(v) for k, v in raw.get("budgets", {}).items()},
+            # Merged over the defaults, so a table that names only some of the
+            # budgets still leaves the rest at their documented values.
+            budgets={
+                **_default_budgets(),
+                **{str(k): float(v) for k, v in raw.get("budgets", {}).items()},
+            },
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise ConfigError(f"{path}: {exc}") from exc

@@ -650,3 +650,49 @@ def test_an_unreadable_current_degrades_ca_through_its_own_country_block(workspa
     # Same responses, same floor: the only thing that changed is the previous state.
     assert present["countries"]["CA"]["status"] == "ok"
     assert present["countries"]["CA"]["rows"] == missing["countries"]["CA"]["rows"]
+
+
+def set_budgets(workspace: Path, **values: float) -> None:
+    """Rewrite config/http.toml's [budgets] table, exactly as an operator would.
+
+    [budgets] is the last table in the file, so replacing everything after its
+    header replaces the whole table; names left out fall back to the built-in
+    defaults.
+    """
+    path = workspace / "config" / "http.toml"
+    head, marker, _rest = path.read_text(encoding="utf-8").partition("[budgets]\n")
+    assert marker, "no [budgets] table"
+    body = "".join(f'"{name}" = {value}\n' for name, value in values.items())
+    path.write_text(head + marker + body, encoding="utf-8")
+
+
+def test_capture_takes_its_deadlines_from_the_budgets_table(workspace: Path):
+    """Editing `[budgets]` has to change what the capture actually does.
+
+    The four numbers were hardcoded in capture.py and fx.py, so the parsed table
+    was dead config: this test sets `fx` and `ecom-api` to zero and nothing else,
+    which exhausts both before their first request.
+    """
+    set_budgets(workspace, fx=0.0, **{"ecom-api": 0.0})
+    cfg = load_config(workspace)
+    assert cfg.http.budgets["country"] == 480.0  # left out above, so still the default
+    store = LocalReleaseStore(workspace / "releases")
+    client = Client(cfg.http, transport=make_transport())
+
+    result = run_capture(
+        cfg,
+        store,
+        workspace / "out",
+        countries=["US"],
+        force_fallback=set(),
+        now=NOW,
+        client=client,
+    )
+
+    assert result.status["fx"] == {"status": "failed", "source": None, "rate_date": None}
+    assert result.status["ecom_api"] == {"attempted": True, "http_status": None}
+    # Neither request ever left: both budgets were spent before the first one.
+    keys = [entry["key"] for entry in client.log]
+    assert not [key for key in keys if key.startswith("fx/") or key == "shared/ecom-api"]
+    # US still ran on the default country budget, which the table left alone.
+    assert [key for key in keys if key.startswith("US/")]

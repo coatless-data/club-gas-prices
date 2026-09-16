@@ -36,7 +36,6 @@ if TYPE_CHECKING:
     from costco_gas.sources.base import CaptureContext, RawResponse
 
 CURRENCIES: tuple[str, ...] = ("CAD", "MXN", "GBP", "AUD", "JPY", "TWD")
-FX_BUDGET_SECONDS = 90.0
 FRANKFURTER_URL = "https://api.frankfurter.dev/v2/rates?base=USD&quotes=" + ",".join(CURRENCIES)
 FAWAZ_URL = "https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@{day}/v1/currencies/usd.json"
 SOURCE_FRANKFURTER = "frankfurter-v2"
@@ -322,7 +321,7 @@ def _status_for(rows: list[FxRow]) -> str:
 def fetch_rates(client: Client, ctx: CaptureContext) -> FxRates:
     found: dict[str, FxRow] = {}
     try:
-        with client.budget("fx", FX_BUDGET_SECONDS):
+        with client.budget("fx"):
             _collect_frankfurter(client, found)
             if _missing(found):
                 _collect_fawaz(client, ctx.capture_date, found)
