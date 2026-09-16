@@ -1,4 +1,20 @@
-"""Publish one capture into the release store (spec 8.4, 8.5)."""
+"""Publish one capture into the release store (spec 8.4, 8.5).
+
+`merge_capture` writes the month manifest's per-capture entry LAST, after
+`_update_current` has already succeeded -- not in the spec 8.5 listing order,
+which puts the manifest before `current`. That entry is the commit marker
+`_reconcile` uses to decide a capture's bundle is already handled
+(`capture_id in manifest["captures"]`). If the entry were written before
+`current` reflected the capture, a crash inside `_update_current` would leave
+the capture marked done while `current` never saw its rows, and `_reconcile`
+would skip that bundle forever once the day rolled over (spec review round 1,
+Finding 1). Writing the manifest entry only once `current` is truly caught up
+costs nothing: the daily file's own cross-check only ever asserts that capture
+ids the manifest *already* records are still present with their recorded row
+count, which a manifest that is momentarily behind never violates, and a
+retry after any crash in this window is idempotent either way. Do not "tidy"
+this back to manifest-before-current.
+"""
 
 from __future__ import annotations
 
@@ -422,6 +438,11 @@ def merge_capture(
     store.replace_atomic(tag, out_daily, daily_name, captured.capture_id)
     assets_written.append(f"{tag}/{daily_name}")
 
+    # `current` is updated BEFORE the month manifest records this capture: see the
+    # module docstring for why that order, not the daily-file-then-manifest order
+    # spec 8.5 lists, is the one that keeps a crash recoverable.
+    _update_current(store, cfg, captured, merged, scratch, assets_written)
+
     entry = manifest["captures"].setdefault(captured.capture_id, {})
     entry["status"] = captured.status
     entry["fx"] = captured.fx
@@ -442,8 +463,6 @@ def merge_capture(
     store.replace_atomic(tag, manifest_path, manifest_name, captured.capture_id)
     assets_written.append(f"{tag}/{manifest_name}")
 
-    _update_current(store, cfg, captured, merged, scratch, assets_written)
-
 
 def _update_current(
     store: ReleaseStore,
@@ -461,9 +480,17 @@ def _update_current(
             local[name] = store.download("current", name, scratch / f"current-in-{name}")
         except AssetNotFound:
             missing.append(name)
-    if missing and "manifest.json" not in missing:
+    # First-publish means the whole of `current` is absent, not just manifest.json:
+    # a lone missing manifest.json alongside real data in the other six assets is
+    # corruption, not a fresh start, and rebuilding from empty would silently
+    # discard that history (spec review Finding 3). Task 15's full `current`
+    # rebuild is the repair path for that state, not this function.
+    if len(missing) == len(CURRENT_INPUT_ASSETS):
+        first = True
+    elif missing:
         raise StorageError("current is incomplete: missing " + ", ".join(sorted(missing)))
-    first = "manifest.json" in missing
+    else:
+        first = False
 
     manifest = {
         "schema_version": 1,
@@ -665,9 +692,14 @@ def _reconcile(
             dest = scratch / f"orphan-{capture_id}.tar.gz"
             try:
                 store.download(tag, asset.name, dest)
-                orphan = read_bundle(dest, capture_id)
             except (AssetNotFound, StorageError):
-                orphan = None
+                # Could not read it this run -- not proof the bundle is bad. Leave
+                # it in place and let the next publish retry it (spec review
+                # Finding 2); renaming it here on a transient failure would
+                # destroy a perfectly good bundle.
+                warnings.append(f"orphan_bundle_download_failed:{capture_id}")
+                continue
+            orphan = read_bundle(dest, capture_id)
             if orphan is None:
                 store.rename(tag, asset.id, f"{asset.name}.invalid")
                 issues.ensure_open(

@@ -17,7 +17,7 @@ import pytest
 from costco_gas import rollup, schema
 from costco_gas.config import load_config
 from costco_gas.publish import publish
-from costco_gas.store import LocalReleaseStore
+from costco_gas.store import LocalReleaseStore, StorageError, sha256_file
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -447,8 +447,6 @@ def test_two_crashes_rebuild_the_manifest_and_reconcile_the_orphan(tmp_path: Pat
 
 
 def test_a_missing_daily_file_that_the_manifest_records_raises(tmp_path: Path, cfg):
-    from costco_gas.store import StorageError
-
     store = LocalReleaseStore(tmp_path / "releases")
     captures = tmp_path / "captures"
     a_dir = make_capture_dir(
@@ -553,8 +551,6 @@ def test_an_invalid_orphan_bundle_is_renamed_and_reported(tmp_path: Path, cfg, c
 
 
 def test_a_capture_id_collision_fails(tmp_path: Path, cfg):
-    from costco_gas.store import StorageError
-
     store = LocalReleaseStore(tmp_path / "releases")
     captures = tmp_path / "captures"
     a_dir = make_capture_dir(captures, "2026-09-15T1817Z", DAY1, prices=PRICES)
@@ -591,7 +587,7 @@ def test_a_late_publish_reopens_a_closed_month(tmp_path: Path, cfg):
 
 
 def test_recovery_promotes_a_verified_next_asset(tmp_path: Path, cfg):
-    from costco_gas.store import recover_temporaries, sha256_file
+    from costco_gas.store import recover_temporaries
 
     store = LocalReleaseStore(tmp_path / "releases")
     captures = tmp_path / "captures"
@@ -654,3 +650,269 @@ def test_recovery_rolls_back_to_old_when_no_next_verifies(tmp_path: Path, cfg):
     restored = store.download("current", "fx.csv", tmp_path / "fx-restored.csv")
     assert restored.read_bytes() == original.read_bytes()
     assert not any(".next-" in a.name or ".old-" in a.name for a in store.list_assets("current"))
+
+
+# -- spec review round 1 findings -----------------------------------------------
+
+
+class CrashOnceStore:
+    """LocalReleaseStore that raises once, simulating a process crash right
+
+    before one specific `replace_atomic` call -- nothing about that call
+    reaches the underlying store, so no temporary asset is left behind for
+    Step 0 recovery to clean up. That is the point: this reproduces a crash
+    inside `_update_current` itself, not an interrupted `replace_atomic`.
+    """
+
+    def __init__(self, inner, tag: str, name: str):
+        self._inner = inner
+        self._tag = tag
+        self._name = name
+        self._armed = True
+
+    def replace_atomic(self, tag, path, name, token):
+        if self._armed and tag == self._tag and name == self._name:
+            self._armed = False
+            raise RuntimeError("simulated crash")
+        return self._inner.replace_atomic(tag, path, name, token)
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+
+def test_a_crash_inside_update_current_leaves_the_capture_reconcilable(tmp_path: Path, cfg):
+    """Finding 1: a crash between `current` and the month-manifest entry must
+
+    not orphan the capture forever. Before the fix, the manifest entry was
+    written before `_update_current`, so a crash here left the capture
+    "done" in the manifest while `current` never saw it, and `_reconcile`
+    would skip its bundle on every later run because
+    `capture_id in manifest["captures"]` was already true.
+    """
+    inner = LocalReleaseStore(tmp_path / "releases")
+    captures = tmp_path / "captures"
+
+    a_dir = make_capture_dir(
+        captures, "2026-09-15T0017Z", datetime(2026, 9, 15, 0, 17, tzinfo=UTC), prices=PRICES
+    )
+    publish(inner, a_dir, cfg, now=NOW)
+
+    # Capture B crashes partway through updating `current`: several of the six
+    # data assets land, `fx.csv` (uploaded last, before manifest.json) never does.
+    crashy = CrashOnceStore(inner, "current", "fx.csv")
+    b_dir = make_capture_dir(
+        captures,
+        "2026-09-15T1217Z",
+        datetime(2026, 9, 15, 12, 17, tzinfo=UTC),
+        prices=[("Chungli", "95", "regular", 30.2)],
+    )
+    with pytest.raises(RuntimeError, match="simulated crash"):
+        publish(crashy, b_dir, cfg, now=NOW)
+
+    # The daily file for 2026-09-15 already has B's rows (merge_capture writes
+    # it before calling `_update_current`), but the month manifest must not
+    # have recorded B as done -- that is the commit marker `_reconcile` reads.
+    day15 = schema.read_rows_csv_gz(
+        inner.download(
+            "data-2026-09", "costco-gas-2026-09-15.csv.gz", tmp_path / "d15-after-crash.csv.gz"
+        )
+    )
+    assert "2026-09-15T1217Z" in day15["capture_id"].unique().to_list()
+    manifest = json.loads(
+        inner.download(
+            "data-2026-09", "manifest-2026-09.json", tmp_path / "m-after-crash.json"
+        ).read_text()
+    )
+    assert "2026-09-15T1217Z" not in manifest["captures"]
+
+    # A later capture, on a new date, must reconcile B rather than skip it.
+    c_dir = make_capture_dir(
+        captures, "2026-09-16T0017Z", DAY2, prices=[("Chungli", "95", "regular", 30.9)]
+    )
+    result = publish(inner, c_dir, cfg, now=NOW)
+
+    assert "reconciled:2026-09-15T1217Z" in result.warnings
+    captures_all = pl.read_parquet(
+        inner.download("current", "costco-gas-all-captures.parquet", tmp_path / "ac.parquet")
+    )
+    assert sorted(captures_all["capture_id"].unique().to_list()) == [
+        "2026-09-15T0017Z",
+        "2026-09-15T1217Z",
+        "2026-09-16T0017Z",
+    ]
+    fx = pl.read_csv(
+        inner.download("current", "fx.csv", tmp_path / "fx-final.csv"), schema=schema.FX_SCHEMA
+    )
+    assert sorted(fx["capture_id"].to_list()) == [
+        "2026-09-15T0017Z",
+        "2026-09-15T1217Z",
+        "2026-09-16T0017Z",
+    ]
+
+
+class FlakyDownloadStore:
+    """LocalReleaseStore whose download() raises for one (tag, name), always."""
+
+    def __init__(self, inner, tag: str, asset_name: str):
+        self._inner = inner
+        self._tag = tag
+        self._asset_name = asset_name
+        self.attempts = 0
+
+    def download(self, tag, name, dest):
+        if tag == self._tag and name == self._asset_name:
+            self.attempts += 1
+            raise StorageError("simulated transient read failure")
+        return self._inner.download(tag, name, dest)
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+
+def test_a_transient_orphan_download_failure_leaves_the_bundle_in_place(tmp_path: Path, cfg):
+    """Finding 2: a StorageError from `download()` means "could not read it this
+
+    run", not "the bundle is bad" -- it must not be renamed to `.invalid` or
+    reported as an issue, only retried on a later run.
+    """
+    inner = LocalReleaseStore(tmp_path / "releases")
+    captures = tmp_path / "captures"
+    a_dir = make_capture_dir(
+        captures, "2026-09-15T0017Z", datetime(2026, 9, 15, 0, 17, tzinfo=UTC), prices=PRICES
+    )
+    publish(inner, a_dir, cfg, now=NOW)
+
+    b_dir = make_capture_dir(
+        captures,
+        "2026-09-15T1217Z",
+        datetime(2026, 9, 15, 12, 17, tzinfo=UTC),
+        prices=[("Chungli", "95", "regular", 30.2)],
+    )
+    inner.upload_new("data-2026-09", b_dir / "bundle.tar.gz", "capture-2026-09-15T1217Z.tar.gz")
+
+    flaky = FlakyDownloadStore(inner, "data-2026-09", "capture-2026-09-15T1217Z.tar.gz")
+    c_dir = make_capture_dir(
+        captures, "2026-09-16T0017Z", DAY2, prices=[("Chungli", "95", "regular", 30.9)]
+    )
+    result = publish(flaky, c_dir, cfg, now=NOW)
+
+    assert flaky.attempts == 1
+    names = {a.name for a in inner.list_assets("data-2026-09")}
+    assert "capture-2026-09-15T1217Z.tar.gz" in names
+    assert "capture-2026-09-15T1217Z.tar.gz.invalid" not in names
+    assert "reconciled:2026-09-15T1217Z" not in result.warnings
+    assert "orphan_bundle_download_failed:2026-09-15T1217Z" in result.warnings
+
+    # A later, un-flaky publish retries and reconciles it.
+    d_dir = make_capture_dir(
+        captures,
+        "2026-09-17T0017Z",
+        datetime(2026, 9, 17, 0, 17, tzinfo=UTC),
+        prices=[("Chungli", "95", "regular", 31.0)],
+    )
+    result2 = publish(inner, d_dir, cfg, now=NOW)
+    assert "reconciled:2026-09-15T1217Z" in result2.warnings
+
+
+def test_current_missing_only_manifest_json_raises(tmp_path: Path, cfg):
+    """Finding 3: first-publish means the whole of `current` is absent. A lone
+
+    missing manifest.json alongside real data in the other six assets is
+    corruption and must raise, not silently rebuild everything from empty.
+    """
+    store = LocalReleaseStore(tmp_path / "releases")
+    captures = tmp_path / "captures"
+    a_dir = make_capture_dir(
+        captures, "2026-09-15T0017Z", datetime(2026, 9, 15, 0, 17, tzinfo=UTC), prices=PRICES
+    )
+    publish(store, a_dir, cfg, now=NOW)
+
+    manifest_asset = next(a for a in store.list_assets("current") if a.name == "manifest.json")
+    store.delete("current", manifest_asset.id)
+
+    b_dir = make_capture_dir(
+        captures, "2026-09-16T0017Z", DAY2, prices=[("Chungli", "95", "regular", 30.9)]
+    )
+    with pytest.raises(StorageError, match="current is incomplete"):
+        publish(store, b_dir, cfg, now=NOW)
+
+    # Nothing about `current` was touched by the failed attempt.
+    captures_all = pl.read_parquet(
+        store.download("current", "costco-gas-all-captures.parquet", tmp_path / "ac.parquet")
+    )
+    assert captures_all.height == 5
+
+
+def test_publish_recovers_an_interrupted_replace_before_merging(tmp_path: Path, cfg):
+    """Finding 4a: publish() must run Step 0 recovery itself, not rely on a
+
+    caller to have run it already. Deleting the `recovery_tags`/
+    `recover_temporaries` loop in `publish()` leaves this test failing with an
+    uncaught StorageError, because `_update_current` would otherwise try to
+    read `stations.csv` while it is mid-replace (renamed to `.old-...`, with
+    a verified `.next-...` still pending promotion).
+    """
+    store = LocalReleaseStore(tmp_path / "releases")
+    captures = tmp_path / "captures"
+    a_dir = make_capture_dir(
+        captures, "2026-09-15T0017Z", datetime(2026, 9, 15, 0, 17, tzinfo=UTC), prices=PRICES
+    )
+    publish(store, a_dir, cfg, now=NOW)
+
+    # Simulate a crash between steps 3 and 4 of replace_atomic on `current`,
+    # exactly as in test_recovery_promotes_a_verified_next_asset, but this
+    # time leave it for publish() itself to find and fix.
+    original = store.download("current", "stations.csv", tmp_path / "stations.csv")
+    digest = sha256_file(original)
+    asset = next(a for a in store.list_assets("current") if a.name == "stations.csv")
+    store.rename("current", asset.id, "stations.csv.old-2026-09-15T1817Z")
+    store.upload_new(
+        "current",
+        original,
+        "stations.csv.next-2026-09-15T1817Z-1",
+        label=f"sha256:{digest}",
+    )
+
+    b_dir = make_capture_dir(
+        captures, "2026-09-16T0017Z", DAY2, prices=[("Chungli", "95", "regular", 30.9)]
+    )
+    publish(store, b_dir, cfg, now=NOW)
+
+    names = {a.name for a in store.list_assets("current")}
+    assert "stations.csv" in names
+    assert not any(".next-" in n or ".old-" in n for n in names)
+
+
+def test_a_row_count_mismatch_against_the_manifest_raises(tmp_path: Path, cfg):
+    """Finding 4b: the recorded-row-count cross-check in merge_capture must
+
+    actually run. Deleting it leaves this test failing, because publishing B
+    would otherwise silently accept a daily file whose row count for A no
+    longer matches what the month manifest records for A.
+    """
+    store = LocalReleaseStore(tmp_path / "releases")
+    captures = tmp_path / "captures"
+    a_dir = make_capture_dir(
+        captures, "2026-09-15T0017Z", datetime(2026, 9, 15, 0, 17, tzinfo=UTC), prices=PRICES
+    )
+    publish(store, a_dir, cfg, now=NOW)
+
+    # Corrupt the daily file directly: drop one of A's rows without touching
+    # the manifest, so its recorded row count for A no longer matches.
+    daily_asset = next(
+        a for a in store.list_assets("data-2026-09") if a.name == "costco-gas-2026-09-15.csv.gz"
+    )
+    local = store.download(
+        "data-2026-09", "costco-gas-2026-09-15.csv.gz", tmp_path / "corrupt.csv.gz"
+    )
+    truncated = schema.read_rows_csv_gz(local).head(4)
+    corrupted_path = tmp_path / "truncated.csv.gz"
+    schema.write_rows_csv_gz(truncated, corrupted_path)
+    store.delete("data-2026-09", daily_asset.id)
+    store.upload_new("data-2026-09", corrupted_path, "costco-gas-2026-09-15.csv.gz")
+
+    b_dir = make_capture_dir(
+        captures, "2026-09-15T1817Z", DAY1, prices=[("Chungli", "95", "regular", 30.2)]
+    )
+    with pytest.raises(StorageError, match="the manifest records"):
+        publish(store, b_dir, cfg, now=NOW)
