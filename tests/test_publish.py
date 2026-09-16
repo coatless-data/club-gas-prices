@@ -1094,3 +1094,54 @@ def test_a_crash_after_all_captures_but_before_fx_is_still_reconciled(tmp_path: 
         inner.download("current", "manifest.json", tmp_path / "cm-final.json").read_text()
     )
     assert sorted(current_manifest["merged_captures"]) == sorted(all_ids)
+
+
+def test_current_stations_and_fx_go_out_through_the_schema_writer(tmp_path: Path, cfg):
+    """§6.1/§6.4: the published CSV assets are written by `schema.write_csv`.
+
+    Reading them back with the strict `schema.read_csv` is the check: it accepts
+    only CSV_DATE_FORMAT and CSV_DATETIME_FORMAT, so a bare `DataFrame.write_csv`
+    -- which also skips validation, the key check and the rounding -- cannot pass.
+    """
+    store = LocalReleaseStore(tmp_path / "releases")
+    capture_dir = make_capture_dir(tmp_path / "captures", "2026-09-15T1817Z", DAY1, prices=PRICES)
+
+    publish(store, capture_dir, cfg, now=NOW)
+
+    fx = schema.read_csv(store.download("current", "fx.csv", tmp_path / "fx.csv"), schema.FX_SCHEMA)
+    assert fx["capture_id"].to_list() == ["2026-09-15T1817Z"]
+    assert fx["fx_fetched_at_utc"].to_list() == [DAY1]
+    # 1/31.709 is 0.031536787662808666; fx.csv carries 10 significant digits.
+    assert fx["fx_usd_per_unit"].to_list() == [schema.round_significant(USD_PER_TWD)]
+    assert fx["fx_usd_per_unit"][0] != USD_PER_TWD
+
+    stations = schema.read_csv(
+        store.download("current", "stations.csv", tmp_path / "s.csv"), schema.STATION_SCHEMA
+    )
+    assert stations["station_key"].to_list() == ["TW-Chungli", "TW-Xinzhuang"]
+    assert stations["first_seen_utc"].to_list() == [DAY1, DAY1]
+
+
+def test_the_incremental_and_full_writers_of_current_agree_byte_for_byte(tmp_path: Path, cfg):
+    """`publish.upsert_fx` and `rollup._fx_frame` both write `current/fx.csv`.
+
+    They disagreed about rounding -- publish wrote the raw reciprocal, the full
+    rebuild rounded it to 10 significant digits -- so every month close silently
+    rewrote the asset's values. Both go through `schema.write_csv` now, which is
+    where the rounding and the canonical date formats live.
+    """
+    store = LocalReleaseStore(tmp_path / "releases")
+    capture_dir = make_capture_dir(tmp_path / "captures", "2026-09-15T1817Z", DAY1, prices=PRICES)
+    publish(store, capture_dir, cfg, now=NOW)
+    before = {
+        name: store.download("current", name, tmp_path / f"before-{name}").read_bytes()
+        for name in ("fx.csv", "stations.csv")
+    }
+
+    rollup.rebuild_current(store, cfg, now=NOW)
+
+    after = {
+        name: store.download("current", name, tmp_path / f"after-{name}").read_bytes()
+        for name in ("fx.csv", "stations.csv")
+    }
+    assert after == before
