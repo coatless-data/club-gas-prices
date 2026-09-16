@@ -193,11 +193,23 @@ class OccSource:
             warnings.append(Warning(code="missing_station_id", detail=display_name or code or ""))
             return None
 
-        if self.country == "GB":
+        if self.country == "JP":
+            city, region = jp_city(line2), jp_region(line2)
+            postcode, street = line1, line2
+        elif self.country == "TW":
+            city, region = None, tw_region(formatted)
+            postcode, street = postal, formatted or line1
+        elif self.country == "AU":
+            city, region = au_city(town), au_region(town, formatted, postal)
+            postcode, street = postal, formatted or line1
+        elif self.country == "GB":
             city, region = display_name, None
             postcode, street = postal, formatted or line1
-        else:
-            raise NotImplementedError(f"no city and region rule for {self.country}")
+        else:  # MX
+            isocode = clean((address.get("region") or {}).get("isocode"))
+            city = town
+            region = isocode.removeprefix("MX-") if isocode else None
+            postcode, street = postal, formatted or line1
 
         prices = tuple(
             RawPrice(grade_raw=label, price_raw=price)

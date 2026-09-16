@@ -142,3 +142,109 @@ def test_gb_uses_display_name_as_city_and_keeps_county_towns_out():
     ]
     # address.town is the county "Merseyside" for Haydock; displayName is the town.
     assert station(result, "Haydock").city == "Haydock"
+
+
+def test_mx_region_drops_the_iso_prefix_and_uses_the_timezone_table():
+    result, _ = run("MX", [(FIXTURES / "mx_stores.json").read_bytes()])
+
+    assert sorted(s.source_station_id for s in result.stations) == [
+        "Arboledas",
+        "Chihuahua",
+        "Culiacán",
+        "Mexicali",
+    ]
+    mexicali = station(result, "Mexicali")
+    assert mexicali.alt_id == "costcoMexicoWharehouse750"
+    assert mexicali.city == "Mexicali"
+    assert mexicali.region == "BCN"
+    assert mexicali.timezone == "America/Tijuana"
+    assert [(p.grade_raw, p.price_raw) for p in mexicali.prices] == [
+        ("Regular", "$20.89"),
+        ("Premium", "$25.39"),
+    ]
+    assert station(result, "Culiacán").timezone == "America/Mazatlan"
+    assert station(result, "Chihuahua").timezone == "America/Chihuahua"
+    # MEX has no entry of its own, so the table's "*" default applies.
+    arboledas = station(result, "Arboledas")
+    assert (arboledas.city, arboledas.region) == ("Tlalnepantla", "MEX")
+    assert arboledas.timezone == "America/Mexico_City"
+
+
+def test_au_uses_the_numeric_warehouse_code_as_the_id():
+    result, _ = run("AU", [(FIXTURES / "au_stores.json").read_bytes()])
+
+    assert sorted(s.source_station_id for s in result.stations) == ["103", "109", "116", "118"]
+    perth = station(result, "116")
+    assert perth.alt_id == "Perth Airport"
+    assert perth.name == "Perth Airport"
+    assert perth.city == "Perth Airport"
+    assert perth.region == "WA"  # no state token anywhere; postcode 6105 decides
+    assert perth.timezone == "Australia/Perth"
+    assert perth.lat == pytest.approx(-31.94378)
+
+    casuarina = station(result, "118")
+    assert casuarina.postcode == "6167"  # the source sends "6167 "
+    assert (casuarina.city, casuarina.region) == ("Casuarina", "WA")
+
+    canberra = station(result, "103")
+    assert (canberra.city, canberra.region) == ("Canberra Airport", "ACT")
+    assert canberra.timezone == "Australia/Sydney"
+    assert station(result, "109").city == "Marsden Park"
+
+
+def test_jp_takes_the_prefecture_and_municipality_from_line2():
+    result, _ = run("JP", [(FIXTURES / "jp_stores.json").read_bytes()])
+
+    assert sorted(s.source_station_id for s in result.stations) == [
+        "Hisayama",
+        "Maebashi",
+        "Nonoichi",
+        "Shinmisato",
+        "Tomiya",
+    ]
+    tomiya = station(result, "Tomiya")
+    assert tomiya.alt_id == "costcoJapanTomiyaWarehouse"
+    assert tomiya.name_local == "富谷"
+    assert (tomiya.city, tomiya.region) == ("富谷市", "宮城県")
+    assert tomiya.postcode == "981-3313"  # line1, not postalCode, for Japan
+    assert tomiya.address == "宮城県富谷市高屋敷26"
+    assert tomiya.timezone == "Asia/Tokyo"
+    # Kerosene is listed first; grades are mapped by label later, never by position.
+    assert [(p.grade_raw, p.price_raw) for p in tomiya.prices] == [
+        ("Kerosene", "¥124"),
+        ("Diesel", "¥135"),
+        ("Regular", "¥149"),
+        ("Premium", "¥159"),
+    ]
+
+    shinmisato = station(result, "Shinmisato")
+    assert shinmisato.postcode == "341-0009"  # line1 arrives as " 341-0009"
+    assert (shinmisato.city, shinmisato.region) == ("三郷市", "埼玉県")
+    assert shinmisato.address == "埼玉県三郷市新三郷ららシティ3-1-2"
+    assert station(result, "Maebashi").region == "群馬県"
+    assert station(result, "Hisayama").city == "久山町"  # 福岡県糟屋郡久山町…
+    assert station(result, "Nonoichi").city == "野々市市"  # not 野々市
+
+
+def test_tw_region_comes_from_the_formatted_address():
+    result, _ = run("TW", [(FIXTURES / "tw_stores.json").read_bytes()])
+
+    assert sorted(s.source_station_id for s in result.stations) == [
+        "Chungli",
+        "North_Taichung",
+        "Xinzhuang",
+    ]
+    chungli = station(result, "Chungli")
+    assert chungli.alt_id == "costcoTaiwanWarehouse010"
+    assert chungli.name_local == "桃園中壢店"
+    assert chungli.city is None
+    assert chungli.region == "桃園市"
+    assert chungli.timezone == "Asia/Taipei"
+    # Diesel is listed first here, Kerosene first in Japan: position means nothing.
+    assert [(p.grade_raw, p.price_raw) for p in chungli.prices] == [
+        ("Diesel", "$28.6"),
+        ("95", "$30.0"),
+        ("98", "$31.5"),
+    ]
+    assert station(result, "Xinzhuang").region == "新北市"
+    assert station(result, "North_Taichung").region == "台中市"
