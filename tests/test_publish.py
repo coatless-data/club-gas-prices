@@ -571,3 +571,89 @@ def test_a_capture_id_collision_fails(tmp_path: Path, cfg):
     )
     with pytest.raises(StorageError, match="capture_id_collision"):
         publish(store, different, cfg, now=NOW)
+
+
+def test_a_late_publish_reopens_a_closed_month(tmp_path: Path, cfg):
+    store = LocalReleaseStore(tmp_path / "releases")
+    captures = tmp_path / "captures"
+    a_dir = make_capture_dir(
+        captures,
+        "2026-09-15T0017Z",
+        datetime(2026, 9, 15, 0, 17, tzinfo=timezone.utc),
+        prices=PRICES,
+    )
+    publish(store, a_dir, cfg, now=NOW)
+    store.update_release("data-2026-09", prerelease=False)
+
+    b_dir = make_capture_dir(
+        captures, "2026-09-15T1817Z", DAY1, prices=[("Chungli", "95", "regular", 30.2)]
+    )
+    publish(store, b_dir, cfg, now=NOW)
+
+    assert store.get_release("data-2026-09").prerelease is True
+
+
+def test_recovery_promotes_a_verified_next_asset(tmp_path: Path, cfg):
+    from costco_gas.store import recover_temporaries, sha256_file
+
+    store = LocalReleaseStore(tmp_path / "releases")
+    captures = tmp_path / "captures"
+    a_dir = make_capture_dir(
+        captures,
+        "2026-09-15T0017Z",
+        datetime(2026, 9, 15, 0, 17, tzinfo=timezone.utc),
+        prices=PRICES,
+    )
+    publish(store, a_dir, cfg, now=NOW)
+
+    # Simulate a crash between steps 3 and 4 of replace_atomic: <name> was renamed
+    # to .old-<token> and the verified upload is still called .next-<token>-1.
+    original = store.download("current", "stations.csv", tmp_path / "stations.csv")
+    digest = sha256_file(original)
+    asset = next(a for a in store.list_assets("current") if a.name == "stations.csv")
+    store.rename("current", asset.id, "stations.csv.old-2026-09-15T1817Z")
+    store.upload_new(
+        "current",
+        original,
+        "stations.csv.next-2026-09-15T1817Z-1",
+        label=f"sha256:{digest}",
+    )
+
+    actions = recover_temporaries(store, "current")
+
+    assert actions, "store.py reports what recovery did"
+    names = {a.name for a in store.list_assets("current")}
+    assert "stations.csv" in names
+    assert not any(".next-" in n or ".old-" in n for n in names)
+    promoted = next(a for a in store.list_assets("current") if a.name == "stations.csv")
+    assert not promoted.label
+    restored = store.download("current", "stations.csv", tmp_path / "promoted.csv")
+    assert restored.read_bytes() == original.read_bytes()
+
+
+def test_recovery_rolls_back_to_old_when_no_next_verifies(tmp_path: Path, cfg):
+    from costco_gas.store import recover_temporaries
+
+    store = LocalReleaseStore(tmp_path / "releases")
+    captures = tmp_path / "captures"
+    a_dir = make_capture_dir(
+        captures,
+        "2026-09-15T0017Z",
+        datetime(2026, 9, 15, 0, 17, tzinfo=timezone.utc),
+        prices=PRICES,
+    )
+    publish(store, a_dir, cfg, now=NOW)
+
+    original = store.download("current", "fx.csv", tmp_path / "fx.csv")
+    asset = next(a for a in store.list_assets("current") if a.name == "fx.csv")
+    store.rename("current", asset.id, "fx.csv.old-2026-09-15T1817Z")
+    corrupt = tmp_path / "corrupt.csv"
+    corrupt.write_text("garbage\n", encoding="utf-8")
+    store.upload_new(
+        "current", corrupt, "fx.csv.next-2026-09-15T1817Z-1", label="sha256:" + "0" * 64
+    )
+
+    assert recover_temporaries(store, "current")
+    restored = store.download("current", "fx.csv", tmp_path / "fx-restored.csv")
+    assert restored.read_bytes() == original.read_bytes()
+    assert not any(".next-" in a.name or ".old-" in a.name for a in store.list_assets("current"))
