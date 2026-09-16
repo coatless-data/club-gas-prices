@@ -263,3 +263,99 @@ def test_first_publish_creates_current_and_the_month_release(tmp_path: Path, cfg
     assert current_manifest["newest_capture_by_country"]["TW"] == "2026-09-15T1817Z"
     # JP failed, so it must not claim this capture as its newest.
     assert "JP" not in current_manifest["newest_capture_by_country"]
+
+
+def test_republishing_the_same_directory_changes_no_asset_content(tmp_path: Path, cfg):
+    store = LocalReleaseStore(tmp_path / "releases")
+    capture_dir = make_capture_dir(tmp_path / "captures", "2026-09-15T1817Z", DAY1, prices=PRICES)
+
+    publish(store, capture_dir, cfg, now=NOW)
+    before_month = asset_digests(store, "data-2026-09", tmp_path / "a")
+    before_current = asset_digests(store, "current", tmp_path / "a")
+
+    result = publish(store, capture_dir, cfg, now=NOW)
+
+    assert result.warnings == []
+    assert asset_digests(store, "data-2026-09", tmp_path / "b") == before_month
+    assert asset_digests(store, "current", tmp_path / "b") == before_current
+
+
+def test_a_second_capture_the_same_day_keeps_the_first(tmp_path: Path, cfg):
+    store = LocalReleaseStore(tmp_path / "releases")
+    first = make_capture_dir(
+        tmp_path / "captures",
+        "2026-09-15T0017Z",
+        datetime(2026, 9, 15, 0, 17, tzinfo=timezone.utc),
+        prices=PRICES,
+    )
+    second = make_capture_dir(
+        tmp_path / "captures",
+        "2026-09-15T1817Z",
+        DAY1,
+        prices=[("Chungli", "95", "regular", 30.5)],
+    )
+
+    publish(store, first, cfg, now=NOW)
+    publish(store, second, cfg, now=NOW)
+
+    daily = schema.read_rows_csv_gz(
+        store.download("data-2026-09", "costco-gas-2026-09-15.csv.gz", tmp_path / "d.csv.gz")
+    )
+    assert sorted(daily["capture_id"].unique().to_list()) == [
+        "2026-09-15T0017Z",
+        "2026-09-15T1817Z",
+    ]
+    assert daily.height == 6
+
+    manifest = json.loads(
+        store.download("data-2026-09", "manifest-2026-09.json", tmp_path / "m.json").read_text()
+    )
+    assert set(manifest["captures"]) == {"2026-09-15T0017Z", "2026-09-15T1817Z"}
+
+    # latest: Chungli 95 moves to the newer capture, the other rows are untouched.
+    latest = pl.read_csv(
+        store.download("current", "costco-gas-latest.csv", tmp_path / "l.csv"),
+        schema=schema.ROW_SCHEMA,
+    )
+    chungli = latest.filter(pl.col("station_key") == "TW-Chungli")
+    assert chungli["grade_raw"].to_list() == ["95"]
+    assert chungli["price"].to_list() == [30.5]
+    xin = latest.filter(pl.col("station_key") == "TW-Xinzhuang")
+    assert xin.height == 2
+    assert xin["capture_id"].unique().to_list() == ["2026-09-15T0017Z"]
+
+    daily_all = pl.read_parquet(
+        store.download("current", "costco-gas-all.parquet", tmp_path / "all.parquet")
+    )
+    regular = daily_all.filter(
+        (pl.col("station_key") == "TW-Chungli") & (pl.col("grade_raw") == "95")
+    ).to_dicts()[0]
+    assert regular["n_captures"] == 2
+    assert regular["price_min"] == 30.0
+    assert regular["price_max"] == 30.5
+
+
+def test_an_older_capture_does_not_move_the_stored_status(tmp_path: Path, cfg):
+    store = LocalReleaseStore(tmp_path / "releases")
+    newer = make_capture_dir(tmp_path / "captures", "2026-09-15T1817Z", DAY1, prices=PRICES)
+    older = make_capture_dir(
+        tmp_path / "captures",
+        "2026-09-15T0017Z",
+        datetime(2026, 9, 15, 0, 17, tzinfo=timezone.utc),
+        prices=[("Chungli", "95", "regular", 29.0)],
+    )
+
+    publish(store, newer, cfg, now=NOW)
+    publish(store, older, cfg, now=NOW)
+
+    manifest = json.loads(
+        store.download("current", "manifest.json", tmp_path / "cm.json").read_text()
+    )
+    assert manifest["status"]["capture_id"] == "2026-09-15T1817Z"
+    assert manifest["newest_capture_by_country"]["TW"] == "2026-09-15T1817Z"
+    stations = pl.read_csv(
+        store.download("current", "stations.csv", tmp_path / "s.csv"),
+        schema=schema.STATION_SCHEMA,
+    )
+    # Xinzhuang has no rows in the older capture, but its status must not flip.
+    assert set(stations["status"].to_list()) == {"active"}
