@@ -76,9 +76,7 @@ def test_us_fetch_parameters(cfg):
     # Only the first 10 ids of an AjaxGetGasPricesService request are processed.
     assert us.batch_size == 10
     assert us.seen_within_days == 30
-    assert us.ecom_url == (
-        "https://ecom-api.costco.com/core/warehouse-locator/v1/warehouses.json"
-    )
+    assert us.ecom_url == ("https://ecom-api.costco.com/core/warehouse-locator/v1/warehouses.json")
     assert us.ecom_client_identifier == "7c71124c-7bf1-44db-bc9d-498584cd66e5"
     assert us.ecom_params["latitude"] == "0"
     assert us.ecom_params["limit"] == "5000"
@@ -154,12 +152,12 @@ def test_units_bounds_floors_and_staleness(cfg):
     assert jp.stale_after_days == 10
 
     assert cfg.countries["GB"].price_unit == "GBp/L"
-    assert (cfg.countries["GB"].bounds["GBp/L"].min,
-            cfg.countries["GB"].bounds["GBp/L"].max) == (100.0, 250.0)
+    assert (cfg.countries["GB"].bounds["GBp/L"].min, cfg.countries["GB"].bounds["GBp/L"].max) == (
+        100.0,
+        250.0,
+    )
     assert cfg.countries["TW"].stale_after_days == 14
-    assert [cfg.countries[c].floor for c in ("MX", "GB", "AU", "JP", "TW")] == [
-        18, 21, 14, 26, 3
-    ]
+    assert [cfg.countries[c].floor for c in ("MX", "GB", "AU", "JP", "TW")] == [18, 21, 14, 26, 3]
 
 
 def test_timezone_tables(cfg):
@@ -218,8 +216,15 @@ def test_grade_table(cfg):
 def test_us_extra_ids_table(cfg):
     df = cfg.us_extra_ids
     assert df.columns == [
-        "source_station_id", "name", "city", "region",
-        "postcode", "lat", "lon", "timezone", "note",
+        "source_station_id",
+        "name",
+        "city",
+        "region",
+        "postcode",
+        "lat",
+        "lon",
+        "timezone",
+        "note",
     ]
     ids = df["source_station_id"].to_list()
     assert ids == ["1680", "1765", "1772"]
@@ -250,7 +255,10 @@ def test_us_extra_ids_table(cfg):
 
 def test_station_links_table_starts_empty(cfg):
     assert cfg.station_links.columns == [
-        "old_station_key", "new_station_key", "effective_date", "note",
+        "old_station_key",
+        "new_station_key",
+        "effective_date",
+        "note",
     ]
     assert cfg.station_links.height == 0
 
@@ -265,8 +273,12 @@ def test_site_config(cfg):
     assert set(site.basemaps) == {"carto", "osm"}
     for provider in site.basemaps.values():
         assert set(provider) == {
-            "light_url", "dark_url", "subdomains",
-            "max_zoom", "dark_filter", "attribution",
+            "light_url",
+            "dark_url",
+            "subdomains",
+            "max_zoom",
+            "dark_filter",
+            "attribution",
         }
     osm = site.basemaps["osm"]
     assert osm["light_url"] == "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
@@ -293,9 +305,7 @@ def test_query_parameters_must_be_strings(config_copy: Path):
     # the door to non-query keys drifting back into params.
     path = config_copy / "config" / "countries.toml"
     text = path.read_text(encoding="utf-8")
-    broken = text.replace(
-        'pageSize = "100"\nlang = "en_GB"', 'pageSize = 100\nlang = "en_GB"'
-    )
+    broken = text.replace('pageSize = "100"\nlang = "en_GB"', 'pageSize = 100\nlang = "en_GB"')
     assert broken != text
     path.write_text(broken, encoding="utf-8")
     with pytest.raises(ConfigError, match="query parameter 'pageSize'"):
@@ -353,7 +363,7 @@ def test_rejects_a_timezone_a_region_in_us_extra_ids_needs(config_copy: Path):
     broken = text.replace('AZ = "America/Phoenix"\n', "")
     assert broken != text
     path.write_text(broken, encoding="utf-8")
-    with pytest.raises(ConfigError, match="us_extra_ids.csv"):
+    with pytest.raises(ConfigError, match=r"us_extra_ids.csv"):
         load_config(config_copy)
 
 
@@ -365,7 +375,7 @@ def test_rejects_an_extras_row_with_no_timezone(config_copy: Path):
     broken = text.replace(",America/Phoenix,", ",,")
     assert broken != text
     path.write_text(broken, encoding="utf-8")
-    with pytest.raises(ConfigError, match="us_extra_ids.csv id 1765: no timezone"):
+    with pytest.raises(ConfigError, match=r"us_extra_ids.csv id 1765: no timezone"):
         load_config(config_copy)
 
 
@@ -385,9 +395,7 @@ def test_rejects_bounds_whose_minimum_is_not_below_its_maximum(config_copy: Path
 def test_rejects_a_price_unit_with_no_bounds(config_copy: Path):
     path = config_copy / "config" / "countries.toml"
     text = path.read_text(encoding="utf-8")
-    broken = text.replace(
-        '[countries.US.bounds."USD/L"]\nmin = 0.5\nmax = 2.5\n', ""
-    )
+    broken = text.replace('[countries.US.bounds."USD/L"]\nmin = 0.5\nmax = 2.5\n', "")
     assert broken != text
     path.write_text(broken, encoding="utf-8")
     with pytest.raises(ConfigError, match="US: no bounds for unit 'USD/L'"):
@@ -402,3 +410,63 @@ def test_rejects_an_invalid_timezone_name(config_copy: Path):
     path.write_text(broken, encoding="utf-8")
     with pytest.raises(ConfigError, match="not an IANA timezone name"):
         load_config(config_copy)
+
+
+def test_fetch_view_keeps_only_what_a_request_needs(cfg):
+    fetch = cfg.fetch_view()
+    us = fetch.countries["US"]
+    assert fetch.root == cfg.root
+    assert us.url == "https://www.costco.com/AjaxGetGasPricesService"
+    assert us.batch_size == 10
+    assert us.seen_within_days == 30
+    assert us.ecom_url == ("https://ecom-api.costco.com/core/warehouse-locator/v1/warehouses.json")
+    assert us.ecom_client_identifier == "7c71124c-7bf1-44db-bc9d-498584cd66e5"
+    assert us.fallback_params["countryCode"] == "US"
+    assert fetch.countries["GB"].params["fields"] == "FULL"
+    assert fetch.http.max_attempts == 3
+    assert fetch.us_extra_ids.height == 3
+    # Interpretation config is blanked so that replaying an old capture cannot
+    # accidentally reuse the grades or bounds stored with it.
+    assert fetch.grades.map("US", "regular") is None
+    assert fetch.station_links.height == 0
+    assert us.bounds == {}
+    assert us.timezones == {}
+    assert us.unit_overrides == {}
+    assert us.price_unit == ""
+    assert us.floor == 0
+    assert us.stale_after_days == 0
+    # The original is untouched.
+    assert cfg.countries["US"].bounds["USD/gal"].max == 11.0
+
+
+def test_interp_view_keeps_only_what_reading_a_response_needs(cfg):
+    interp = cfg.interp_view()
+    us = interp.countries["US"]
+    # rebuild hashes config/grades.csv, config/station_links.csv and
+    # config/countries.toml under this root.
+    assert interp.root == cfg.root
+    assert us.code == "US"
+    assert us.price_unit == "USD/gal"
+    assert us.bounds["USD/gal"].max == 11.0
+    assert us.timezone_for_region("PR") == "America/Puerto_Rico"
+    assert us.floor == 585
+    assert interp.grades.map("US", "regular").grade == "regular"
+    assert interp.station_links.columns == [
+        "old_station_key",
+        "new_station_key",
+        "effective_date",
+        "note",
+    ]
+    # Fetch config is blanked: a rebuild must never re-request anything.
+    assert us.url == ""
+    assert us.params == {}
+    assert us.batch_size is None
+    assert us.seen_within_days is None
+    assert us.fallback_url is None
+    assert us.fallback_params == {}
+    assert us.ecom_url is None
+    assert us.ecom_params == {}
+    assert us.ecom_client_identifier is None
+    assert interp.us_extra_ids.height == 0
+    assert interp.us_extra_ids.columns == cfg.us_extra_ids.columns
+    assert cfg.countries["US"].url == "https://www.costco.com/AjaxGetGasPricesService"

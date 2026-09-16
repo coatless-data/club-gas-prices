@@ -87,9 +87,7 @@ CHROME_UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
 )
-PROJECT_UA = (
-    "costco-gas-prices/0.1 (+https://github.com/coatless-dashboard/costco-gas-prices)"
-)
+PROJECT_UA = "costco-gas-prices/0.1 (+https://github.com/coatless-dashboard/costco-gas-prices)"
 PROJECT_URL = "https://github.com/coatless-dashboard/costco-gas-prices"
 
 
@@ -228,6 +226,57 @@ class Config:
     station_links: pl.DataFrame
     site: SiteConfig
 
+    def fetch_view(self) -> Config:
+        """URLs, parameters, HTTP policy and us_extra_ids; nothing else.
+
+        A rebuild loads this view from the capture bundle, so the bundle's
+        stale interpretation tables are blanked rather than used.
+        """
+        return replace(
+            self,
+            countries={
+                code: replace(
+                    country,
+                    price_unit="",
+                    unit_overrides={},
+                    bounds={},
+                    floor=0,
+                    stale_after_days=0,
+                    timezones={},
+                )
+                for code, country in self.countries.items()
+            },
+            grades=GradeTable(entries={}),
+            station_links=pl.DataFrame(schema=STATION_LINKS_SCHEMA),
+        )
+
+    def interp_view(self) -> Config:
+        """Grades, units, bounds, region tables, floors, staleness and links.
+
+        A rebuild loads this view from the live checkout, and hashes those
+        files through .root. .http is carried along for convenience; callers
+        read HTTP policy from fetch_view().
+        """
+        return replace(
+            self,
+            countries={
+                code: replace(
+                    country,
+                    url="",
+                    params={},
+                    batch_size=None,
+                    seen_within_days=None,
+                    fallback_url=None,
+                    fallback_params={},
+                    ecom_url=None,
+                    ecom_params={},
+                    ecom_client_identifier=None,
+                )
+                for code, country in self.countries.items()
+            },
+            us_extra_ids=pl.DataFrame(schema=US_EXTRA_IDS_SCHEMA),
+        )
+
 
 def load_config(root: Path) -> Config:
     """Read and validate root/config/*.
@@ -291,18 +340,14 @@ def _load_http(path: Path) -> HttpConfig:
             costco_user_agent=str(identity["costco_user_agent"]),
             project_user_agent=str(identity["project_user_agent"]),
             x_project=str(identity["x_project"]),
-            costco_host_suffixes=tuple(
-                str(host) for host in identity["costco_host_suffixes"]
-            ),
+            costco_host_suffixes=tuple(str(host) for host in identity["costco_host_suffixes"]),
             profiles=profiles,
             max_attempts=int(retry.get("max_attempts", 3)),
             backoff_seconds=tuple(
                 float(value) for value in retry.get("backoff_seconds", (1.0, 2.0))
             ),
             backoff_jitter=float(retry.get("jitter", 0.5)),
-            min_interval_seconds=float(
-                raw.get("pacing", {}).get("min_interval_seconds", 1.0)
-            ),
+            min_interval_seconds=float(raw.get("pacing", {}).get("min_interval_seconds", 1.0)),
             block_signals_before_abandon=int(
                 raw.get("blocks", {}).get("signals_before_abandon", 2)
             ),
@@ -339,9 +384,7 @@ def _query_params(raw: object, where: str) -> dict[str, str]:
     out: dict[str, str] = {}
     for key, value in raw.items():
         if not isinstance(value, str):
-            raise ConfigError(
-                f"{where}: query parameter {key!r} must be a string, got {value!r}"
-            )
+            raise ConfigError(f"{where}: query parameter {key!r} must be a string, got {value!r}")
         out[str(key)] = value
     return out
 
@@ -368,15 +411,11 @@ def _load_countries(path: Path) -> dict[str, CountryConfig]:
                 url=str(spec["url"]),
                 params=_query_params(spec.get("params"), f"{where}.params"),
                 price_unit=str(spec["price_unit"]),
-                unit_overrides={
-                    str(k): str(v) for k, v in spec.get("unit_overrides", {}).items()
-                },
+                unit_overrides={str(k): str(v) for k, v in spec.get("unit_overrides", {}).items()},
                 bounds=_load_bounds(spec.get("bounds", {}), where),
                 floor=int(spec["floor"]),
                 stale_after_days=int(spec["stale_after_days"]),
-                timezones={
-                    str(k): str(v) for k, v in spec.get("timezones", {}).items()
-                },
+                timezones={str(k): str(v) for k, v in spec.get("timezones", {}).items()},
                 batch_size=_optional_int(spec.get("batch_size")),
                 seen_within_days=_optional_int(spec.get("seen_within_days")),
                 fallback_url=_optional_str(spec.get("fallback_url")),
@@ -384,12 +423,8 @@ def _load_countries(path: Path) -> dict[str, CountryConfig]:
                     spec.get("fallback_params"), f"{where}.fallback_params"
                 ),
                 ecom_url=_optional_str(spec.get("ecom_url")),
-                ecom_params=_query_params(
-                    spec.get("ecom_params"), f"{where}.ecom_params"
-                ),
-                ecom_client_identifier=_optional_str(
-                    spec.get("ecom_client_identifier")
-                ),
+                ecom_params=_query_params(spec.get("ecom_params"), f"{where}.ecom_params"),
+                ecom_client_identifier=_optional_str(spec.get("ecom_client_identifier")),
             )
         except (KeyError, TypeError, ValueError) as exc:
             raise ConfigError(f"{where}: {exc}") from exc
@@ -451,23 +486,20 @@ def _validate(cfg: Config) -> None:
     for code, country in cfg.countries.items():
         if country.price_unit not in PRICE_UNITS:
             raise ConfigError(
-                f"{code}: price_unit {country.price_unit!r} is not one of "
-                f"{', '.join(PRICE_UNITS)}"
+                f"{code}: price_unit {country.price_unit!r} is not one of {', '.join(PRICE_UNITS)}"
             )
         units = {country.price_unit, *country.unit_overrides.values()}
         for unit in sorted(units):
             if unit not in PRICE_UNITS:
                 raise ConfigError(
-                    f"{code}: unit override {unit!r} is not one of "
-                    f"{', '.join(PRICE_UNITS)}"
+                    f"{code}: unit override {unit!r} is not one of {', '.join(PRICE_UNITS)}"
                 )
             if unit not in country.bounds:
                 raise ConfigError(f"{code}: no bounds for unit {unit!r}")
         for unit, bounds in country.bounds.items():
             if bounds.min >= bounds.max:
                 raise ConfigError(
-                    f"{code}: bounds for {unit!r} have min {bounds.min} >= "
-                    f"max {bounds.max}"
+                    f"{code}: bounds for {unit!r} have min {bounds.min} >= max {bounds.max}"
                 )
             for grade_raw, (low, high) in bounds.grade_overrides.items():
                 if low >= high:
@@ -484,8 +516,7 @@ def _validate(cfg: Config) -> None:
         for region, zone in country.timezones.items():
             if not _IANA_RE.fullmatch(zone):
                 raise ConfigError(
-                    f"{code}: {zone!r} for region {region!r} is not an IANA "
-                    "timezone name"
+                    f"{code}: {zone!r} for region {region!r} is not an IANA timezone name"
                 )
         for region in sorted(country.unit_overrides):
             if region not in country.timezones:
@@ -502,8 +533,7 @@ def _validate(cfg: Config) -> None:
             )
         if entry.spec_source not in SPEC_SOURCES:
             raise ConfigError(
-                f"{where}: spec_source {entry.spec_source!r} must be 'source', "
-                "'reported' or blank"
+                f"{where}: spec_source {entry.spec_source!r} must be 'source', 'reported' or blank"
             )
         if entry.spec_source == "reported" and not entry.spec_source_url:
             raise ConfigError(f"{where}: a reported spec needs a spec_source_url")
@@ -528,15 +558,12 @@ def _validate(cfg: Config) -> None:
                 )
             if not _IANA_RE.fullmatch(zone):
                 raise ConfigError(
-                    f"us_extra_ids.csv id {station_id}: {zone!r} is not an IANA "
-                    "timezone name"
+                    f"us_extra_ids.csv id {station_id}: {zone!r} is not an IANA timezone name"
                 )
 
     seen: set[str] = set()
     for row in cfg.station_links.iter_rows(named=True):
         old_key = _text(row["old_station_key"])
         if old_key in seen:
-            raise ConfigError(
-                f"station_links.csv: duplicate old_station_key {old_key!r}"
-            )
+            raise ConfigError(f"station_links.csv: duplicate old_station_key {old_key!r}")
         seen.add(old_key)
