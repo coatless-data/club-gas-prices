@@ -12,6 +12,8 @@ from pathlib import Path
 from .alerts import run_alerts
 from .capture import CaptureResult, run_capture
 from .config import load_config
+from .discover import discover
+from .http import Client
 from .issues import Issues
 from .publish import publish
 from .rebuild import RebuildResult, rebuild
@@ -161,6 +163,21 @@ def cmd_alerts(args) -> int:
     return 0
 
 
+def cmd_discover(args) -> int:
+    cfg = load_config(Path(args.root))
+    result = discover(
+        open_configured_store(),
+        Client(cfg.http),
+        cfg,
+        Issues(os.environ.get("GITHUB_REPOSITORY"), os.environ.get("GITHUB_TOKEN")),
+        now=utc_now(),
+    )
+    print(
+        json.dumps({"candidates": len(result.candidates), "skipped_reason": result.skipped_reason})
+    )
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="costco-gas")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -205,6 +222,12 @@ def build_parser() -> argparse.ArgumentParser:
     scope_group.add_argument("--year", help="every month of a year, e.g. 2026")
     scope_group.add_argument("--all", action="store_true", help="every month")
     rebuild_parser.set_defaults(func=cmd_rebuild)
+
+    discover_cmd = sub.add_parser(
+        "discover", help="sweep unpolled US warehouse ids for fuel prices (spec 10.4)"
+    )
+    discover_cmd.add_argument("--root", default=".", help="repository root holding config/")
+    discover_cmd.set_defaults(func=cmd_discover)
 
     return parser
 
