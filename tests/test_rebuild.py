@@ -6,6 +6,7 @@ import json
 from datetime import UTC, datetime
 
 import polars as pl
+import pytest
 
 from costco_gas.config import load_config
 from costco_gas.rebuild import rebuild
@@ -279,3 +280,54 @@ def test_rebuild_of_an_open_month_then_refreshes_current(tmp_path, monkeypatch):
         store.download("current", "manifest.json", tmp_path / "m.json").read_text()
     )
     assert manifest["newest_capture_by_country"] == {"AU": "2026-09-02T1817Z"}
+
+
+def test_rebuild_interrupted_mid_month_lets_close_periods_close_cleanly_after_resume(
+    tmp_path, monkeypatch
+):
+    """A crash between two days must never leave the manifest describing a day
+    differently from the daily file `rebuild` already published for it: that
+    disagreement used to make `close_periods`'s row-count cross-check raise and
+    abort the whole close, including every other month in the same invocation
+    (spec review, Task 16 round 2)."""
+    monkeypatch.setenv("GITHUB_SHA", "sha-seven")
+    store = open_store(f"local:{tmp_path / 'releases'}")
+    checkout = checkout_with_config(tmp_path)
+    _two_day_month(store, tmp_path, checkout)
+    cfg = load_config(checkout)
+
+    import costco_gas.rebuild as rebuild_module
+
+    real_rebuild_capture = rebuild_module._rebuild_capture
+    calls = {"n": 0}
+
+    def flaky(store_, cfg_, tag, capture_id, work):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise RuntimeError("simulated crash mid-month")
+        return real_rebuild_capture(store_, cfg_, tag, capture_id, work)
+
+    monkeypatch.setattr(rebuild_module, "_rebuild_capture", flaky)
+
+    with pytest.raises(RuntimeError, match="simulated crash mid-month"):
+        rebuild(store, cfg, scope="month", value="2026-09", now=NOW)
+
+    # Day one is already durable: its daily file and its manifest entry agree,
+    # even though the "crash" happened while day two was only just starting.
+    manifest = read_month_manifest(store, "data-2026-09")
+    entry_one = manifest["captures"]["2026-09-01T1817Z"]
+    assert entry_one["rows_by_capture_date"] == {"2026-09-01": 3}
+    day_one = _daily(store, "data-2026-09", "2026-09-01", tmp_path, "mid.csv.gz")
+    assert day_one.height == entry_one["daily_files"]["2026-09-01"]["rows"] == 3
+
+    monkeypatch.setattr(rebuild_module, "_rebuild_capture", real_rebuild_capture)
+    result = rebuild(store, cfg, scope="month", value="2026-09", now=NOW)
+    assert result.resumed is True
+    assert result.captures == 1
+
+    from costco_gas.rollup import close_periods
+
+    close_result = close_periods(store, cfg, now=datetime(2026, 11, 2, tzinfo=UTC))
+
+    assert close_result.closed_months == ["2026-09"]
+    assert close_result.blocked_months == []

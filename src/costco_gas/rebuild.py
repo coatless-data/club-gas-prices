@@ -250,6 +250,17 @@ def _rebuild_month(
             info = {"sha256": sha256_file(path), "rows": merged.height}
             for capture_id in capture_ids:
                 entries[capture_id].setdefault("daily_files", {})[day] = info
+            # The manifest is persisted for THIS day before the checkpoint is
+            # allowed to move past it, not once at the end of the whole month.
+            # A crash between these two writes just makes the next run redo
+            # this one day (idempotent, safe); persisting the manifest only
+            # once after the entire loop, as before, could leave a completed
+            # checkpoint pointing past a day whose manifest entry still held
+            # its pre-rebuild row count and hash -- disagreeing with the daily
+            # file `replace_atomic` had already made durable, which is exactly
+            # what makes `_close_month`'s cross-check raise (spec review,
+            # Task 16 round 2).
+            write_month_manifest(store, tag, manifest, token=token)
             _write_state(
                 store,
                 tag,
@@ -264,7 +275,6 @@ def _rebuild_month(
                 },
                 token=token,
             )
-        write_month_manifest(store, tag, manifest, token=token)
         _write_state(
             store,
             tag,
