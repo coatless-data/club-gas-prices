@@ -300,3 +300,105 @@ def test_query_parameters_must_be_strings(config_copy: Path):
     path.write_text(broken, encoding="utf-8")
     with pytest.raises(ConfigError, match="query parameter 'pageSize'"):
         load_config(config_copy)
+
+
+def test_rejects_an_unknown_grade_mapping_target(config_copy: Path):
+    path = config_copy / "config" / "grades.csv"
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write("US,midgrade,mid-grade,1,Midgrade,,,\n")
+    with pytest.raises(ConfigError) as excinfo:
+        load_config(config_copy)
+    message = str(excinfo.value)
+    assert "mid-grade" in message
+    assert "regular, premium, diesel, other" in message
+
+
+def test_rejects_a_grade_row_for_an_unknown_country(config_copy: Path):
+    path = config_copy / "config" / "grades.csv"
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write("KR,Regular,regular,1,Regular,,,\n")
+    with pytest.raises(ConfigError, match="unknown country 'KR'"):
+        load_config(config_copy)
+
+
+def test_rejects_a_reported_spec_with_no_source_url(config_copy: Path):
+    path = config_copy / "config" / "grades.csv"
+    text = path.read_text(encoding="utf-8")
+    broken = text.replace(
+        "MX,Regular,regular,1,Regular,Octane index ([RON+MON]/2) at least 87,reported,"
+        "https://api-reportediario.cne.gob.mx/api/EstacionServicio/Petroliferos",
+        "MX,Regular,regular,1,Regular,Octane index ([RON+MON]/2) at least 87,reported,",
+    )
+    assert broken != text
+    path.write_text(broken, encoding="utf-8")
+    with pytest.raises(ConfigError, match="spec_source_url"):
+        load_config(config_copy)
+
+
+def test_rejects_a_missing_timezone_table_entry(config_copy: Path):
+    # PR is a region the US config names elsewhere (it prices per litre), so the
+    # US timezone table must resolve it.
+    path = config_copy / "config" / "countries.toml"
+    text = path.read_text(encoding="utf-8")
+    broken = text.replace('PR = "America/Puerto_Rico"\n', "")
+    assert broken != text
+    path.write_text(broken, encoding="utf-8")
+    with pytest.raises(ConfigError, match="US: no timezone for region 'PR'"):
+        load_config(config_copy)
+
+
+def test_rejects_a_timezone_a_region_in_us_extra_ids_needs(config_copy: Path):
+    path = config_copy / "config" / "countries.toml"
+    text = path.read_text(encoding="utf-8")
+    broken = text.replace('AZ = "America/Phoenix"\n', "")
+    assert broken != text
+    path.write_text(broken, encoding="utf-8")
+    with pytest.raises(ConfigError, match="us_extra_ids.csv"):
+        load_config(config_copy)
+
+
+def test_rejects_an_extras_row_with_no_timezone(config_copy: Path):
+    # Without a timezone the station is dropped by normalize as no_timezone,
+    # which is exactly what these three rows exist to prevent.
+    path = config_copy / "config" / "us_extra_ids.csv"
+    text = path.read_text(encoding="utf-8")
+    broken = text.replace(",America/Phoenix,", ",,")
+    assert broken != text
+    path.write_text(broken, encoding="utf-8")
+    with pytest.raises(ConfigError, match="us_extra_ids.csv id 1765: no timezone"):
+        load_config(config_copy)
+
+
+def test_rejects_bounds_whose_minimum_is_not_below_its_maximum(config_copy: Path):
+    path = config_copy / "config" / "countries.toml"
+    text = path.read_text(encoding="utf-8")
+    broken = text.replace(
+        '[countries.CA.bounds."CAD/L"]\nmin = 1.0',
+        '[countries.CA.bounds."CAD/L"]\nmin = 9.0',
+    )
+    assert broken != text
+    path.write_text(broken, encoding="utf-8")
+    with pytest.raises(ConfigError, match=r"CA: bounds for 'CAD/L'.*9\.0 >= max 3\.5"):
+        load_config(config_copy)
+
+
+def test_rejects_a_price_unit_with_no_bounds(config_copy: Path):
+    path = config_copy / "config" / "countries.toml"
+    text = path.read_text(encoding="utf-8")
+    broken = text.replace(
+        '[countries.US.bounds."USD/L"]\nmin = 0.5\nmax = 2.5\n', ""
+    )
+    assert broken != text
+    path.write_text(broken, encoding="utf-8")
+    with pytest.raises(ConfigError, match="US: no bounds for unit 'USD/L'"):
+        load_config(config_copy)
+
+
+def test_rejects_an_invalid_timezone_name(config_copy: Path):
+    path = config_copy / "config" / "countries.toml"
+    text = path.read_text(encoding="utf-8")
+    broken = text.replace('"*" = "Europe/London"', '"*" = "GMT+1"')
+    assert broken != text
+    path.write_text(broken, encoding="utf-8")
+    with pytest.raises(ConfigError, match="not an IANA timezone name"):
+        load_config(config_copy)

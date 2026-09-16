@@ -248,6 +248,7 @@ def load_config(root: Path) -> Config:
         station_links=_read_csv(cfg_dir / "station_links.csv", STATION_LINKS_SCHEMA),
         site=_load_site(cfg_dir / "site.toml"),
     )
+    _validate(cfg)
     return cfg
 
 
@@ -444,3 +445,98 @@ def _load_site(path: Path) -> SiteConfig:
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise ConfigError(f"{path}: {exc}") from exc
+
+
+def _validate(cfg: Config) -> None:
+    for code, country in cfg.countries.items():
+        if country.price_unit not in PRICE_UNITS:
+            raise ConfigError(
+                f"{code}: price_unit {country.price_unit!r} is not one of "
+                f"{', '.join(PRICE_UNITS)}"
+            )
+        units = {country.price_unit, *country.unit_overrides.values()}
+        for unit in sorted(units):
+            if unit not in PRICE_UNITS:
+                raise ConfigError(
+                    f"{code}: unit override {unit!r} is not one of "
+                    f"{', '.join(PRICE_UNITS)}"
+                )
+            if unit not in country.bounds:
+                raise ConfigError(f"{code}: no bounds for unit {unit!r}")
+        for unit, bounds in country.bounds.items():
+            if bounds.min >= bounds.max:
+                raise ConfigError(
+                    f"{code}: bounds for {unit!r} have min {bounds.min} >= "
+                    f"max {bounds.max}"
+                )
+            for grade_raw, (low, high) in bounds.grade_overrides.items():
+                if low >= high:
+                    raise ConfigError(
+                        f"{code}: bounds for {unit!r} grade {grade_raw!r} have "
+                        f"min {low} >= max {high}"
+                    )
+        if country.floor < 1:
+            raise ConfigError(f"{code}: floor must be at least 1")
+        if country.stale_after_days < 1:
+            raise ConfigError(f"{code}: stale_after_days must be at least 1")
+        if not country.timezones:
+            raise ConfigError(f"{code}: timezones table is empty")
+        for region, zone in country.timezones.items():
+            if not _IANA_RE.fullmatch(zone):
+                raise ConfigError(
+                    f"{code}: {zone!r} for region {region!r} is not an IANA "
+                    "timezone name"
+                )
+        for region in sorted(country.unit_overrides):
+            if region not in country.timezones:
+                raise ConfigError(f"{code}: no timezone for region {region!r}")
+
+    for (country_code, grade_raw), entry in cfg.grades.entries.items():
+        where = f"grades.csv: {country_code} {grade_raw!r}"
+        if country_code not in cfg.countries:
+            raise ConfigError(f"{where}: unknown country {country_code!r}")
+        if entry.grade not in GRADES:
+            raise ConfigError(
+                f"{where}: maps to unknown grade {entry.grade!r}; expected one of "
+                f"{', '.join(GRADES)}"
+            )
+        if entry.spec_source not in SPEC_SOURCES:
+            raise ConfigError(
+                f"{where}: spec_source {entry.spec_source!r} must be 'source', "
+                "'reported' or blank"
+            )
+        if entry.spec_source == "reported" and not entry.spec_source_url:
+            raise ConfigError(f"{where}: a reported spec needs a spec_source_url")
+
+    us = cfg.countries.get("US")
+    if us is not None:
+        for row in cfg.us_extra_ids.iter_rows(named=True):
+            station_id = _text(row["source_station_id"])
+            if not station_id:
+                raise ConfigError("us_extra_ids.csv: a row has no source_station_id")
+            region = _text(row["region"])
+            if region and region not in us.timezones:
+                raise ConfigError(
+                    f"US: no timezone for region {region!r}, used by "
+                    f"us_extra_ids.csv id {station_id}"
+                )
+            zone = _text(row["timezone"])
+            if not zone:
+                raise ConfigError(
+                    f"us_extra_ids.csv id {station_id}: no timezone; ecom-api does "
+                    "not list these ids, so normalize would drop the station"
+                )
+            if not _IANA_RE.fullmatch(zone):
+                raise ConfigError(
+                    f"us_extra_ids.csv id {station_id}: {zone!r} is not an IANA "
+                    "timezone name"
+                )
+
+    seen: set[str] = set()
+    for row in cfg.station_links.iter_rows(named=True):
+        old_key = _text(row["old_station_key"])
+        if old_key in seen:
+            raise ConfigError(
+                f"station_links.csv: duplicate old_station_key {old_key!r}"
+            )
+        seen.add(old_key)
