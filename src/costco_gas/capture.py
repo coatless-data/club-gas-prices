@@ -55,6 +55,11 @@ US_ID_SET_SCHEMA = {
     "ecom_state": pl.String,
 }
 
+# The countries that run off the previous `current/stations.csv`: US takes its
+# `seen` ids from it and CA takes its fallback's cached metadata from it, so
+# spec 5.3 step 1 makes both degraded when it could not be read.
+PREVIOUS_STATE_COUNTRIES = ("US", "CA")
+
 
 @dataclass
 class CaptureResult:
@@ -214,6 +219,7 @@ def run_capture(
         interp_config=cfg.interp_view(),
         previous_stations=prev_stations,
         previous_fx=prev_fx,
+        previous_state_complete=complete,
         previous_status=prev_status,
         shared={},
         force_fallback=set(force_fallback),
@@ -348,6 +354,14 @@ def run_country(
         )
         normalized = None
         us_id_set = None
+
+    if country in PREVIOUS_STATE_COUNTRIES and not ctx.previous_state_complete:
+        # `checks.evaluate_country` only ever inspects this country's own warning
+        # list, so the capture-level warning `run_capture` records has to be
+        # repeated here or spec 6.5's "makes US and CA degraded" never fires.
+        # Appended after the try/except so it survives the failure path too,
+        # which builds a fresh FetchResult with no warnings.
+        result.warnings.append(Warning(code="previous_state_unavailable"))
 
     block = checks.evaluate_country(country, result, normalized, ctx, now)
 
