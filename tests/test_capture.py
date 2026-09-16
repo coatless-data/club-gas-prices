@@ -280,3 +280,66 @@ def test_a_blocked_country_fails_alone_and_sets_all_failed(workspace: Path):
     # status.json is still written, so the command still exits 0 (spec 5.3 step 6).
     assert (workspace / "out" / "capture" / "status.json").exists()
     assert "all_failed=true" in (workspace / "gh_output").read_text()
+
+
+def test_ecom_api_is_fetched_once_for_ca_and_recorded(workspace: Path):
+    cfg = load_config(workspace)
+    store = LocalReleaseStore(workspace / "releases")
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.host)
+        if request.url.host == "api.frankfurter.dev":
+            return httpx.Response(200, content=FX_BODY,
+                                  headers={"Content-Type": "application/json"})
+        if request.url.host == "ecom-api.costco.com":
+            assert request.headers["client-identifier"]
+            return httpx.Response(200, content=ECOM_BODY,
+                                  headers={"Content-Type": "application/json"})
+        return httpx.Response(403, content=b"Access Denied")
+
+    client = Client(cfg.http, transport=httpx.MockTransport(handler))
+    result = run_capture(
+        cfg,
+        store,
+        workspace / "out",
+        countries=["CA"],
+        force_fallback=set(),
+        now=NOW,
+        client=client,
+    )
+
+    assert result.status["ecom_api"] == {"attempted": True, "http_status": 200}
+    assert seen.count("ecom-api.costco.com") == 1
+    # The shared response is stored once, not once per country (spec 8.2).
+    assert (workspace / "out" / "shared" / "ecom-api.body").exists()
+    with tarfile.open(workspace / "out" / "capture" / "bundle.tar.gz", "r:gz") as tar:
+        assert "responses/shared/ecom-api.body" in tar.getnames()
+
+
+def test_ecom_api_is_not_fetched_when_neither_us_nor_ca_is_selected(workspace: Path):
+    cfg = load_config(workspace)
+    store = LocalReleaseStore(workspace / "releases")
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.host)
+        if request.url.host == "api.frankfurter.dev":
+            return httpx.Response(200, content=FX_BODY,
+                                  headers={"Content-Type": "application/json"})
+        return httpx.Response(200, content=TW_BODY,
+                              headers={"Content-Type": "application/json"})
+
+    client = Client(cfg.http, transport=httpx.MockTransport(handler))
+    result = run_capture(
+        cfg,
+        store,
+        workspace / "out",
+        countries=["TW"],
+        force_fallback=set(),
+        now=NOW,
+        client=client,
+    )
+
+    assert "ecom-api.costco.com" not in seen
+    assert result.status["ecom_api"] == {"attempted": False, "http_status": None}
