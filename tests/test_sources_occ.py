@@ -1,6 +1,17 @@
 from __future__ import annotations
 
+from datetime import date
+from pathlib import Path
+
+import httpx
+import polars as pl
+import pytest
+
+from costco_gas.config import load_config
+from costco_gas.http import Client
+from costco_gas.sources.base import CaptureContext
 from costco_gas.sources.occ import (
+    OccSource,
     au_city,
     au_region,
     au_region_from_postcode,
@@ -10,12 +21,57 @@ from costco_gas.sources.occ import (
     tw_region,
 )
 
+ROOT = Path(__file__).resolve().parents[1]
+FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def make_ctx(cfg, *, capture_date=date(2026, 9, 15)) -> CaptureContext:
+    return CaptureContext(
+        capture_id="2026-09-15T1910Z",
+        capture_date=capture_date,
+        fetch_config=cfg.fetch_view(),
+        interp_config=cfg.interp_view(),
+        previous_stations=pl.DataFrame(),
+        previous_fx=pl.DataFrame(),
+        previous_status=None,
+        shared={},
+        force_fallback=set(),
+    )
+
+
+def fetch_responses(country: str, bodies: list[bytes]):
+    """Fetch one country, serving ``bodies`` in request order."""
+    cfg = load_config(ROOT)
+    ctx = make_ctx(cfg)
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        body = bodies[min(len(seen) - 1, len(bodies) - 1)]
+        return httpx.Response(200, content=body, headers={"content-type": "application/json"})
+
+    client = Client(cfg.http, transport=httpx.MockTransport(handler))
+    source = OccSource(country)
+    return source, ctx, source.fetch(client, ctx), seen
+
+
+def run(country: str, bodies: list[bytes]):
+    """Fetch and parse one country, serving ``bodies`` in request order."""
+    source, ctx, responses, seen = fetch_responses(country, bodies)
+    return source.parse(responses, ctx), seen
+
+
+def station(result, source_station_id):
+    matches = [s for s in result.stations if s.source_station_id == source_station_id]
+    assert matches, f"{source_station_id} not in {[s.source_station_id for s in result.stations]}"
+    return matches[0]
+
 
 def test_clean_strips_ideographic_space_and_empty_becomes_none():
     assert clean("Sunbury ") == "Sunbury"
     assert clean("6167 ") == "6167"
     assert clean(" 埼玉県三郷市新三郷ららシティ3-1-2 ") == "埼玉県三郷市新三郷ららシティ3-1-2"
-    assert clean("　Tomiya　") == "Tomiya"
+    assert clean("\u3000Tomiya\u3000") == "Tomiya"
     assert clean("") is None
     assert clean(None) is None
 
@@ -59,3 +115,30 @@ def test_tw_region_is_read_after_the_leading_postcode():
     assert tw_region("320 桃園市中壢區民族路六段508號 (中壢店)") == "桃園市"
     assert tw_region("242 新北市新莊區建國一路138號 (新莊店)") == "新北市"
     assert tw_region(None) is None
+
+
+def test_gb_uses_display_name_as_city_and_keeps_county_towns_out():
+    result, seen = run("GB", [(FIXTURES / "gb_stores.json").read_bytes()])
+
+    assert result.country == "GB"
+    assert result.source == "costco-occ"
+    assert seen[0].headers["accept"] == "application/json"
+    assert "fields=FULL" in str(seen[0].url)
+    # Hayes has an empty gasTypes list, so it is not a station at all.
+    assert sorted(s.source_station_id for s in result.stations) == ["Haydock", "Reading", "Sunbury"]
+
+    sunbury = station(result, "Sunbury")
+    assert sunbury.city == "Sunbury"  # displayName "Sunbury " with its trailing space gone
+    assert sunbury.alt_id == "sunbury"
+    assert sunbury.region is None
+    assert sunbury.timezone == "Europe/London"
+    assert sunbury.name_local is None
+    assert sunbury.postcode == "TW16 5LN"
+    assert sunbury.id_origin == "occ"
+    assert [(p.grade_raw, p.price_raw) for p in sunbury.prices] == [
+        ("5301", "162.9"),
+        ("5302", "174.9"),
+        ("5303", "184.9"),
+    ]
+    # address.town is the county "Merseyside" for Haydock; displayName is the town.
+    assert station(result, "Haydock").city == "Haydock"
