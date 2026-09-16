@@ -1,5 +1,10 @@
 version: 2
+
 updates:
+  # actions/* float on a major tag, so they only ever raise a major-bump PR.
+  # The three third-party actions are pinned to a commit SHA with a version
+  # comment, so every patch and minor raises one. Group that churn and leave
+  # majors on their own, where they get read.
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
@@ -8,3 +13,42 @@ updates:
       prefix: "chore(actions)"
     labels:
       - "dependencies"
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+
+  # Python. The uv ecosystem reads [project.dependencies], PEP 735
+  # [dependency-groups] and [build-system.requires], and regenerates uv.lock,
+  # which is what keeps `uv sync --locked` green in every workflow.
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    versioning-strategy: "widen"
+    commit-message:
+      prefix: "chore(deps)"
+      prefix-development: "chore(deps-dev)"
+    labels:
+      - "dependencies"
+    cooldown:
+      default-days: 7
+    groups:
+      python:
+        patterns:
+          - "*"
+        exclude-patterns:
+          # playwright is the only gate on the Pages deploy, and no pull
+          # request check runs the smoke test -- test.yml ignores tests/smoke
+          # and never installs this group. So it never rides along inside
+          # somebody else's PR: it gets its own, and whoever merges it runs
+          # `uv sync --locked --group smoke` and the smoke test locally first.
+          - "playwright"
+        update-types:
+          - "minor"
+          - "patch"

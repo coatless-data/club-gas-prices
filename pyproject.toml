@@ -28,7 +28,7 @@ dev = [
 ]
 # CI only: the Render workflow drives the built site with Playwright.
 smoke = [
-    "playwright==1.49.1",
+    "playwright==1.63.0",
 ]
 
 [tool.ruff]

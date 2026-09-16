@@ -51,13 +51,17 @@ def assert_conventions(name: str) -> None:
     pins = action_pins(name)
     assert pins, f"{name} has no `uses:` lines"
     for action, ref, comment in pins:
-        if action == "astral-sh/setup-uv":
-            # Pinned by commit SHA: a tag can be moved onto different code, and
-            # this action runs with a write-capable token in capture and rebuild.
+        if action.startswith("actions/"):
+            # GitHub's own actions, on a floating major tag: the account that
+            # would have to be compromised to move one is GitHub's own, and the
+            # tag is how security fixes arrive without a commit here.
+            assert re.fullmatch(r"v\d+", ref), (name, action, ref)
+        else:
+            # Everything third-party is pinned by commit SHA with the version in
+            # a trailing comment. A tag can be moved onto different code, and
+            # these run beside a write-capable token.
             assert re.fullmatch(r"[0-9a-f]{40}", ref), (name, action, ref)
             assert comment is not None and comment.startswith("v"), (name, comment)
-        else:
-            assert re.fullmatch(r"v\d+", ref), (name, action, ref)
 
 
 def test_capture_conventions():
@@ -183,8 +187,8 @@ def test_render_stages_no_source_files_and_smoke_tests():
     assert "find _site \\( -name '*.qmd' -o -name '*.scss' \\) -print" in text
     assert "uv sync --locked --group smoke" in text
     assert "uv run python tests/smoke/smoke_site.py _site" in text
-    assert "uses: actions/upload-pages-artifact@v3" in text
-    assert "uses: actions/deploy-pages@v4" in text
+    assert "uses: actions/upload-pages-artifact@v5" in text
+    assert "uses: actions/deploy-pages@v5" in text
 
 
 def extract_verify_script(text: str) -> str:
@@ -302,3 +306,65 @@ def test_rebuild_dispatches_every_scope():
     assert 'uv run costco-gas publish "$d"' in text
     assert "if: ${{ steps.rebuild.outcome == 'success' }}" in text
     assert "run: uv run costco-gas close-periods --rebuild-current" in text
+
+
+def test_test_workflow_conventions():
+    """test.yml pins like every other workflow.
+
+    It was the one file no test read, which is how its third-party action came
+    to be pinned by a rule `assert_conventions` did not actually state.
+    """
+    assert_conventions("test.yml")
+    text = read("test.yml")
+    assert text.startswith("name: Test\n")
+    # The lint gate reads every workflow, so it has to keep running on all of them.
+    assert "raven-actions/actionlint@" in text
+
+
+def test_rebuild_accepts_both_artifact_layouts():
+    """`download-artifact` changed where a single-match `pattern` lands.
+
+    Through v4 every artifact got its own subdirectory. From v5 a `pattern`
+    matching exactly one artifact extracts straight into `path` instead -- and a
+    capture run holds exactly one artifact, so that is the ordinary case here,
+    not an edge one. The glob has to accept both or the artifact scope breaks on
+    every run it is pointed at.
+    """
+    text = read("rebuild.yml")
+    assert "dirs=(artifact/*/capture)" in text
+    assert '[ "${#dirs[@]}" -eq 0 ] && [ -d artifact/capture ]' in text
+    assert "dirs=(artifact/capture)" in text
+    # `artifact/capture` carries no wildcard, so nullglob would not drop it if it
+    # did not exist: it has to stay behind the -d test, never in the glob list.
+    assert "dirs=(artifact/*/capture artifact/capture)" not in text
+
+
+def test_every_workflow_runs_on_the_same_image():
+    """One runner label across the fleet, whatever it is.
+
+    The workflows hand work to each other -- Capture uploads an artifact Rebuild
+    reads, and both trigger Render -- so a split fleet means "passes in test,
+    fails in deploy" with no reason to suspect the OS. This asserts they agree,
+    not which one they agree on.
+    """
+    labels = {}
+    for name in ("test.yml", "capture.yml", "discover.yml", "rebuild.yml", "render.yml"):
+        found = re.findall(r"^\s*runs-on:\s*(\S+)", read(name), re.M)
+        assert len(found) == 1, (name, found)
+        labels[name] = found[0]
+    assert len(set(labels.values())) == 1, labels
+
+
+def test_render_only_deploys_from_the_default_branch():
+    """The push trigger lists pyproject.toml and uv.lock.
+
+    Every Dependabot pull request touches one of those. Without a branch filter
+    each one starts a job that requests `pages: write` and calls deploy-pages,
+    holding a token that has neither.
+    """
+    text = read("render.yml")
+    assert "  push:\n" in text
+    push = text.split("  push:\n", 1)[1].split("\n  workflow_dispatch:", 1)[0]
+    assert "branches: [main]" in push
+    assert "      - pyproject.toml\n" in push
+    assert "      - uv.lock\n" in push

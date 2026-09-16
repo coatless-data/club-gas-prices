@@ -9,6 +9,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+from costco_gas import http
 from costco_gas.config import HttpConfig, TimeoutProfile
 from costco_gas.http import BudgetExceeded, Client
 
@@ -156,14 +157,64 @@ def test_backoff_gaps_stay_within_the_jittered_bounds():
     assert len(calls) == 3
     gap_after_first_failure = calls[1] - calls[0]
     gap_after_second_failure = calls[2] - calls[1]
-    # 50%-150% of the nominal step, with a small allowance for scheduler
-    # overhead so the test isn't flaky.
-    slack = 0.02
+    # A wall-clock gap is sleep plus whatever else the machine did in between,
+    # so overhead can only ever make it LONGER. The lower bound is therefore the
+    # real assertion here and stays tight; the upper bound is generous, because
+    # a busy runner has been seen to add over 70ms to an 80ms sleep, and a gate
+    # that goes red when the machine is loaded is a gate people learn to ignore.
+    # `test_backoff_sleeps_are_the_jittered_schedule` is what actually pins the
+    # formula -- it reads the durations instead of timing them.
     for gap, nominal in (
         (gap_after_first_failure, schedule[0]),
         (gap_after_second_failure, schedule[1]),
     ):
-        assert nominal * 0.5 - slack <= gap <= nominal * 1.5 + slack
+        assert gap >= nominal * 0.5 - 0.005
+        assert gap <= nominal * 1.5 + 0.5
+
+
+def test_backoff_sleeps_are_the_jittered_schedule(monkeypatch):
+    """The same property as above, read rather than timed.
+
+    Recording what `_sleep_backoff` asks for removes the machine from the
+    measurement entirely, so this holds under any load and can assert the bounds
+    exactly instead of with an allowance.
+    """
+    slept: list[float] = []
+    monkeypatch.setattr(http.time, "sleep", slept.append)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, content=b"unavailable")
+
+    schedule = (0.08, 0.24)
+    cfg = HttpConfig(backoff_seconds=schedule, backoff_jitter=0.5, min_interval_seconds=0.0)
+    with Client(cfg, transport=httpx.MockTransport(handler)) as client:
+        client.request("k", "https://backoff.test/x")
+
+    # max_attempts is 3, so two backoffs, taken in schedule order.
+    assert len(slept) == 2
+    for requested, nominal in zip(slept, schedule, strict=True):
+        assert nominal * 0.5 <= requested <= nominal * 1.5
+
+
+def test_backoff_jitter_actually_varies_the_sleep(monkeypatch):
+    """A jitter that silently collapsed to zero would satisfy the bounds above.
+
+    Every retry across the whole fleet would then fire on the same tick, which
+    is the one thing the jitter exists to prevent.
+    """
+    slept: list[float] = []
+    monkeypatch.setattr(http.time, "sleep", slept.append)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, content=b"unavailable")
+
+    cfg = HttpConfig(backoff_seconds=(0.08,), backoff_jitter=0.5, min_interval_seconds=0.0)
+    for _ in range(20):
+        with Client(cfg, transport=httpx.MockTransport(handler)) as client:
+            client.request("k", "https://backoff.test/x")
+
+    assert len(slept) == 40
+    assert len(set(slept)) > 1, "every backoff slept exactly the nominal step"
 
 
 def test_connection_errors_are_retried_and_then_reported():

@@ -44,7 +44,7 @@ jobs:
       FORCE_FALLBACK: ${{ inputs.force_fallback || '' }}
     steps:
       - name: Check out the default branch
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.event.repository.default_branch || github.ref_name }}
           fetch-depth: 0
@@ -78,7 +78,7 @@ jobs:
       - name: Upload the capture artifact
         if: ${{ always() }}
         continue-on-error: true
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: capture-${{ steps.capture.outputs.capture_id || format('run-{0}-{1}', github.run_id, github.run_attempt) }}
           path: out/

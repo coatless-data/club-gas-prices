@@ -8,8 +8,9 @@ __pycache__/
 build/
 dist/
 
-# Planning and research notes: never published
-docs/superpowers/
+# Working notes: the spec, the plan, the research and the launch checklist.
+# Kept locally, never published.
+docs/
 
 # Quarto build output and generated site data
 site/_site/
