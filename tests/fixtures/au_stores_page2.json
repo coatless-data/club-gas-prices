@@ -1,0 +1,77 @@
+{
+ "pagination": {
+  "currentPage": 1,
+  "pageSize": 3,
+  "sort": "asc",
+  "totalPages": 2,
+  "totalResults": 5
+ },
+ "stores": [
+  {
+   "name": "Perth Airport",
+   "displayName": "Perth Airport",
+   "warehouseCode": "116",
+   "gasTypes": [
+    {
+     "name": "Unleaded 91",
+     "price": "$2.027"
+    },
+    {
+     "name": "Premium 98",
+     "price": "$2.227"
+    },
+    {
+     "name": "Diesel",
+     "price": "$2.407"
+    }
+   ],
+   "geoPoint": {
+    "latitude": -31.94378,
+    "longitude": 115.95545
+   },
+   "address": {
+    "country": {
+     "isocode": "AU",
+     "name": "Australia"
+    },
+    "formattedAddress": "142 Dunreath Drive Perth Airport  Australia 6105",
+    "line1": "142 Dunreath Drive",
+    "postalCode": "6105",
+    "town": "Perth Airport "
+   }
+  },
+  {
+   "name": "Casuarina",
+   "displayName": "Casuarina",
+   "warehouseCode": "118",
+   "gasTypes": [
+    {
+     "name": "Unleaded 91",
+     "price": "$2.027"
+    },
+    {
+     "name": "Premium 98",
+     "price": "$2.227"
+    },
+    {
+     "name": "Diesel",
+     "price": "$2.407"
+    }
+   ],
+   "geoPoint": {
+    "latitude": -32.2342231139156,
+    "longitude": 115.8519965043888
+   },
+   "address": {
+    "country": {
+     "isocode": "AU",
+     "name": "Australia"
+    },
+    "formattedAddress": "137 Market Street Casuarina WA Australia 6167",
+    "line1": "137 Market Street",
+    "postalCode": "6167 ",
+    "town": "Casuarina WA"
+   }
+  }
+ ]
+}

@@ -1,0 +1,177 @@
+{
+ "pagination": {
+  "currentPage": 0,
+  "pageSize": 100,
+  "sort": "asc",
+  "totalPages": 1,
+  "totalResults": 5
+ },
+ "stores": [
+  {
+   "name": "Satélite",
+   "displayName": "Satélite",
+   "warehouseCode": "costcoMexicoWharehouse701",
+   "gasTypes": [],
+   "geoPoint": {
+    "latitude": 19.50785036,
+    "longitude": -99.23533753
+   },
+   "address": {
+    "country": {
+     "isocode": "MX",
+     "name": "Mexico "
+    },
+    "formattedAddress": "Circuito Centro Comercial 2001 Naucalpan Mexico Mexico  53100",
+    "line1": "Circuito Centro Comercial 2001",
+    "postalCode": "53100",
+    "region": {
+     "countryIso": "MX",
+     "isocode": "MX-MEX",
+     "isocodeShort": "MEX",
+     "name": "Mexico"
+    },
+    "town": "Naucalpan"
+   }
+  },
+  {
+   "name": "Mexicali",
+   "displayName": "Mexicali",
+   "warehouseCode": "costcoMexicoWharehouse750",
+   "gasTypes": [
+    {
+     "name": "Regular",
+     "price": "$20.89"
+    },
+    {
+     "name": "Premium",
+     "price": "$25.39"
+    }
+   ],
+   "geoPoint": {
+    "latitude": 32.60663671,
+    "longitude": -115.4343584
+   },
+   "address": {
+    "country": {
+     "isocode": "MX",
+     "name": "Mexico "
+    },
+    "formattedAddress": "Carretera San Luis - Río Colorado Km. 7.5 Mexicali Baja California Mexico  21397",
+    "line1": "Carretera San Luis - Río Colorado Km. 7.5",
+    "postalCode": "21397",
+    "region": {
+     "countryIso": "MX",
+     "isocode": "MX-BCN",
+     "isocodeShort": "BCN",
+     "name": "Baja California"
+    },
+    "town": "Mexicali"
+   }
+  },
+  {
+   "name": "Arboledas",
+   "displayName": "Arboledas",
+   "warehouseCode": "costcoMexicoWharehouse726",
+   "gasTypes": [
+    {
+     "name": "Regular",
+     "price": "$23.29"
+    },
+    {
+     "name": "Premium",
+     "price": "$28.29"
+    }
+   ],
+   "geoPoint": {
+    "latitude": 19.55125298,
+    "longitude": -99.20290338
+   },
+   "address": {
+    "country": {
+     "isocode": "MX",
+     "name": "Mexico "
+    },
+    "formattedAddress": "Av. San Nicolás 10 Tlalnepantla Mexico Mexico  54030",
+    "line1": "Av. San Nicolás 10",
+    "postalCode": "54030",
+    "region": {
+     "countryIso": "MX",
+     "isocode": "MX-MEX",
+     "isocodeShort": "MEX",
+     "name": "Mexico"
+    },
+    "town": "Tlalnepantla"
+   }
+  },
+  {
+   "name": "Chihuahua",
+   "displayName": "Chihuahua",
+   "warehouseCode": "costcoMexicoWharehouse756",
+   "gasTypes": [
+    {
+     "name": "Regular",
+     "price": "$23.39"
+    },
+    {
+     "name": "Premium",
+     "price": "$27.49"
+    }
+   ],
+   "geoPoint": {
+    "latitude": 28.648768,
+    "longitude": -106.13049
+   },
+   "address": {
+    "country": {
+     "isocode": "MX",
+     "name": "Mexico "
+    },
+    "formattedAddress": "Av. de la Juventud 7513 Chihuahua Chihuahua Mexico  31115",
+    "line1": "Av. de la Juventud 7513",
+    "postalCode": "31115",
+    "region": {
+     "countryIso": "MX",
+     "isocode": "MX-CHH",
+     "isocodeShort": "CHH",
+     "name": "Chihuahua"
+    },
+    "town": "Chihuahua"
+   }
+  },
+  {
+   "name": "Culiacán",
+   "displayName": "Culiacán",
+   "warehouseCode": "costcoMexicoWharehouse5309",
+   "gasTypes": [
+    {
+     "name": "Regular",
+     "price": "$23.19"
+    },
+    {
+     "name": "Premium",
+     "price": "$28.29"
+    }
+   ],
+   "geoPoint": {
+    "latitude": 24.799144,
+    "longitude": -107.4249186
+   },
+   "address": {
+    "country": {
+     "isocode": "MX",
+     "name": "Mexico "
+    },
+    "formattedAddress": "Blvd. Pedro Infante Poniente 2152 Culiacán Sinaloa Mexico  80020",
+    "line1": "Blvd. Pedro Infante Poniente 2152",
+    "postalCode": "80020",
+    "region": {
+     "countryIso": "MX",
+     "isocode": "MX-SIN",
+     "isocodeShort": "SIN",
+     "name": "Sinaloa"
+    },
+    "town": "Culiacán"
+   }
+  }
+ ]
+}

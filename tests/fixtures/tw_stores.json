@@ -1,0 +1,118 @@
+{
+ "pagination": {
+  "currentPage": 0,
+  "pageSize": 100,
+  "sort": "asc",
+  "totalPages": 1,
+  "totalResults": 4
+ },
+ "stores": [
+  {
+   "name": "Taoyuan",
+   "displayName": "桃園南崁店",
+   "warehouseCode": "costcoTaiwanWarehouse003",
+   "gasTypes": [],
+   "geoPoint": {
+    "latitude": 25.0546991,
+    "longitude": 121.2822328
+   },
+   "address": {
+    "country": {
+     "isocode": "TW",
+     "name": "臺灣"
+    },
+    "formattedAddress": "338 桃園市蘆竹區南崁路一段369號 (南崁店)",
+    "line1": "蘆竹區南崁路一段369號 (南崁店)",
+    "postalCode": "338"
+   }
+  },
+  {
+   "name": "Chungli",
+   "displayName": "桃園中壢店",
+   "warehouseCode": "costcoTaiwanWarehouse010",
+   "gasTypes": [
+    {
+     "name": "Diesel",
+     "price": "$28.6"
+    },
+    {
+     "name": "95",
+     "price": "$30.0"
+    },
+    {
+     "name": "98",
+     "price": "$31.5"
+    }
+   ],
+   "geoPoint": {
+    "latitude": 24.9636189,
+    "longitude": 121.1558083
+   },
+   "address": {
+    "country": {
+     "isocode": "TW",
+     "name": "臺灣"
+    },
+    "formattedAddress": "320 桃園市中壢區民族路六段508號 (中壢店)",
+    "line1": "中壢區民族路六段508號 (中壢店)",
+    "postalCode": "320"
+   }
+  },
+  {
+   "name": "Xinzhuang",
+   "displayName": "新莊店",
+   "warehouseCode": "costcoTaiwanWarehouse011",
+   "gasTypes": [
+    {
+     "name": "95",
+     "price": "$30.0"
+    },
+    {
+     "name": "98",
+     "price": "$31.5"
+    }
+   ],
+   "geoPoint": {
+    "latitude": 25.02740641907481,
+    "longitude": 121.43420190968318
+   },
+   "address": {
+    "country": {
+     "isocode": "TW",
+     "name": "臺灣"
+    },
+    "formattedAddress": "242 新北市新莊區建國一路138號 (新莊店)",
+    "line1": "新莊區建國一路138號 (新莊店)",
+    "postalCode": "242"
+   }
+  },
+  {
+   "name": "North_Taichung",
+   "displayName": "北台中店",
+   "warehouseCode": "costcoTaiwanWarehouse018",
+   "gasTypes": [
+    {
+     "name": "95",
+     "price": "$30.0"
+    },
+    {
+     "name": "98",
+     "price": "$31.5"
+    }
+   ],
+   "geoPoint": {
+    "latitude": 24.18685296620411,
+    "longitude": 120.70798809060759
+   },
+   "address": {
+    "country": {
+     "isocode": "TW",
+     "name": "臺灣"
+    },
+    "formattedAddress": "406 台中市北屯區敦富路366號(北台中店)",
+    "line1": "北屯區敦富路366號(北台中店)",
+    "postalCode": "406"
+   }
+  }
+ ]
+}
