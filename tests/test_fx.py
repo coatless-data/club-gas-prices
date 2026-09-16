@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import json
 from datetime import UTC, date, datetime
 from pathlib import Path
 
@@ -382,3 +383,98 @@ def test_fx_rates_json_round_trip():
     with_date = FxRates.from_json(rows, status="fallback", capture_date=CAPTURE_DATE)
     assert with_date.status == "fallback"
     assert with_date.for_currency("USD").fx_rate_date == CAPTURE_DATE
+
+
+def test_a_currency_frankfurter_never_returns_is_reported_missing_and_warned(make_client):
+    """Reproduces the code-review finding: 5 of 6 currencies resolve (JPY is
+    absent from Frankfurter's response), the dated fallback is unavailable and
+    there is no carry-forward data. `status` still names how the rows that DID
+    resolve were obtained ("ok", since every row that exists came from
+    Frankfurter) -- spec §4.5 defines status as describing how the resolved
+    rates were obtained, not how many resolved. Completeness is a separate,
+    explicit signal: `missing` names the gap and `warnings` makes it visible to
+    whatever renders the capture's status.json, instead of JPY silently having
+    no USD conversion.
+    """
+    partial_frankfurter = [
+        {"date": "2026-09-14", "base": "USD", "quote": "CAD", "rate": 1.3871},
+        {"date": "2026-09-14", "base": "USD", "quote": "MXN", "rate": 17.0477},
+        {"date": "2026-09-14", "base": "USD", "quote": "GBP", "rate": 0.73996},
+        {"date": "2026-09-14", "base": "USD", "quote": "AUD", "rate": 1.399},
+        {"date": "2026-09-14", "base": "USD", "quote": "TWD", "rate": 31.709},
+        # JPY deliberately absent, as in the reviewer's repro.
+    ]
+    calls: list[str] = []
+    handler = routing_handler(
+        {
+            "https://api.frankfurter.dev/": httpx.Response(
+                200,
+                content=json.dumps(partial_frankfurter).encode(),
+                headers={"Content-Type": "application/json"},
+            ),
+            # The dated fallback is unavailable for either date it would try.
+            "https://cdn.jsdelivr.net/": httpx.Response(404, content=b"not found"),
+        },
+        calls,
+    )
+
+    # No carry-forward data either.
+    fx = fetch_rates(make_client(handler), make_ctx())
+
+    assert fx.status == "ok"
+    assert [row.currency for row in fx.rows] == ["CAD", "MXN", "GBP", "AUD", "TWD"]
+    # JPY did not silently disappear: it is named, not just absent.
+    assert fx.missing == ("JPY",)
+    assert fx.for_currency("JPY") is None
+
+    assert len(fx.warnings) == 1
+    warning = fx.warnings[0]
+    assert warning.code == "fx_missing"
+    assert warning.detail == "JPY"
+
+
+def test_missing_and_warnings_cannot_disagree_regardless_of_how_fxrates_is_built():
+    """`missing` and `warnings` are derived together in FxRates.__post_init__, so
+    they cannot drift apart no matter which path builds the FxRates: this checks
+    the invariant directly (not just the fetch_rates repro above), and would fail
+    immediately if the derivation were deleted or `missing`/`warnings` stopped
+    being populated.
+    """
+    from costco_gas.fx import CURRENCIES, FxRates
+
+    # An old bundle's fx.json that only ever recorded CAD.
+    rows = [
+        {
+            "currency": "CAD",
+            "units_per_usd": 1.3871,
+            "fx_rate_date": "2026-09-14",
+            "fx_source": "frankfurter-v2",
+            "fx_fetched_at_utc": "2026-09-14T18:17:42Z",
+        }
+    ]
+    restored = FxRates.from_json(rows, status="ok")
+
+    expected_missing = tuple(sorted(set(CURRENCIES) - {"CAD"}))
+    assert restored.missing == expected_missing
+    assert restored.missing != ()
+
+    # The structural guarantee: every missing currency has exactly one matching
+    # warning, and there are no extra warnings for currencies that did resolve.
+    assert {w.detail for w in restored.warnings} == set(restored.missing)
+    assert len(restored.warnings) == len(restored.missing)
+    assert all(w.code == "fx_missing" for w in restored.warnings)
+
+    # The complete case: no gaps, no warnings.
+    complete_rows = [
+        {
+            "currency": currency,
+            "units_per_usd": 1.5,
+            "fx_rate_date": "2026-09-14",
+            "fx_source": "frankfurter-v2",
+            "fx_fetched_at_utc": "2026-09-14T18:17:42Z",
+        }
+        for currency in CURRENCIES
+    ]
+    complete = FxRates.from_json(complete_rows, status="ok")
+    assert complete.missing == ()
+    assert complete.warnings == ()

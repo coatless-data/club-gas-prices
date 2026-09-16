@@ -11,17 +11,25 @@ unrounded; rows use `fx_usd_per_unit = 1 / units_per_usd`.
 The bundle's fx.json is a JSON *array* of rate rows and carries no status, so
 `to_json()` returns a list and `from_json()` takes the status as a keyword
 argument (a rebuild reads it from the same bundle's status.json `fx.status`).
+
+`status` names how the rates that *were* obtained were obtained; it says
+nothing about how many currencies resolved. `FxRates.missing` and
+`FxRates.warnings` cover that separately: `missing` is derived from `rows`
+every time an `FxRates` is built (by `fetch_rates` or by `from_json`), and
+`warnings` is derived from `missing` in the same step, so the two can never
+drift apart.
 """
 
 from __future__ import annotations
 
 import json
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from costco_gas.http import BudgetExceeded
+from costco_gas.sources.base import Warning
 
 if TYPE_CHECKING:
     from costco_gas.http import Client
@@ -36,6 +44,7 @@ SOURCE_FAWAZ = "fawazahmed0-currency-api"
 SOURCE_IDENTITY = "identity"
 CARRIED_PREFIX = "carried-forward:"
 CARRY_FORWARD_MAX_AGE_DAYS = 7
+FX_MISSING_CODE = "fx_missing"
 
 
 @dataclass(frozen=True)
@@ -53,6 +62,22 @@ class FxRates:
     status: str
     rows: list[FxRow]
     capture_date: date | None = None
+    # Derived from `rows` in __post_init__, never passed in: the currencies in
+    # CURRENCIES with no row, sorted, empty when every currency resolved.
+    missing: tuple[str, ...] = field(init=False)
+    # One Warning(code="fx_missing", detail=<currency>) per entry in `missing`,
+    # derived in the same step so the two can never disagree.
+    warnings: tuple[Warning, ...] = field(init=False)
+
+    def __post_init__(self) -> None:
+        present = {row.currency for row in self.rows}
+        missing = tuple(sorted(currency for currency in CURRENCIES if currency not in present))
+        object.__setattr__(self, "missing", missing)
+        object.__setattr__(
+            self,
+            "warnings",
+            tuple(Warning(code=FX_MISSING_CODE, detail=currency) for currency in missing),
+        )
 
     def for_currency(self, code: str) -> FxRow | None:
         wanted = str(code).upper()
