@@ -337,3 +337,32 @@ def test_rebuild_accepts_both_artifact_layouts():
     # `artifact/capture` carries no wildcard, so nullglob would not drop it if it
     # did not exist: it has to stay behind the -d test, never in the glob list.
     assert "dirs=(artifact/*/capture artifact/capture)" not in text
+
+
+def test_every_workflow_pins_the_runner_image():
+    """`ubuntu-latest` follows the newest GA image and moves without a commit.
+
+    The smoke test drives the runner's preinstalled Google Chrome, and Playwright
+    only knows the distros its release shipped against, so the OS moving under
+    the deploy gate is a real failure mode rather than a theoretical one.
+    """
+    for name in ("test.yml", "capture.yml", "discover.yml", "rebuild.yml", "render.yml"):
+        text = read(name)
+        assert "runs-on: ubuntu-24.04\n" in text, name
+        # the phrase may still appear in a comment explaining the pin
+        assert "runs-on: ubuntu-latest" not in text, name
+
+
+def test_render_only_deploys_from_the_default_branch():
+    """The push trigger lists pyproject.toml and uv.lock.
+
+    Every Dependabot pull request touches one of those. Without a branch filter
+    each one starts a job that requests `pages: write` and calls deploy-pages,
+    holding a token that has neither.
+    """
+    text = read("render.yml")
+    assert "  push:\n" in text
+    push = text.split("  push:\n", 1)[1].split("\n  workflow_dispatch:", 1)[0]
+    assert "branches: [main]" in push
+    assert "      - pyproject.toml\n" in push
+    assert "      - uv.lock\n" in push
