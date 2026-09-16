@@ -410,3 +410,41 @@ def test_polled_id_set_uses_the_cache_when_step_one_fails():
         ("1772", "extra"),
     ]
     assert {p.ecom_state for p in polled} == {"unavailable"}
+
+
+# --------------------------------------------------------------------------- lookup
+
+
+def test_parse_lookup_skips_element_zero_and_leading_whitespace():
+    raw = response("US/03-lookup-us", us.DEFAULT_LOOKUP_URL, fixture="us_lookup_us.json")
+    assert raw.body.startswith(b"\r\n")
+    rows = us.parse_lookup(raw)
+    assert set(rows) == {"1", "140", "335", "651", "1364", "1680", "1838"}
+    assert rows["1680"]["openDate"] == "Oct 30, 2026"
+    assert rows["1680"]["gasStationHours"] == []
+    assert rows["1838"]["gasStationHours"] != []
+
+
+def test_lookup_prices_drop_the_two_non_grade_keys():
+    rows = us.parse_lookup(
+        response("US/03-lookup-us", us.DEFAULT_LOOKUP_URL, fixture="us_lookup_us.json")
+    )
+    assert us.lookup_prices(rows["140"]) == {
+        "diesel": "6.899",
+        "regular": "4.899",
+        "premium": "5.699",
+        "clear": "5.699",
+    }
+    assert us.lookup_prices(rows["1680"]) == {"regular": "5.799", "premium": "6.099"}
+
+
+def test_lookup_open_date_parsing():
+    assert us.lookup_open_date("Aug 23, 1995") == date(1995, 8, 23)
+    assert us.lookup_open_date("Oct 30, 2026") == date(2026, 10, 30)
+    assert us.lookup_open_date("") is None
+    assert us.lookup_open_date(None) is None
+
+
+def test_parse_lookup_rejects_a_failed_response():
+    assert us.parse_lookup(response("US/03-lookup-us", "u", body=b"", status=403)) is None
+    assert us.parse_lookup(response("US/03-lookup-us", "u", body=b"<html>")) is None

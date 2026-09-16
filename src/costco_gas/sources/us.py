@@ -416,3 +416,35 @@ def polled_id_frame(ctx: CaptureContext) -> pl.DataFrame:
             "ecom_state": pl.Utf8,
         },
     )
+
+
+def parse_lookup(response: RawResponse | None) -> dict[str, dict[str, Any]] | None:
+    """Parse the costco.ca US lookup body, or ``None`` when it failed."""
+    if response is None or response.error or response.status != 200:
+        return None
+    text = response.body.decode("utf-8", "replace").lstrip("﻿ \t\r\n")
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, list) or len(payload) < 2:
+        return None
+    rows: dict[str, dict[str, Any]] = {}
+    for item in payload[1:]:
+        if not isinstance(item, dict):
+            continue
+        warehouse_id = _clean(item.get("stlocID"))
+        if warehouse_id is not None:
+            rows[warehouse_id] = item
+    return rows
+
+
+def lookup_prices(row: dict[str, Any]) -> dict[str, str]:
+    gas_prices = row.get("gasPrices") or {}
+    if not isinstance(gas_prices, dict):
+        return {}
+    return {
+        str(k): str(v)
+        for k, v in gas_prices.items()
+        if str(k).lower() not in NON_GRADE_KEYS and isinstance(v, (str, int, float))
+    }
