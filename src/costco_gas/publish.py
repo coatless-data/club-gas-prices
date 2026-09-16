@@ -112,6 +112,28 @@ def read_or_rebuild_manifest(
         if match and asset.state == "uploaded":
             bundles[match.group("capture_id")] = asset
 
+    # A capture id may only get a rebuilt entry once its rows are ALSO in
+    # `current`'s all-captures file -- being in the daily file alone only
+    # means merge_capture reached that far, not that `current` was ever
+    # updated for it. Fabricating an entry from the daily file alone would
+    # mark such a capture "done" and `_reconcile` would then skip its bundle
+    # forever, reproducing the failure spec review Finding 1 closed through a
+    # different path (spec review round 2). When `current` itself has no
+    # all-captures file yet (the genuine first publish ever, nothing has
+    # completed `_update_current` even once), no entries are fabricated at
+    # all and every bundle in these daily files is left for `_reconcile`.
+    try:
+        current_all_captures = store.download(
+            "current",
+            "costco-gas-all-captures.parquet",
+            scratch / f"{tag}-current-all-captures.parquet",
+        )
+        current_capture_ids = set(
+            pl.read_parquet(current_all_captures)["capture_id"].unique().to_list()
+        )
+    except AssetNotFound:
+        current_capture_ids = None
+
     manifest = _empty_manifest(month)
     for daily_name in daily_names:
         day = daily_name[len("costco-gas-") : -len(".csv.gz")]
@@ -124,6 +146,12 @@ def read_or_rebuild_manifest(
                 raise StorageError(
                     f"{daily_name} holds capture {capture_id} but no uploaded bundle exists"
                 )
+            if current_capture_ids is None or capture_id not in current_capture_ids:
+                # Not (yet) reflected in `current`: leave this capture out of the
+                # rebuilt manifest so `_reconcile` re-merges its bundle. The merge
+                # is idempotent -- it removes this capture id's rows before
+                # re-appending them -- so re-running it is always safe.
+                continue
             bundle_path = store.download(tag, asset.name, scratch / f"{tag}-{asset.name}")
             captured = read_bundle(bundle_path, capture_id)
             if captured is None:

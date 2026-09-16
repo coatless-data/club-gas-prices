@@ -916,3 +916,80 @@ def test_a_row_count_mismatch_against_the_manifest_raises(tmp_path: Path, cfg):
     )
     with pytest.raises(StorageError, match="the manifest records"):
         publish(store, b_dir, cfg, now=NOW)
+
+
+def test_a_months_first_crash_is_not_fabricated_done_by_the_rebuild(tmp_path: Path, cfg):
+    """Spec review round 2: read_or_rebuild_manifest must not fabricate a "done"
+
+    entry for a capture whose rows never reached `current`, even though its
+    rows are in the daily file and its bundle is uploaded. Being in the daily
+    file only means merge_capture wrote that file before crashing inside
+    `_update_current` (Finding 1's fix moved the manifest-entry write after
+    `_update_current`, so when a capture is the FIRST of a brand new month,
+    that crash means `manifest-YYYY-MM.json` was never created at all, and
+    the rebuild path -- untouched by round 1's fix -- is what runs next).
+    """
+    inner = LocalReleaseStore(tmp_path / "releases")
+    captures = tmp_path / "captures"
+
+    # Establish `current` from an earlier month, so this exercises the
+    # "current already has history" branch, not the bootstrap one.
+    zero_dir = make_capture_dir(
+        captures, "2026-08-15T0017Z", datetime(2026, 8, 15, 0, 17, tzinfo=UTC), prices=PRICES
+    )
+    publish(inner, zero_dir, cfg, now=NOW)
+
+    # September's first capture crashes inside `_update_current` -- before
+    # `costco-gas-all-captures.parquet` itself is written, so `current` never
+    # records this capture at all (unlike a later crash point, which could
+    # legitimately already have it there).
+    crashy = CrashOnceStore(inner, "current", "costco-gas-all-captures.parquet")
+    a_dir = make_capture_dir(
+        captures, "2026-09-15T0017Z", datetime(2026, 9, 15, 0, 17, tzinfo=UTC), prices=PRICES
+    )
+    with pytest.raises(RuntimeError, match="simulated crash"):
+        publish(crashy, a_dir, cfg, now=NOW)
+
+    # Confirm the exact starting shape: no month manifest was ever written,
+    # even though the daily file and bundle both exist.
+    assert not any(a.name == "manifest-2026-09.json" for a in inner.list_assets("data-2026-09"))
+    day15 = schema.read_rows_csv_gz(
+        inner.download("data-2026-09", "costco-gas-2026-09-15.csv.gz", tmp_path / "d15.csv.gz")
+    )
+    assert "2026-09-15T0017Z" in day15["capture_id"].unique().to_list()
+
+    # September's second capture must trigger a rebuild that does NOT mark
+    # the crashed capture done, and must reconcile its bundle instead.
+    b_dir = make_capture_dir(
+        captures,
+        "2026-09-16T0017Z",
+        datetime(2026, 9, 16, 0, 17, tzinfo=UTC),
+        prices=[("Chungli", "95", "regular", 30.9)],
+    )
+    result = publish(inner, b_dir, cfg, now=NOW)
+
+    assert "manifest_rebuilt" in result.warnings
+    assert "reconciled:2026-09-15T0017Z" in result.warnings
+
+    all_ids = {"2026-08-15T0017Z", "2026-09-15T0017Z", "2026-09-16T0017Z"}
+    captures_all = pl.read_parquet(
+        inner.download("current", "costco-gas-all-captures.parquet", tmp_path / "ac.parquet")
+    )
+    assert set(captures_all["capture_id"].to_list()) == all_ids
+    # No duplicate (capture_id, station_key, grade_raw) rows: the crashed
+    # capture's rows were merged exactly once, not fabricated as "done" and
+    # then re-merged on top of themselves.
+    key_cols = captures_all.select(["capture_id", "station_key", "grade_raw"])
+    assert key_cols.is_duplicated().sum() == 0
+
+    fx = pl.read_csv(
+        inner.download("current", "fx.csv", tmp_path / "fx-final.csv"), schema=schema.FX_SCHEMA
+    )
+    assert sorted(fx["capture_id"].to_list()) == sorted(all_ids)
+
+    manifest = json.loads(
+        inner.download(
+            "data-2026-09", "manifest-2026-09.json", tmp_path / "m-final.json"
+        ).read_text()
+    )
+    assert set(manifest["captures"]) == {"2026-09-15T0017Z", "2026-09-16T0017Z"}
