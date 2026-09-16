@@ -89,3 +89,177 @@ def test_daily_grain_of_an_empty_frame_keeps_the_schema():
     empty = rollup.daily_grain(pl.DataFrame(schema=schema.ROW_SCHEMA))
     assert empty.height == 0
     assert dict(empty.schema) == dict(rollup.DAILY_SCHEMA)
+
+
+from costco_gas.config import load_config
+from costco_gas.publish import publish
+from costco_gas.store import AssetNotFound, LocalReleaseStore
+
+NOW = datetime(2026, 9, 15, 18, 20, tzinfo=timezone.utc)
+
+STATION_COLUMNS = list(schema.STATION_SCHEMA)
+
+
+@pytest.fixture(autouse=True)
+def no_github_env(monkeypatch):
+    """Keep the issue helper in its dry mode: these tests never touch the network."""
+    monkeypatch.delenv("GITHUB_REPOSITORY", raising=False)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+
+
+def station_row(station, captured_at, grades, status="active"):
+    return {
+        "station_key": f"TW-{station}",
+        "country": "TW",
+        "source_station_id": station,
+        "alt_id": "560",
+        "name": station,
+        "name_local": None,
+        "address": None,
+        "city": None,
+        "region": "桃園市",
+        "postcode": "320",
+        "lat": 24.9573,
+        "lon": 121.2196,
+        "timezone": "Asia/Taipei",
+        "grades_seen": "|".join(sorted(grades)),
+        "first_seen_utc": captured_at,
+        "last_seen_utc": captured_at,
+        "status": status,
+        "superseded_by": None,
+    }
+
+
+def make_capture_dir(
+    root: Path, capture_id: str, captured_at: datetime, *, prices, tw_status="ok"
+) -> Path:
+    """Write a capture directory shaped like `costco-gas capture --out` does."""
+    directory = root / capture_id
+    directory.mkdir(parents=True, exist_ok=True)
+    rows = pl.DataFrame(
+        [
+            price_row(capture_id, captured_at, station, grade_raw, grade, price)
+            for station, grade_raw, grade, price in prices
+        ],
+        schema=schema.ROW_SCHEMA,
+    )
+    schema.write_rows_csv_gz(rows, directory / "rows.csv.gz")
+    by_station: dict[str, set[str]] = {}
+    for station, grade_raw, _, _ in prices:
+        by_station.setdefault(station, set()).add(grade_raw)
+    pl.DataFrame(
+        [station_row(s, captured_at, g) for s, g in sorted(by_station.items())],
+        schema=schema.STATION_SCHEMA,
+    ).write_csv(directory / "stations.csv")
+    (directory / "fx.json").write_text(
+        json.dumps(
+            [
+                {
+                    "currency": "TWD",
+                    "units_per_usd": TWD_PER_USD,
+                    "fx_rate_date": "2026-09-14",
+                    "fx_source": "frankfurter-v2",
+                    "fx_fetched_at_utc": captured_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                }
+            ],
+            indent=1,
+        ),
+        encoding="utf-8",
+    )
+    status = {
+        "schema_version": 1,
+        "capture_id": capture_id,
+        "countries": {
+            "TW": {"status": tw_status, "stations": len(by_station), "rows": rows.height},
+            "JP": {"status": "failed", "stations": 0, "rows": 0},
+        },
+    }
+    (directory / "status.json").write_text(json.dumps(status, indent=2), encoding="utf-8")
+    (directory / "capture.json").write_text(
+        json.dumps({"capture_id": capture_id, "capture_date": captured_at.date().isoformat()}),
+        encoding="utf-8",
+    )
+    with tarfile.open(directory / "bundle.tar.gz", "w:gz") as tar:
+        for name in ("capture.json", "rows.csv.gz", "stations.csv", "fx.json", "status.json"):
+            tar.add(directory / name, arcname=name)
+    return directory
+
+
+@pytest.fixture()
+def cfg(tmp_path: Path):
+    shutil.copytree(REPO_ROOT / "config", tmp_path / "config")
+    return load_config(tmp_path)
+
+
+def asset_digests(store, tag, scratch: Path) -> dict[str, str]:
+    out = {}
+    for asset in store.list_assets(tag):
+        dest = scratch / f"{tag}--{asset.name}"
+        store.download(tag, asset.name, dest)
+        out[asset.name] = hashlib.sha256(dest.read_bytes()).hexdigest()
+    return out
+
+
+DAY1 = datetime(2026, 9, 15, 18, 17, tzinfo=timezone.utc)
+PRICES = [
+    ("Chungli", "Diesel", "diesel", 28.6),
+    ("Chungli", "95", "regular", 30.0),
+    ("Chungli", "98", "premium", 31.5),
+    ("Xinzhuang", "95", "regular", 30.0),
+    ("Xinzhuang", "98", "premium", 31.5),
+]
+
+
+def test_first_publish_creates_current_and_the_month_release(tmp_path: Path, cfg):
+    store = LocalReleaseStore(tmp_path / "releases")
+    capture_dir = make_capture_dir(tmp_path / "captures", "2026-09-15T1817Z", DAY1, prices=PRICES)
+
+    result = publish(store, capture_dir, cfg, now=NOW)
+
+    assert result.capture_id == "2026-09-15T1817Z"
+    month = {a.name for a in store.list_assets("data-2026-09")}
+    assert month == {
+        "costco-gas-2026-09-15.csv.gz",
+        "capture-2026-09-15T1817Z.tar.gz",
+        "manifest-2026-09.json",
+    }
+    current = {a.name for a in store.list_assets("current")}
+    assert current == {
+        "costco-gas-all.parquet",
+        "costco-gas-all.csv.gz",
+        "costco-gas-all-captures.parquet",
+        "costco-gas-latest.csv",
+        "stations.csv",
+        "fx.csv",
+        "manifest.json",
+    }
+    assert store.get_release("data-2026-09").prerelease is True
+    assert store.get_release("current").prerelease is False
+
+    daily = store.download("data-2026-09", "costco-gas-2026-09-15.csv.gz", tmp_path / "d.csv.gz")
+    assert schema.read_rows_csv_gz(daily).height == 5
+
+    manifest = json.loads(
+        store.download("data-2026-09", "manifest-2026-09.json", tmp_path / "m.json").read_text()
+    )
+    entry = manifest["captures"]["2026-09-15T1817Z"]
+    assert entry["rows_by_capture_date"] == {"2026-09-15": 5}
+    assert entry["daily_files"]["2026-09-15"]["rows"] == 5
+    assert [row["currency"] for row in entry["fx"]] == ["TWD"]
+
+    latest = pl.read_csv(
+        store.download("current", "costco-gas-latest.csv", tmp_path / "l.csv"),
+        schema=schema.ROW_SCHEMA,
+    )
+    assert latest.height == 5
+    fx = pl.read_csv(
+        store.download("current", "fx.csv", tmp_path / "fx.csv"), schema=schema.FX_SCHEMA
+    )
+    assert fx.to_dicts()[0]["units_per_usd"] == TWD_PER_USD
+    current_manifest = json.loads(
+        store.download("current", "manifest.json", tmp_path / "cm.json").read_text()
+    )
+    assert current_manifest["status"]["capture_id"] == "2026-09-15T1817Z"
+    assert current_manifest["newest_capture_by_country"]["TW"] == "2026-09-15T1817Z"
+    # JP failed, so it must not claim this capture as its newest.
+    assert "JP" not in current_manifest["newest_capture_by_country"]
