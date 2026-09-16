@@ -122,3 +122,63 @@ def test_usd_is_always_the_identity_row(make_client):
     # The identity row is never stored in fx.json / fx.csv, which hold non-USD only.
     assert "USD" not in [row.currency for row in fx.rows]
     assert fx.for_currency("usd").fx_source == "identity"
+
+
+def test_fallback_uses_the_capture_date_then_the_previous_day(make_client):
+    calls: list[str] = []
+    handler = routing_handler(
+        {
+            # The real 403 Cloudflare "Error 1010" body captured on 2026-09-15,
+            # which is what Frankfurter returns to a UA it does not accept.
+            "https://api.frankfurter.dev/": httpx.Response(
+                403, content=read_fixture("frankfurter_blocked.json")
+            ),
+            "https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@2026-09-15/": (
+                httpx.Response(404, content=b"Couldn't find the requested version")
+            ),
+            "https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@2026-09-14/": (
+                httpx.Response(200, content=read_fixture("fawaz_2026-09-14.json"))
+            ),
+        },
+        calls,
+    )
+
+    fx = fetch_rates(make_client(handler), make_ctx())
+
+    assert fx.status == "fallback"
+    assert [row.currency for row in fx.rows] == ["CAD", "MXN", "GBP", "AUD", "JPY", "TWD"]
+    twd = fx.for_currency("TWD")
+    assert twd.units_per_usd == 31.7167273
+    assert twd.fx_usd_per_unit == pytest.approx(1 / 31.7167273, rel=1e-12)
+    assert twd.fx_source == "fawazahmed0-currency-api"
+    assert twd.fx_rate_date == date(2026, 9, 14)
+
+    assert len(calls) == 3
+    assert calls[0].startswith("https://api.frankfurter.dev/")
+    assert "@2026-09-15/v1/currencies/usd.json" in calls[1]
+    assert "@2026-09-14/v1/currencies/usd.json" in calls[2]
+    # @latest was a day stale on 2026-09-15 and must never be requested.
+    assert not any("@latest" in url for url in calls)
+
+
+def test_fallback_stops_at_the_capture_date_when_it_resolves(make_client):
+    calls: list[str] = []
+    handler = routing_handler(
+        {
+            "https://api.frankfurter.dev/": httpx.Response(
+                403, content=read_fixture("frankfurter_blocked.json")
+            ),
+            "https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@2026-09-15/": (
+                httpx.Response(200, content=read_fixture("fawaz_2026-09-15.json"))
+            ),
+        },
+        calls,
+    )
+
+    fx = fetch_rates(make_client(handler), make_ctx())
+
+    assert fx.status == "fallback"
+    assert fx.for_currency("CAD").units_per_usd == 1.39146472
+    assert fx.for_currency("CAD").fx_rate_date == date(2026, 9, 15)
+    assert len(calls) == 2
+    assert not any("@2026-09-14" in url for url in calls)

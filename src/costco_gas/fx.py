@@ -214,6 +214,39 @@ def _collect_frankfurter(client: Client, found: dict[str, FxRow]) -> None:
         )
 
 
+def _collect_fawaz(client: Client, capture_date: date, found: dict[str, FxRow]) -> None:
+    """The capture's UTC date first, then the previous day. Never @latest."""
+    for offset in (0, 1):
+        day = capture_date - timedelta(days=offset)
+        stamp = day.isoformat()
+        got = _fetch_json(client, f"fx/fawazahmed0-{stamp}", FAWAZ_URL.format(day=stamp))
+        if got is None:
+            continue
+        payload, response = got
+        if not isinstance(payload, dict):
+            continue
+        quotes = payload.get("usd")
+        if not isinstance(quotes, dict):
+            continue
+        rate_date = _parse_date(payload.get("date")) or day
+        for currency in CURRENCIES:
+            if currency in found:
+                continue
+            rate = _positive_float(quotes.get(currency.lower()))
+            if rate is None:
+                continue
+            found[currency] = FxRow(
+                currency=currency,
+                units_per_usd=rate,
+                fx_usd_per_unit=1.0 / rate,
+                fx_rate_date=rate_date,
+                fx_source=SOURCE_FAWAZ,
+                fx_fetched_at_utc=response.received_at_utc,
+            )
+        if not _missing(found):
+            return
+
+
 def _status_for(rows: list[FxRow]) -> str:
     """The status names the least-fresh source that contributed a row."""
     if not rows:
@@ -230,6 +263,8 @@ def fetch_rates(client: Client, ctx: CaptureContext) -> FxRates:
     try:
         with client.budget("fx", FX_BUDGET_SECONDS):
             _collect_frankfurter(client, found)
+            if _missing(found):
+                _collect_fawaz(client, ctx.capture_date, found)
     except BudgetExceeded:
         pass
     rows = [found[code] for code in CURRENCIES if code in found]
