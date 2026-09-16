@@ -1,0 +1,121 @@
+{
+ "warehouses": [
+  {
+   "warehouseId": "1324",
+   "name": [
+    {
+     "value": "St Johns",
+     "localeCode": "en-US"
+    }
+   ],
+   "subType": {
+    "code": "No Minor Type",
+    "name": [
+     {
+      "value": "No Minor Type",
+      "localeCode": "en-US"
+     }
+    ]
+   },
+   "address": {
+    "line1": "75 DANNY DR",
+    "city": "ST JOHNS",
+    "territory": "NL",
+    "postalCode": "A1H 0N4",
+    "countryName": "CA",
+    "latitude": 47.50731997,
+    "longitude": -52.83506698,
+    "geoText": "47.50731997 -52.83506698 WGS84"
+   },
+   "timeZone": "America/St_Johns",
+   "openingDate": "1995-09-12",
+   "services": [
+    {
+     "code": "food"
+    },
+    {
+     "code": "gas"
+    }
+   ]
+  },
+  {
+   "warehouseId": "524",
+   "name": [
+    {
+     "value": "Etobicoke",
+     "localeCode": "en-US"
+    }
+   ],
+   "subType": {
+    "code": "No Minor Type",
+    "name": [
+     {
+      "value": "No Minor Type",
+      "localeCode": "en-US"
+     }
+    ]
+   },
+   "address": {
+    "line1": "50 QUEEN ELIZABETH BLVD",
+    "city": "ETOBICOKE",
+    "territory": "ON",
+    "postalCode": "M8Z 1M1",
+    "countryName": "CA",
+    "latitude": 43.62300419,
+    "longitude": -79.50734397,
+    "geoText": "43.62300419 -79.50734397 WGS84"
+   },
+   "timeZone": "America/Toronto",
+   "openingDate": "1995-08-23",
+   "services": [
+    {
+     "code": "food"
+    },
+    {
+     "code": "gas"
+    }
+   ]
+  },
+  {
+   "warehouseId": "530",
+   "name": [
+    {
+     "value": "N London",
+     "localeCode": "en-US"
+    }
+   ],
+   "subType": {
+    "code": "No Minor Type",
+    "name": [
+     {
+      "value": "No Minor Type",
+      "localeCode": "en-US"
+     }
+    ]
+   },
+   "address": {
+    "line1": "693 WONDERLAND RD N",
+    "city": "LONDON",
+    "territory": "ON",
+    "postalCode": "N4H 4L1",
+    "countryName": "CA",
+    "latitude": 42.98736672,
+    "longitude": -81.29299937,
+    "geoText": "42.98736672 -81.29299937 WGS84"
+   },
+   "timeZone": "America/Toronto",
+   "openingDate": "2004-02-19",
+   "services": [
+    {
+     "code": "food"
+    },
+    {
+     "code": "gas"
+    },
+    {
+     "code": "diesel"
+    }
+   ]
+  }
+ ]
+}
