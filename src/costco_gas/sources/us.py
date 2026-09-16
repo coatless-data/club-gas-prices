@@ -661,3 +661,83 @@ def parse_us(responses: list[RawResponse], ctx: CaptureContext) -> FetchResult:
         warnings=warnings,
         errors=errors,
     )
+
+
+def _deadline_response(ctx: CaptureContext, key: str, url: str) -> RawResponse:
+    return RawResponse(
+        key=key,
+        url=url,
+        status=None,
+        headers={},
+        received_at_utc=_capture_start(ctx),
+        elapsed_ms=0,
+        body=b"",
+        error="deadline_exceeded",
+    )
+
+
+def fetch_us(client, ctx: CaptureContext) -> list[RawResponse]:
+    responses: list[RawResponse] = []
+    ids = [p.source_station_id for p in polled_id_set(ctx)]
+    planned = batches(ids, batch_size(ctx))
+    prices = price_url(ctx)
+    forced = COUNTRY in (ctx.force_fallback or set())
+    step1_failed = parse_ecom(ctx.shared.get(ECOM_SHARED_KEY)) is None
+    no_cached_rows = not _seen_ids(ctx)
+
+    attempted = 0
+    failed = 0
+    priced: set[str] = set()
+
+    if not forced:
+        for number, batch in enumerate(planned, start=1):
+            if client.abandoned(prices):
+                break
+            url = batch_url(ctx, batch)
+            try:
+                response = client.request(KEY_PRICE.format(n=number), url)
+            except BudgetExceeded:
+                responses.append(_deadline_response(ctx, KEY_PRICE.format(n=number), url))
+                break
+            responses.append(response)
+            attempted += 1
+            parsed = parse_price_batch(response)
+            if parsed is None:
+                failed += 1
+            else:
+                priced.update(k for k, v in parsed.items() if v)
+
+    use_fallback = (
+        forced
+        or (bool(planned) and failed * 2 > len(planned))
+        or attempted < len(planned)
+        or (step1_failed and no_cached_rows)
+    )
+    if not use_fallback:
+        return responses
+
+    lookup = lookup_url(ctx)
+    if not client.abandoned(lookup):
+        try:
+            response = client.request(KEY_LOOKUP, lookup, profile="bulk")
+        except BudgetExceeded:
+            response = _deadline_response(ctx, KEY_LOOKUP, lookup)
+        responses.append(response)
+        rows = parse_lookup(response) or {}
+        priced.update(
+            warehouse_id
+            for warehouse_id, row in rows.items()
+            if warehouse_id in set(ids) and lookup_prices(row)
+        )
+
+    remaining = [warehouse_id for warehouse_id in ids if warehouse_id not in priced]
+    for number, batch in enumerate(batches(remaining, batch_size(ctx)), start=1):
+        if client.abandoned(prices):
+            break
+        url = batch_url(ctx, batch)
+        try:
+            responses.append(client.request(KEY_TOPUP.format(n=number), url))
+        except BudgetExceeded:
+            responses.append(_deadline_response(ctx, KEY_TOPUP.format(n=number), url))
+            break
+    return responses

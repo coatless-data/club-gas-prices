@@ -618,3 +618,131 @@ def test_merge_rule_keeps_step_two_prices_and_fills_only_unpriced_ids():
     ids = [s.source_station_id for s in result.stations]
     assert len(ids) == len(set(ids))
     assert "1" not in stations
+
+
+# --------------------------------------------------------------------------- fallback
+
+
+def test_fallback_when_more_than_half_the_batches_fail():
+    previous = stations_frame(
+        [
+            {
+                "station_key": "US-120",
+                "country": "US",
+                "source_station_id": "120",
+                "region": "HI",
+                "last_seen_utc": "2026-09-14T18:17:00Z",
+            }
+        ]
+    )
+    ctx = make_ctx(ecom=ecom_ok(), previous=previous)
+
+    def responder(key, url):
+        if "lookup" in key:
+            return response(key, url, fixture="us_lookup_us.json", offset=30)
+        if key == "US/02-gasprices-001":
+            return response(key, url, body=b"", status=403, error=None)
+        return response(key, url, body=TOPUP_BODY, offset=40)
+
+    client = FakeClient(responder)
+    responses = us.fetch_us(client, ctx)
+    keys = [r.key for r in responses]
+    assert keys[0] == "US/02-gasprices-001"
+    assert "US/03-lookup-us" in keys
+    assert next(c[2] for c in client.calls if c[0] == "US/03-lookup-us") == "bulk"
+    assert next(c[1] for c in client.calls if c[0] == "US/03-lookup-us") == us.lookup_url(ctx)
+
+
+def test_fallback_when_costco_com_is_abandoned_partway_through_step_two():
+    previous = stations_frame(
+        [
+            {
+                "station_key": "US-120",
+                "country": "US",
+                "source_station_id": "120",
+                "region": "HI",
+                "last_seen_utc": "2026-09-14T18:17:00Z",
+            },
+            {
+                "station_key": "US-1120",
+                "country": "US",
+                "source_station_id": "1120",
+                "region": "DC",
+                "last_seen_utc": "2026-09-14T18:17:00Z",
+            },
+        ]
+    )
+    ctx = make_ctx(ecom=ecom_ok(), previous=previous)
+    polled = [p.source_station_id for p in us.polled_id_set(ctx)]
+    assert len(us.batches(polled, us.batch_size(ctx))) == 2
+
+    def responder(key, url):
+        if "lookup" in key:
+            return response(key, url, fixture="us_lookup_us.json", offset=30)
+        return response(key, url, fixture="us_gasprices_batch_ua.json", offset=5)
+
+    client = FakeClient(responder, abandon_after={"www.costco.com": 1})
+    responses = us.fetch_us(client, ctx)
+    keys = [r.key for r in responses]
+    assert keys == ["US/02-gasprices-001", "US/03-lookup-us"]
+
+
+def test_fallback_when_step_one_failed_and_there_is_no_cache():
+    ctx = make_ctx(ecom=ecom_failed())
+    client = FakeClient(fallback_responder)
+    responses = us.fetch_us(client, ctx)
+    assert [r.key for r in responses] == ["US/02-gasprices-001", "US/03-lookup-us"]
+
+
+def test_force_fallback_skips_step_two_and_tops_up_the_rest():
+    ctx = make_ctx(ecom=ecom_ok(), force_fallback={"US"})
+    client = FakeClient(fallback_responder)
+    responses = us.fetch_us(client, ctx)
+    keys = [r.key for r in responses]
+    assert keys == ["US/03-lookup-us", "US/04-gasprices-fb-001"]
+    topup_url = next(c[1] for c in client.calls if c[0] == "US/04-gasprices-fb-001")
+    assert us.ids_in_url(topup_url) == ["1793", "1765", "1772"]
+
+    result = us.parse_us(responses, ctx)
+    stations = by_id(result)
+    assert result.source == "costco-ca-lookup-us"
+    assert stations["1364"].id_origin == "lookup"
+    assert stations["1793"].id_origin == "ecom"
+    assert grades_of(stations["1793"]) == {"premium": "4.199", "regular": "3.499"}
+    assert stations["1765"].id_origin == "extra"
+    assert stations["1765"].name == "Chandler Business Center"
+    assert stations["1772"].id_origin == "extra"
+    assert "1" not in stations
+
+
+def test_extras_skip_not_open_and_no_hours_in_the_lookup():
+    ctx = make_ctx(ecom=ecom_ok(), force_fallback={"US"})
+    client = FakeClient(fallback_responder)
+    result = us.parse_us(us.fetch_us(client, ctx), ctx)
+    camarillo = by_id(result)["1680"]
+    assert camarillo.id_origin == "lookup"
+    assert camarillo.opening_date is None
+    assert camarillo.has_hours is None
+    assert camarillo.lat == pytest.approx(34.218)
+    assert grades_of(camarillo) == {"regular": "5.799", "premium": "6.099"}
+
+
+# --------------------------------------------------------------------------- budgets
+
+
+def test_budget_exhaustion_is_recorded_and_triggers_the_fallback():
+    ctx = make_ctx(ecom=ecom_ok())
+
+    def responder(key, url):
+        if key == "US/02-gasprices-001":
+            raise BudgetExceeded("country budget")
+        if "lookup" in key:
+            return response(key, url, fixture="us_lookup_us.json", offset=30)
+        return response(key, url, body=TOPUP_BODY, offset=40)
+
+    responses = us.fetch_us(FakeClient(responder), ctx)
+    result = us.parse_us(responses, ctx)
+    assert responses[0].error == "deadline_exceeded"
+    assert "US/02-gasprices-001" in warning_details(result, "deadline_exceeded")
+    assert "US/03-lookup-us" in [r.key for r in responses]
+    assert result.errors == []
