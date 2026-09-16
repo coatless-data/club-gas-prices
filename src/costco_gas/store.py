@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 import tempfile
 import threading
@@ -28,6 +29,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal, Protocol
+
+import httpx
 
 DEFAULT_STORE = "github:coatless-dashboard/costco-gas-prices"
 SIDECAR_NAME = "_release.json"
@@ -604,6 +607,310 @@ class LocalReleaseStore(_BaseStore):
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, dest)
         return dest
+
+
+class GitHubReleaseStore(_BaseStore):
+    """Releases in a GitHub repository, through the REST API.
+
+    Reads need no token and pull asset bytes from `browser_download_url`, which
+    does not count against the API rate limit. Writes require both
+    `GITHUB_TOKEN` and `COSTCO_GAS_WRITER=1`; the second is set only by the two
+    workflows allowed to write, so an accidental local publish cannot corrupt
+    the published data.
+    """
+
+    API = "https://api.github.com"
+    UPLOADS = "https://uploads.github.com"
+    WRITE_METHODS = frozenset({"POST", "PATCH", "PUT", "DELETE"})
+
+    def __init__(
+        self,
+        owner: str,
+        repo: str,
+        *,
+        token: str | None = None,
+        transport: object | None = None,
+        sleep: Callable[[float], None] = time.sleep,
+        monotonic: Callable[[], float] = time.monotonic,
+        now_epoch: Callable[[], float] = time.time,
+        user_agent: str = "costco-gas-prices",
+    ) -> None:
+        self._owner = owner
+        self._repo = repo
+        self._base = f"{self.API}/repos/{owner}/{repo}"
+        self._token = token or os.environ.get("GITHUB_TOKEN") or None
+        self._sleep = sleep
+        self._monotonic = monotonic
+        self._now_epoch = now_epoch
+        self._user_agent = user_agent
+        self._client = httpx.Client(transport=transport, timeout=120.0, follow_redirects=True)
+
+    # -- plumbing --------------------------------------------------------
+    def _headers(self) -> dict[str, str]:
+        headers = {
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": self._user_agent,
+        }
+        if self._token:
+            headers["Authorization"] = f"Bearer {self._token}"
+        return headers
+
+    def _require_writer(self) -> None:
+        if not self._token:
+            raise StorageError("release writes require GITHUB_TOKEN")
+        if os.environ.get("COSTCO_GAS_WRITER") != "1":
+            raise StorageError(
+                "release writes require COSTCO_GAS_WRITER=1; publishing to GitHub "
+                "from a local machine is unsupported"
+            )
+
+    def _request(
+        self,
+        method: str,
+        url: str,
+        *,
+        ok: tuple[int, ...],
+        params: dict | None = None,
+        json_body: dict | None = None,
+        content: bytes | None = None,
+        extra_headers: dict[str, str] | None = None,
+    ) -> httpx.Response:
+        if method in self.WRITE_METHODS:
+            self._require_writer()
+        headers = self._headers()
+        if extra_headers:
+            headers.update(extra_headers)
+        attempt = 0
+        while True:
+            response = self._client.request(
+                method,
+                url,
+                params=params,
+                json=json_body,
+                content=content,
+                headers=headers,
+            )
+            if response.status_code in ok:
+                return response
+            attempt += 1
+            if response.status_code >= 500 and attempt <= 3:
+                self._sleep(float(attempt))
+                continue
+            raise StorageError(
+                f"{method} {url} -> {response.status_code}: {response.text[:400]}",
+                status=response.status_code,
+            )
+
+    @staticmethod
+    def _to_release(payload: dict, *, make_latest: str | None = None, is_latest: bool) -> Release:
+        return Release(
+            tag=payload["tag_name"],
+            id=int(payload["id"]),
+            title=payload.get("name") or "",
+            body=payload.get("body") or "",
+            prerelease=bool(payload.get("prerelease", False)),
+            make_latest=make_latest,
+            is_latest=is_latest,
+            immutable=bool(payload.get("immutable", False)),
+            url=payload.get("html_url", ""),
+        )
+
+    @staticmethod
+    def _to_asset(payload: dict) -> Asset:
+        stamp = payload["created_at"].replace("Z", "+00:00")
+        return Asset(
+            name=payload["name"],
+            id=int(payload["id"]),
+            size=int(payload.get("size", 0)),
+            state=payload.get("state", "uploaded"),
+            digest=payload.get("digest") or None,
+            label=payload.get("label") or None,
+            created_at=datetime.fromisoformat(stamp),
+            download_url=payload.get("browser_download_url"),
+        )
+
+    # -- releases --------------------------------------------------------
+    def _release_payload(self, tag: str) -> dict | None:
+        response = self._request("GET", f"{self._base}/releases/tags/{tag}", ok=(200, 404))
+        return None if response.status_code == 404 else response.json()
+
+    def _release_id(self, tag: str) -> int:
+        payload = self._release_payload(tag)
+        if payload is None:
+            raise StorageError(f"release not found: {tag}")
+        return int(payload["id"])
+
+    def _latest_tag(self) -> str | None:
+        """The tag `GET /releases/latest` points at, or None when there is none.
+
+        The Latest pointer is repository-wide and is not part of a release's
+        own payload, so `is_latest` always comes from this endpoint.
+        """
+        response = self._request("GET", f"{self._base}/releases/latest", ok=(200, 404))
+        if response.status_code == 404:
+            return None
+        return str(response.json()["tag_name"])
+
+    def get_release(self, tag: str) -> Release | None:
+        payload = self._release_payload(tag)
+        if payload is None:
+            return None
+        return self._to_release(payload, is_latest=self._latest_tag() == tag)
+
+    def get_latest(self) -> Release | None:
+        response = self._request("GET", f"{self._base}/releases/latest", ok=(200, 404))
+        if response.status_code == 404:
+            return None
+        return self._to_release(response.json(), is_latest=True)
+
+    def ensure_release(
+        self,
+        tag: str,
+        title: str,
+        body: str,
+        prerelease: bool,
+        make_latest: Literal["true", "false"],
+    ) -> Release:
+        existing = self.get_release(tag)
+        if existing is not None:
+            if existing.immutable:
+                raise StorageError(f"immutable release: {tag}")
+            return existing
+        response = self._request(
+            "POST",
+            f"{self._base}/releases",
+            ok=(201,),
+            json_body={
+                "tag_name": tag,
+                "name": title,
+                "body": body,
+                "prerelease": prerelease,
+                "make_latest": make_latest,
+            },
+        )
+        payload = response.json()
+        if payload.get("immutable"):
+            raise StorageError(f"immutable release: {tag}")
+        return self._to_release(payload, make_latest=make_latest, is_latest=make_latest == "true")
+
+    def update_release(
+        self,
+        tag: str,
+        *,
+        title: str | None = None,
+        body: str | None = None,
+        prerelease: bool | None = None,
+        make_latest: Literal["true", "false"] | None = None,
+    ) -> Release:
+        release_id = self._release_id(tag)
+        payload: dict = {}
+        if title is not None:
+            payload["name"] = title
+        if body is not None:
+            payload["body"] = body
+        if prerelease is not None:
+            payload["prerelease"] = prerelease
+        if make_latest is not None:
+            payload["make_latest"] = make_latest
+        response = self._request(
+            "PATCH", f"{self._base}/releases/{release_id}", ok=(200,), json_body=payload
+        )
+        return self._to_release(
+            response.json(),
+            make_latest=make_latest,
+            is_latest=self._latest_tag() == tag,
+        )
+
+    def list_releases(self) -> list[Release]:
+        latest = self._latest_tag()
+        response = self._request("GET", f"{self._base}/releases", ok=(200,))
+        return [
+            self._to_release(item, is_latest=item["tag_name"] == latest) for item in response.json()
+        ]
+
+    # -- assets ----------------------------------------------------------
+    def list_assets(self, tag: str) -> list[Asset]:
+        payload = self._release_payload(tag)
+        if payload is None:
+            return []
+        release_id = int(payload["id"])
+        out: list[Asset] = []
+        page = 1
+        while True:
+            response = self._request(
+                "GET",
+                f"{self._base}/releases/{release_id}/assets",
+                ok=(200,),
+                params={"per_page": 100, "page": page},
+            )
+            items = response.json()
+            out.extend(self._to_asset(item) for item in items)
+            if len(items) < 100:
+                return out
+            page += 1
+
+    def upload_new(self, tag: str, path: Path, name: str, label: str | None = None) -> Asset:
+        release_id = self._release_id(tag)
+        params: dict[str, str] = {"name": name}
+        if label:
+            params["label"] = label
+        response = self._request(
+            "POST",
+            f"{self.UPLOADS}/repos/{self._owner}/{self._repo}/releases/{release_id}/assets",
+            ok=(201,),
+            params=params,
+            content=Path(path).read_bytes(),
+            extra_headers={"Content-Type": "application/octet-stream"},
+        )
+        return self._to_asset(response.json())
+
+    def rename(self, tag: str, asset_id: int, new_name: str, label: str | None = None) -> Asset:
+        payload: dict = {"name": new_name}
+        if label is not None:
+            payload["label"] = label
+        response = self._request(
+            "PATCH",
+            f"{self._base}/releases/assets/{asset_id}",
+            ok=(200,),
+            json_body=payload,
+        )
+        return self._to_asset(response.json())
+
+    def delete(self, tag: str, asset_id: int) -> None:
+        self._request("DELETE", f"{self._base}/releases/assets/{asset_id}", ok=(204,))
+
+    def _fetch_asset(self, tag: str, asset: Asset, dest: Path) -> Path:
+        if not asset.download_url:
+            raise StorageError(f"asset has no download url: {tag}:{asset.name}")
+        dest = Path(dest)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        # No Authorization header here on purpose: browser_download_url is
+        # public, costs no API quota, and the signed redirect rejects the header.
+        response = self._client.get(
+            asset.download_url,
+            headers={"User-Agent": self._user_agent},
+            follow_redirects=True,
+        )
+        if response.status_code != 200:
+            raise StorageError(
+                f"download {tag}:{asset.name} -> {response.status_code}",
+                status=response.status_code,
+            )
+        dest.write_bytes(response.content)
+        return dest
+
+
+def open_store(spec: str) -> ReleaseStore:
+    """Build a store from `local:<dir>` or `github:<owner>/<repo>`."""
+    if spec.startswith("local:"):
+        return LocalReleaseStore(Path(spec[len("local:") :]))
+    if spec.startswith("github:"):
+        target = spec[len("github:") :]
+        if target.count("/") == 1 and all(target.split("/")):
+            owner, repo = target.split("/")
+            return GitHubReleaseStore(owner, repo)
+    raise StorageError(f"unsupported store spec: {spec}")
 
 
 def recovery_tags(store: ReleaseStore) -> list[str]:

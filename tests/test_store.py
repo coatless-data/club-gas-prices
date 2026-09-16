@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import httpx
 import pytest
 
 from costco_gas import store
@@ -618,3 +621,421 @@ def test_recover_temporaries_over_recovery_tags_leaves_other_releases_alone(
     assert [a.name for a in s.list_assets("data-2026")] == ["costco-gas-2026.parquet"]
     # `notes` is not a data release, so recovery never looked at it.
     assert [a.name for a in s.list_assets("notes")] == ["readme.txt.old-tok"]
+
+
+class FakeGitHub:
+    """An in-memory stand-in for the GitHub Releases REST API.
+
+    Served through httpx.MockTransport, so no test ever touches the network.
+    Asset downloads are answered on a separate host, the way GitHub answers
+    them from `browser_download_url`.
+    """
+
+    def __init__(self, owner: str = "acme", repo: str = "gas") -> None:
+        self.owner = owner
+        self.repo = repo
+        self.base = f"/repos/{owner}/{repo}"
+        self.releases: dict[int, dict] = {}
+        self.assets: dict[int, dict] = {}
+        self.latest_tag: str | None = None
+        self.calls: list[dict] = []
+        self.fail_promote: dict[str, int] = {}
+        self.rate_limit_queue: list[dict] = []
+        self.null_digest = False
+        self._next_release = 1
+        self._next_asset = 1000
+        self._clock = datetime(2026, 9, 15, 18, 0, 0, tzinfo=UTC)
+
+    # -- seeding ---------------------------------------------------------
+    def add_release(
+        self,
+        tag: str,
+        *,
+        prerelease: bool = False,
+        immutable: bool = False,
+        latest: bool = False,
+    ) -> dict:
+        release_id = self._next_release
+        self._next_release += 1
+        self.releases[release_id] = {
+            "id": release_id,
+            "tag_name": tag,
+            "name": tag,
+            "body": "",
+            "prerelease": prerelease,
+            "immutable": immutable,
+            "html_url": f"https://example.invalid/{tag}",
+        }
+        if latest:
+            self.latest_tag = tag
+        return self.releases[release_id]
+
+    def add_asset(
+        self,
+        tag: str,
+        name: str,
+        data: bytes,
+        *,
+        label: str | None = None,
+        state: str = "uploaded",
+    ) -> dict:
+        release = self._release_by_tag(tag)
+        assert release is not None
+        return self._store_asset(release["id"], name, data, label=label, state=state)
+
+    def _store_asset(
+        self,
+        release_id: int,
+        name: str,
+        data: bytes,
+        *,
+        label: str | None = None,
+        state: str = "uploaded",
+    ) -> dict:
+        asset_id = self._next_asset
+        self._next_asset += 1
+        self._clock += timedelta(seconds=1)
+        self.assets[asset_id] = {
+            "id": asset_id,
+            "release_id": release_id,
+            "name": name,
+            "label": label or "",
+            "state": state,
+            "body": data,
+            "created_at": self._clock.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }
+        return self.assets[asset_id]
+
+    def _release_by_tag(self, tag: str | None) -> dict | None:
+        for release in self.releases.values():
+            if release["tag_name"] == tag:
+                return release
+        return None
+
+    def asset_names(self, tag: str) -> list[str]:
+        release = self._release_by_tag(tag)
+        assert release is not None
+        return sorted(a["name"] for a in self.assets.values() if a["release_id"] == release["id"])
+
+    def _asset(self, tag: str, name: str) -> dict:
+        release = self._release_by_tag(tag)
+        assert release is not None
+        for asset in self.assets.values():
+            if asset["release_id"] == release["id"] and asset["name"] == name:
+                return asset
+        raise KeyError(name)
+
+    def body_of(self, tag: str, name: str) -> bytes:
+        return self._asset(tag, name)["body"]
+
+    def label_of(self, tag: str, name: str) -> str:
+        return self._asset(tag, name)["label"]
+
+    # -- serialisation ---------------------------------------------------
+    def _asset_json(self, asset: dict) -> dict:
+        digest = None if self.null_digest else "sha256:" + hashlib.sha256(asset["body"]).hexdigest()
+        return {
+            "id": asset["id"],
+            "name": asset["name"],
+            "label": asset["label"],
+            "state": asset["state"],
+            "size": len(asset["body"]),
+            "digest": digest,
+            "created_at": asset["created_at"],
+            "browser_download_url": f"https://downloads.invalid/assets/{asset['id']}",
+        }
+
+    # -- transport -------------------------------------------------------
+    def transport(self) -> httpx.MockTransport:
+        return httpx.MockTransport(self.handle)
+
+    def handle(self, request: httpx.Request) -> httpx.Response:
+        self.calls.append(
+            {
+                "method": request.method,
+                "url": str(request.url),
+                "auth": request.headers.get("authorization"),
+            }
+        )
+        path = request.url.path
+        if request.url.host == "downloads.invalid":
+            asset_id = int(path.rsplit("/", 1)[-1])
+            return httpx.Response(200, content=self.assets[asset_id]["body"])
+        if request.method in ("POST", "PATCH", "DELETE") and self.rate_limit_queue:
+            headers = self.rate_limit_queue.pop(0)
+            return httpx.Response(429, headers=headers, json={"message": "rate limited"})
+
+        if request.method == "GET" and path == f"{self.base}/releases/latest":
+            release = self._release_by_tag(self.latest_tag)
+            if release is None:
+                return httpx.Response(404, json={"message": "Not Found"})
+            return httpx.Response(200, json=release)
+        if request.method == "GET" and path.startswith(f"{self.base}/releases/tags/"):
+            release = self._release_by_tag(path.rsplit("/", 1)[-1])
+            if release is None:
+                return httpx.Response(404, json={"message": "Not Found"})
+            return httpx.Response(200, json=release)
+        if request.method == "GET" and path == f"{self.base}/releases":
+            return httpx.Response(200, json=list(self.releases.values()))
+        if request.method == "POST" and path == f"{self.base}/releases":
+            payload = json.loads(request.content)
+            release = self.add_release(
+                payload["tag_name"],
+                prerelease=bool(payload.get("prerelease")),
+                latest=payload.get("make_latest") == "true",
+            )
+            release["name"] = payload.get("name", "")
+            release["body"] = payload.get("body", "")
+            return httpx.Response(201, json=release)
+
+        match = re.fullmatch(rf"{re.escape(self.base)}/releases/(\d+)", path)
+        if match and request.method == "PATCH":
+            release = self.releases[int(match.group(1))]
+            payload = json.loads(request.content)
+            for key in ("name", "body", "prerelease"):
+                if key in payload:
+                    release[key] = payload[key]
+            if payload.get("make_latest") == "true":
+                self.latest_tag = release["tag_name"]
+            return httpx.Response(200, json=release)
+
+        match = re.fullmatch(rf"{re.escape(self.base)}/releases/(\d+)/assets", path)
+        if match and request.method == "GET":
+            release_id = int(match.group(1))
+            items = [
+                self._asset_json(a) for a in self.assets.values() if a["release_id"] == release_id
+            ]
+            page = int(request.url.params.get("page", "1"))
+            per_page = int(request.url.params.get("per_page", "100"))
+            return httpx.Response(200, json=items[(page - 1) * per_page : page * per_page])
+        if match and request.method == "POST":
+            release_id = int(match.group(1))
+            name = request.url.params["name"]
+            clash = any(
+                a["release_id"] == release_id and a["name"] == name for a in self.assets.values()
+            )
+            if clash:
+                return httpx.Response(422, json={"message": "Validation Failed"})
+            asset = self._store_asset(
+                release_id, name, request.content, label=request.url.params.get("label")
+            )
+            return httpx.Response(201, json=self._asset_json(asset))
+
+        match = re.fullmatch(rf"{re.escape(self.base)}/releases/assets/(\d+)", path)
+        if match and request.method == "PATCH":
+            asset = self.assets[int(match.group(1))]
+            payload = json.loads(request.content)
+            new_name = payload.get("name", asset["name"])
+            remaining = self.fail_promote.get(new_name, 0)
+            if remaining and asset["name"].startswith(f"{new_name}.next-"):
+                self.fail_promote[new_name] = remaining - 1
+                return httpx.Response(422, json={"message": "Validation Failed"})
+            asset["name"] = new_name
+            if "label" in payload:
+                asset["label"] = payload["label"] or ""
+            return httpx.Response(200, json=self._asset_json(asset))
+        if match and request.method == "DELETE":
+            self.assets.pop(int(match.group(1)), None)
+            return httpx.Response(204)
+
+        return httpx.Response(404, json={"message": f"no route for {request.method} {path}"})
+
+
+@pytest.fixture
+def writer_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GITHUB_TOKEN", "ghs-test-token")
+    monkeypatch.setenv("COSTCO_GAS_WRITER", "1")
+
+
+def test_github_reads_need_no_token_and_no_auth_on_downloads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    fake = FakeGitHub()
+    fake.add_release("current", latest=True)
+    fake.add_asset("current", "stations.csv", b"station_key,country\nUS-1364,US\n")
+    s = store.GitHubReleaseStore("acme", "gas", transport=fake.transport())
+
+    release = s.get_release("current")
+    assert release is not None
+    assert release.tag == "current"
+    assert release.is_latest is True
+    assert s.get_release("data-2030-01") is None
+    assert s.get_latest().tag == "current"
+    assert [a.name for a in s.list_assets("current")] == ["stations.csv"]
+    assert s.list_assets("data-2030-01") == []
+
+    dest = s.download("current", "stations.csv", tmp_path / "stations.csv")
+    assert dest.read_bytes() == b"station_key,country\nUS-1364,US\n"
+
+    downloads = [c for c in fake.calls if "downloads.invalid" in c["url"]]
+    assert len(downloads) == 1
+    # browser_download_url is public: it costs no API quota, and the signed
+    # redirect target rejects an Authorization header.
+    assert downloads[0]["auth"] is None
+
+
+def test_github_is_latest_comes_from_the_releases_latest_endpoint(writer_env):
+    # The Latest pointer is repository-wide, so it cannot be read off the
+    # release payload: the store asks GET /releases/latest and compares tags.
+    fake = FakeGitHub()
+    fake.add_release("data-2026-09", prerelease=True)
+    fake.add_release("current", latest=True)
+    s = store.GitHubReleaseStore("acme", "gas", transport=fake.transport())
+
+    assert s.get_release("current").is_latest is True
+    assert s.get_release("data-2026-09").is_latest is False
+    assert s.get_latest().is_latest is True
+    assert {r.tag: r.is_latest for r in s.list_releases()} == {
+        "current": True,
+        "data-2026-09": False,
+    }
+
+    moved = s.update_release("data-2026-09", make_latest="true")
+
+    assert moved.make_latest == "true"
+    assert moved.is_latest is True
+    assert s.get_release("current").is_latest is False
+
+
+def test_github_writes_require_the_token_and_the_writer_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    fake = FakeGitHub()
+    fake.add_release("data-2026-09", prerelease=True)
+    payload = _write(tmp_path, "rows.csv", b"rows-v1\n")
+
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.setenv("COSTCO_GAS_WRITER", "1")
+    no_token = store.GitHubReleaseStore("acme", "gas", transport=fake.transport())
+    with pytest.raises(store.StorageError, match="GITHUB_TOKEN"):
+        no_token.upload_new("data-2026-09", payload, "rows.csv")
+
+    monkeypatch.setenv("GITHUB_TOKEN", "ghs-test-token")
+    monkeypatch.delenv("COSTCO_GAS_WRITER", raising=False)
+    no_flag = store.GitHubReleaseStore("acme", "gas", transport=fake.transport())
+    with pytest.raises(store.StorageError, match="COSTCO_GAS_WRITER"):
+        no_flag.ensure_release("current", "Current data", "b", False, "true")
+
+    assert not [c for c in fake.calls if c["method"] in ("POST", "PATCH", "DELETE")]
+
+
+def test_github_ensure_release_creates_updates_and_refuses_immutable(writer_env):
+    fake = FakeGitHub()
+    s = store.GitHubReleaseStore("acme", "gas", transport=fake.transport())
+
+    created = s.ensure_release("data-2026-09", "September 2026", "body", True, "false")
+    assert created.tag == "data-2026-09"
+    assert created.prerelease is True
+    assert created.make_latest == "false"
+    assert created.is_latest is False
+    assert s.ensure_release("data-2026-09", "x", "y", False, "false").title == ("September 2026")
+
+    closed = s.update_release("data-2026-09", prerelease=False, body="closed")
+    assert closed.prerelease is False
+    assert closed.body == "closed"
+    assert closed.is_latest is False
+    assert [r.tag for r in s.list_releases()] == ["data-2026-09"]
+
+    fake.add_release("current", immutable=True)
+    with pytest.raises(store.StorageError, match="immutable release: current"):
+        s.ensure_release("current", "Current data", "b", False, "true")
+
+
+def test_github_upload_new_reports_a_422_for_a_duplicate_name(tmp_path: Path, writer_env):
+    fake = FakeGitHub()
+    fake.add_release("data-2026-09", prerelease=True)
+    fake.add_asset("data-2026-09", "capture-2026-09-15T1817Z.tar.gz", b"bundle")
+    s = store.GitHubReleaseStore("acme", "gas", transport=fake.transport())
+    payload = _write(tmp_path, "bundle.tar.gz", b"bundle")
+
+    with pytest.raises(store.StorageError) as excinfo:
+        s.upload_new("data-2026-09", payload, "capture-2026-09-15T1817Z.tar.gz")
+    assert excinfo.value.status == 422
+
+    uploaded = s.upload_new("data-2026-09", payload, "capture-2026-09-15T1818Z.tar.gz")
+    assert uploaded.state == "uploaded"
+    assert fake.body_of("data-2026-09", "capture-2026-09-15T1818Z.tar.gz") == b"bundle"
+
+
+def test_github_read_resolved_verifies_by_hashing_when_digest_is_null(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    fake = FakeGitHub()
+    fake.null_digest = True  # older assets carry no digest
+    fake.add_release("current")
+    good = b"stations-v2\n"
+    fake.add_asset(
+        "current",
+        "stations.csv.next-tok-1",
+        good,
+        label="sha256:" + hashlib.sha256(good).hexdigest(),
+    )
+    fake.add_asset("current", "stations.csv.next-tok-2", b"torn\n", label="sha256:" + "0" * 64)
+    s = store.GitHubReleaseStore("acme", "gas", transport=fake.transport())
+
+    dest = s.read_resolved("current", "stations.csv", tmp_path / "s.csv")
+    assert dest.read_bytes() == good
+
+
+def test_github_replace_atomic_retries_a_422_promotion(tmp_path: Path, writer_env):
+    fake = FakeGitHub()
+    fake.add_release("current")
+    fake.add_asset("current", "stations.csv", b"stations-v1\n")
+    fake.fail_promote["stations.csv"] = 2
+    clock = FakeClock()
+    s = store.GitHubReleaseStore(
+        "acme", "gas", transport=fake.transport(), sleep=clock.sleep, monotonic=clock.now
+    )
+    payload = _write(tmp_path, "v2.csv", b"stations-v2\n")
+
+    asset = s.replace_atomic("current", payload, "stations.csv", "2026-09-15T1817Z")
+
+    assert clock.slept == [5.0, 10.0]
+    assert asset.name == "stations.csv"
+    assert asset.label is None
+    assert fake.asset_names("current") == ["stations.csv"]
+    assert fake.body_of("current", "stations.csv") == b"stations-v2\n"
+    assert fake.label_of("current", "stations.csv") == ""
+
+
+def test_github_replace_atomic_rolls_back_when_the_promotion_keeps_failing(
+    tmp_path: Path, writer_env
+):
+    fake = FakeGitHub()
+    fake.add_release("current")
+    fake.add_asset("current", "stations.csv", b"stations-v1\n")
+    fake.fail_promote["stations.csv"] = 99
+    clock = FakeClock()
+    s = store.GitHubReleaseStore(
+        "acme", "gas", transport=fake.transport(), sleep=clock.sleep, monotonic=clock.now
+    )
+    payload = _write(tmp_path, "v2.csv", b"stations-v2\n")
+
+    with pytest.raises(store.StorageError, match="could not promote"):
+        s.replace_atomic("current", payload, "stations.csv", "tok")
+
+    assert clock.slept == [5.0, 10.0, 20.0, 40.0, 80.0]
+    # The previous copy is back under its real name, so readers are never empty.
+    assert fake.body_of("current", "stations.csv") == b"stations-v1\n"
+    assert "stations.csv.next-tok-1" in fake.asset_names("current")
+    # And the next recovery pass clears the unusable upload.
+    store.recover_temporaries(s, "current")
+    assert fake.asset_names("current") == ["stations.csv"]
+
+
+def test_open_store_builds_both_kinds(tmp_path: Path):
+    local = store.open_store(f"local:{tmp_path / 'releases'}")
+    assert isinstance(local, store.LocalReleaseStore)
+    local.ensure_release("current", "Current data", "b", False, "true")
+    assert (tmp_path / "releases" / "current" / "_release.json").exists()
+
+    remote = store.open_store("github:coatless-dashboard/costco-gas-prices")
+    assert isinstance(remote, store.GitHubReleaseStore)
+    assert store.DEFAULT_STORE == "github:coatless-dashboard/costco-gas-prices"
+
+    with pytest.raises(store.StorageError, match="unsupported store spec"):
+        store.open_store("s3://bucket/prefix")
+    with pytest.raises(store.StorageError, match="unsupported store spec"):
+        store.open_store("github:no-slash")
