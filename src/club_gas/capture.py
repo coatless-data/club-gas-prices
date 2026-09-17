@@ -471,21 +471,25 @@ def _write_bundle(
             shutil.copy2(path, stage / "config" / path.name)
             config_sha[path.name] = sha256_file(path)
 
-    (stage / "capture.json").write_text(
-        json.dumps(
-            {
-                "capture_id": ctx.capture_id,
-                "capture_date": ctx.capture_date.isoformat(),
-                "started_at_utc": run["started_at_utc"],
-                "git_sha": run["git_sha"],
-                "run_id": run["run_id"],
-                "config_sha256": config_sha,
-            },
-            indent=2,
-            sort_keys=True,
-        ),
-        encoding="utf-8",
+    # Into the bundle AND the capture directory. publish.load_capture_dir reads
+    # `capture.json` from the capture directory and names it in its required
+    # list, so writing it only into the bundle left publish with nothing to read
+    # -- which no test saw, because the publish tests build a capture directory
+    # of their own rather than the one capture actually writes.
+    capture_meta = json.dumps(
+        {
+            "capture_id": ctx.capture_id,
+            "capture_date": ctx.capture_date.isoformat(),
+            "started_at_utc": run["started_at_utc"],
+            "git_sha": run["git_sha"],
+            "run_id": run["run_id"],
+            "config_sha256": config_sha,
+        },
+        indent=2,
+        sort_keys=True,
     )
+    (stage / "capture.json").write_text(capture_meta, encoding="utf-8")
+    (out / "capture" / "capture.json").write_text(capture_meta, encoding="utf-8")
     ctx.previous_stations.write_csv(stage / "inputs" / "stations_used.csv")
     ctx.previous_fx.write_csv(stage / "inputs" / "fx_used.csv")
     (stage / "inputs" / "status_previous.json").write_text(

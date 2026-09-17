@@ -722,3 +722,35 @@ def test_a_disabled_feed_is_never_dispatched(monkeypatch):
     runnable = [fid for fid in feeds_for(["US"]) if getattr(configured.get(fid), "enabled", True)]
 
     assert runnable == ["US-COSTCO"]
+
+
+def test_the_capture_directory_is_one_publish_can_read(workspace: Path):
+    """capture writes a directory; publish reads one. Nothing checked they agree.
+
+    `capture.json` went only into the bundle while `publish.load_capture_dir`
+    reads it from the capture directory and lists it as required, so the first
+    real publish died on a missing file. The publish tests never saw it because
+    they build a capture directory of their own instead of the one capture
+    writes.
+    """
+    from club_gas.publish import load_capture_dir
+
+    cfg = load_config(workspace)
+    store = LocalReleaseStore(workspace / "releases")
+    result = run_capture(
+        cfg,
+        store,
+        workspace / "out",
+        countries=["TW"],
+        force_fallback=set(),
+        now=NOW,
+        client=Client(cfg.http, transport=make_transport()),
+    )
+    directory = Path(result.out)
+
+    for name in ("capture.json", "rows.csv.gz", "stations.csv", "fx.json", "status.json"):
+        assert (directory / name).is_file(), f"capture wrote no {name}"
+
+    loaded = load_capture_dir(directory)
+    assert loaded.capture_id == result.capture_id
+    assert loaded.rows.height > 0
