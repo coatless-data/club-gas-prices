@@ -100,6 +100,7 @@ GRADE_FIELDS = (
 STATION_CORE = (
     "station_key",
     "country",
+    "brand",
     "name",
     "name_local",
     "address",
@@ -209,6 +210,7 @@ def _write_json(path: Path, payload: object) -> None:
 SUMMARY_COLUMNS = [
     "capture_date",
     "country",
+    "brand",
     "level",
     "region",
     "grade",
@@ -221,11 +223,15 @@ SUMMARY_COLUMNS = [
     "p25_usd_per_litre",
     "p75_usd_per_litre",
 ]
-SUMMARY_KEY = ["capture_date", "country", "level", "region", "grade"]
-SUMMARY_SORT = ["country", "level", "region", "grade", "capture_date"]
+# Brand is part of the KEY, not just a column. The site never pools two chains
+# into one figure, so there is no (country, grade) row spanning both -- there is
+# one row per brand and the page draws two series.
+SUMMARY_KEY = ["capture_date", "country", "brand", "level", "region", "grade"]
+SUMMARY_SORT = ["country", "brand", "level", "region", "grade", "capture_date"]
 HISTORY_COLUMNS = [
     "capture_date",
     "station_key",
+    "brand",
     "grade",
     "price_local_per_litre",
     "price_usd_per_litre",
@@ -250,11 +256,11 @@ HISTORY_ROW_GROUP_SIZE = 20000
 
 
 def summary_daily(deduped: pl.DataFrame) -> pl.DataFrame:
-    country = _aggregate(deduped, ["capture_date", "country", "grade"], "country")
+    country = _aggregate(deduped, ["capture_date", "country", "brand", "grade"], "country")
     # Region rows use only the stations that have a region; the UK has none.
     regional = _aggregate(
         deduped.filter(pl.col("region").is_not_null()),
-        ["capture_date", "country", "region", "grade"],
+        ["capture_date", "country", "brand", "region", "grade"],
         "region",
     )
     frame = pl.concat([country, regional], how="vertical").sort(SUMMARY_SORT, nulls_last=True)

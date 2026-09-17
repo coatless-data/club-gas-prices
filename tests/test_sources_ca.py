@@ -66,7 +66,7 @@ def stations_frame(rows: list[dict]) -> pl.DataFrame:
 
 def cached_row(station_id: str, **overrides) -> dict:
     row = {
-        "station_key": f"CA-{station_id}",
+        "station_key": f"CA-COSTCO-{station_id}",
         "country": "CA",
         "source_station_id": station_id,
         "alt_id": None,
@@ -155,7 +155,7 @@ def test_cached_stations_keeps_only_recent_ca_rows():
         [
             cached_row("1213"),
             cached_row("530", last_seen_utc=datetime(2026, 7, 1, 18, 17)),
-            cached_row("1364", station_key="US-1364", country="US"),
+            cached_row("1364", station_key="US-COSTCO-1364", country="US"),
         ]
     )
 

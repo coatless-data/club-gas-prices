@@ -33,6 +33,7 @@ ROW_SCHEMA: dict[str, pl.DataType] = {
     "captured_at_utc": UTC_DATETIME,
     "local_date": pl.Date(),
     "country": pl.String(),
+    "brand": pl.String(),
     "station_key": pl.String(),
     "source_station_id": pl.String(),
     "source": pl.String(),
@@ -69,6 +70,7 @@ REQUIRED_ROW_COLUMNS: tuple[str, ...] = (
     "captured_at_utc",
     "local_date",
     "country",
+    "brand",
     "station_key",
     "source_station_id",
     "source",
@@ -89,6 +91,7 @@ ROW_SORT: list[str] = ["capture_id", "country", "station_key", "grade_raw"]
 STATION_SCHEMA: dict[str, pl.DataType] = {
     "station_key": pl.String(),
     "country": pl.String(),
+    "brand": pl.String(),
     "source_station_id": pl.String(),
     "alt_id": pl.String(),
     "name": pl.String(),
@@ -174,7 +177,7 @@ def validate_rows(df: pl.DataFrame) -> None:
 
 def validate_stations(df: pl.DataFrame) -> None:
     """Raise SchemaError unless df can be written as stations.csv."""
-    _check_schema(df, STATION_SCHEMA, STATION_KEY, ("station_key", "country", "status"))
+    _check_schema(df, STATION_SCHEMA, STATION_KEY, ("station_key", "country", "brand", "status"))
 
 
 def validate_fx(df: pl.DataFrame) -> None:

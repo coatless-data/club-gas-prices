@@ -88,6 +88,9 @@ class FetchResult:
     country: str
     source: str
     captured_at_utc: datetime
+    # The chain whose feed this is. Part of the station key, because two chains
+    # number their sites independently and collide on the bare number.
+    brand: str = "COSTCO"
     stations: list[RawStation] = field(default_factory=list)
     responses: list[RawResponse] = field(default_factory=list)
     requests: int = 0

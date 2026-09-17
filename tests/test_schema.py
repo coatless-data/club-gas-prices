@@ -42,7 +42,8 @@ def row(**overrides: object) -> dict[str, object]:
         "captured_at_utc": CAPTURED_AT,
         "local_date": dt.date(2026, 9, 16),
         "country": "JP",
-        "station_key": "JP-Tomiya",
+        "brand": "COSTCO",
+        "station_key": "JP-COSTCO-Tomiya",
         "source_station_id": "Tomiya",
         "source": "costco-occ",
         "name": "Tomiya",
@@ -78,9 +79,16 @@ def frame(*rows: dict[str, object]) -> pl.DataFrame:
 
 def test_row_schema_column_order_and_dtypes():
     names = list(ROW_SCHEMA)
-    assert names[:5] == ["capture_id", "capture_date", "captured_at_utc", "local_date", "country"]
+    assert names[:6] == [
+        "capture_id",
+        "capture_date",
+        "captured_at_utc",
+        "local_date",
+        "country",
+        "brand",
+    ]
     assert names[-2:] == ["price_usd_per_litre", "price_usd_per_gallon"]
-    assert len(names) == 30
+    assert len(names) == 31
     assert ROW_SCHEMA["captured_at_utc"] == pl.Datetime("us", "UTC")
     assert ROW_SCHEMA["lat"] == pl.Float64()
     assert next(iter(STATION_SCHEMA)) == "station_key"
@@ -161,7 +169,7 @@ def us_row(**overrides: object) -> dict[str, object]:
     litres = 3.999 / GALLON_L
     base = row(
         country="US",
-        station_key="US-1364",
+        station_key="US-COSTCO-1364",
         source_station_id="1364",
         source="costco-us-gasprices",
         name="Bloomington",
@@ -244,7 +252,14 @@ def test_cast_to_schema_requires_every_column():
 
 
 def test_cast_to_schema_reorders_and_casts_strings():
-    df = pl.DataFrame({"country": ["JP"], "lat": ["38.4"], "station_key": ["JP-Tomiya"]})
+    df = pl.DataFrame(
+        {
+            "country": ["JP"],
+            "brand": ["COSTCO"],
+            "lat": ["38.4"],
+            "station_key": ["JP-COSTCO-Tomiya"],
+        }
+    )
     out = cast_to_schema(
         df, {"station_key": pl.String(), "country": pl.String(), "lat": pl.Float64()}
     )
@@ -284,7 +299,7 @@ def test_rows_csv_gz_refuses_an_invalid_frame(tmp_path):
 
 
 def test_write_parquet_sorts_explicitly(tmp_path):
-    df = frame(row(station_key="JP-Zama", source_station_id="Zama", name="Zama"), row())
+    df = frame(row(station_key="JP-COSTCO-Zama", source_station_id="Zama", name="Zama"), row())
     path = write_parquet(
         df,
         tmp_path / "captures.parquet",
@@ -292,7 +307,7 @@ def test_write_parquet_sorts_explicitly(tmp_path):
         row_group_size=20000,
     )
     back = pl.read_parquet(path)
-    assert back["station_key"].to_list() == ["JP-Tomiya", "JP-Zama"]
+    assert back["station_key"].to_list() == ["JP-COSTCO-Tomiya", "JP-COSTCO-Zama"]
     assert back.schema == pl.Schema(ROW_SCHEMA)
     assert back["price_usd_per_gallon"].to_list() == [3.6568, 3.6568]
 
@@ -301,8 +316,9 @@ def test_stations_csv_round_trips(tmp_path):
     stations = pl.DataFrame(
         [
             {
-                "station_key": "JP-Tomiya",
+                "station_key": "JP-COSTCO-Tomiya",
                 "country": "JP",
+                "brand": "COSTCO",
                 "source_station_id": "Tomiya",
                 "alt_id": "costcoJapanTomiyaWarehouse",
                 "name": "Tomiya",
@@ -350,8 +366,9 @@ def test_write_csv_validates_stations_before_writing(tmp_path):
     stations_dup = pl.DataFrame(
         [
             {
-                "station_key": "JP-Tomiya",
+                "station_key": "JP-COSTCO-Tomiya",
                 "country": "JP",
+                "brand": "COSTCO",
                 "source_station_id": "Tomiya",
                 "alt_id": "costcoJapanTomiyaWarehouse",
                 "name": "Tomiya",
@@ -370,8 +387,9 @@ def test_write_csv_validates_stations_before_writing(tmp_path):
                 "superseded_by": None,
             },
             {
-                "station_key": "JP-Tomiya",
+                "station_key": "JP-COSTCO-Tomiya",
                 "country": "JP",
+                "brand": "COSTCO",
                 "source_station_id": "Tomiya",
                 "alt_id": "costcoJapanTomiyaWarehouse",
                 "name": "Tomiya",
@@ -408,8 +426,9 @@ def test_write_csv_validates_stations_null_in_required_column(tmp_path):
     stations_bad = pl.DataFrame(
         [
             {
-                "station_key": "JP-Tomiya",
+                "station_key": "JP-COSTCO-Tomiya",
                 "country": "JP",
+                "brand": "COSTCO",
                 "source_station_id": "Tomiya",
                 "alt_id": "costcoJapanTomiyaWarehouse",
                 "name": "Tomiya",

@@ -65,6 +65,7 @@ def price_row(
         "captured_at_utc": at,
         "local_date": at.date(),
         "country": country,
+        "brand": "COSTCO",
         "station_key": station_key,
         "source_station_id": station_key.split("-", 1)[1],
         "source": source,

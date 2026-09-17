@@ -1,0 +1,1043 @@
+{
+ "data": {
+  "contentLayout": {
+   "modules": [
+    {
+     "name": "EXPORT: 1 NEW FuelPrices Mon Dec 02 2024 2:29 PM PST",
+     "type": "FuelPrices",
+     "subType": null,
+     "version": 1,
+     "status": "published",
+     "schedule": {
+      "start": null,
+      "end": null,
+      "priority": 1,
+      "expEnabled": false
+     },
+     "configs": {
+      "__typename": "TempoSAMS_GLASSWWWFuelPricesConfigs",
+      "storeFuelPrices": {
+       "countryCode": "US",
+       "id": "CPF_FUELPRICE_PROD_6376",
+       "metadata": {
+        "dateCreated": "2026-09-17T08:15:55.625Z",
+        "createdBy": "CPF_STORAGE"
+       },
+       "prices": [
+        {
+         "price": 3.699,
+         "gradeId": 11,
+         "displayName": "Unleaded",
+         "name": "UNLEAD",
+         "type": "fuel"
+        },
+        {
+         "price": 4.399,
+         "gradeId": 16,
+         "displayName": "Premium",
+         "name": "PREMIUM",
+         "type": "fuel"
+        },
+        {
+         "price": 5.699,
+         "gradeId": 21,
+         "displayName": "Diesel",
+         "name": "DIESEL",
+         "type": "fuel"
+        },
+        {
+         "price": 2.979,
+         "gradeId": 14,
+         "displayName": "Mid-Grade",
+         "name": "MIDGRAD",
+         "type": "fuel"
+        }
+       ]
+      },
+      "fuelPriceTileCta": [
+       {
+        "legalLabel": "Price may vary. Actual price on the fuel pump.",
+        "title": "Gas Prices"
+       }
+      ]
+     },
+     "publishedDate": 1747066305338,
+     "moduleId": "83b4bf14-87cd-4bb8-b535-31b4ec47e089",
+     "module_id": "83b4bf14-87cd-4bb8-b535-31b4ec47e089",
+     "matchedTrigger": {
+      "pageType": "HyperLocalPage",
+      "pageId": "fuel-center",
+      "zone": "contentZone13",
+      "inheritable": false
+     }
+    }
+   ],
+   "layouts": [
+    {
+     "id": "storePagesDesktopGeneric",
+     "layout": {
+      "channel": {
+       "id": "98466136-4b9a-4f16-8b0b-6f0b7395b602",
+       "status": "ACTIVE"
+      },
+      "definition": {
+       "content": [
+        {
+         "content": {
+          "id": "topContent",
+          "mapping": [
+           {
+            "options": {
+             "refId": "contentZone1"
+            },
+            "type": "ZONE"
+           },
+           {
+            "options": {
+             "refId": "contentZone2"
+            },
+            "type": "ZONE"
+           },
+           {
+            "options": {
+             "refId": "contentZone3"
+            },
+            "type": "ZONE"
+           },
+           {
+            "options": {
+             "refId": "contentZone4"
+            },
+            "type": "ZONE"
+           },
+           {
+            "options": {
+             "refId": "contentZone5"
+            },
+            "type": "ZONE"
+           }
+          ],
+          "type": "slot"
+         },
+         "flow": "horizontal",
+         "type": "container"
+        },
+        {
+         "content": [
+          {
+           "content": {
+            "id": "leftContent",
+            "mapping": [
+             {
+              "options": {
+               "refId": "contentZone6"
+              },
+              "type": "ZONE"
+             },
+             {
+              "options": {
+               "refId": "contentZone7"
+              },
+              "type": "ZONE"
+             },
+             {
+              "options": {
+               "refId": "contentZone8"
+              },
+              "type": "ZONE"
+             },
+             {
+              "options": {
+               "refId": "contentZone9"
+              },
+              "type": "ZONE"
+             },
+             {
+              "options": {
+               "refId": "contentZone10"
+              },
+              "type": "ZONE"
+             }
+            ],
+            "type": "slot"
+           },
+           "flow": "vertical",
+           "style": {
+            "gridColumns": 12,
+            "lgGridColumns": 6,
+            "mdGridColumns": 12,
+            "xlGridColumns": 6,
+            "xxlGridColumns": 6
+           },
+           "type": "container"
+          },
+          {
+           "content": {
+            "id": "rightContent",
+            "mapping": [
+             {
+              "options": {
+               "refId": "contentZone11"
+              },
+              "type": "ZONE"
+             },
+             {
+              "options": {
+               "refId": "contentZone12"
+              },
+              "type": "ZONE"
+             },
+             {
+              "options": {
+               "refId": "contentZone13"
+              },
+              "type": "ZONE"
+             },
+             {
+              "options": {
+               "refId": "contentZone14"
+              },
+              "type": "ZONE"
+             },
+             {
+              "options": {
+               "refId": "contentZone15"
+              },
+              "type": "ZONE"
+             }
+            ],
+            "type": "slot"
+           },
+           "flow": "vertical",
+           "style": {
+            "gridColumns": 12,
+            "lgGridColumns": 6,
+            "mdGridColumns": 12,
+            "xlGridColumns": 6,
+            "xxlGridColumns": 6
+           },
+           "type": "container"
+          }
+         ],
+         "flow": "horizontal",
+         "type": "container"
+        },
+        {
+         "content": [
+          {
+           "content": {
+            "id": "middleLeftContent",
+            "mapping": [
+             {
+              "options": {
+               "refId": "contentZone16"
+              },
+              "type": "ZONE"
+             },
+             {
+              "options": {
+               "refId": "contentZone17"
+              },
+              "type": "ZONE"
+             },
+             {
+              "options": {
+               "refId": "contentZone18"
+              },
+              "type": "ZONE"
+             },
+             {
+              "options": {
+               "refId": "contentZone19"
+              },
+              "type": "ZONE"
+             },
+             {
+              "options": {
+               "refId": "contentZone20"
+              },
+              "type": "ZONE"
+             }
+            ],
+            "type": "slot"
+           },
+           "flow": "vertical",
+           "style": {
+            "gridColumns": 9,
+            "lgGridColumns": 9,
+            "mdGridColumns": 9,
+            "xlGridColumns": 9,
+            "xxlGridColumns": 9
+           },
+           "type": "container"
+          },
+          {
+           "content": {
+            "id": "middleRightContent",
+            "mapping": [
+             {
+              "options": {
+               "refId": "contentZone21"
+              },
+              "type": "ZONE"
+             },
+             {
+              "options": {
+               "refId": "contentZone22"
+              },
+              "type": "ZONE"
+             },
+             {
+              "options": {
+               "refId": "contentZone23"
+              },
+              "type": "ZONE"
+             },
+             {
+              "options": {
+               "refId": "contentZone24"
+              },
+              "type": "ZONE"
+             },
+             {
+              "options": {
+               "refId": "contentZone25"
+              },
+              "type": "ZONE"
+             }
+            ],
+            "type": "slot"
+           },
+           "flow": "vertical",
+           "style": {
+            "gridColumns": 3,
+            "lgGridColumns": 3,
+            "mdGridColumns": 3,
+            "xlGridColumns": 3,
+            "xxlGridColumns": 3
+           },
+           "type": "container"
+          }
+         ],
+         "flow": "horizontal",
+         "type": "container"
+        },
+        {
+         "content": [
+          {
+           "content": {
+            "id": "middleLeftBannerContent",
+            "mapping": [
+             {
+              "options": {
+               "refId": "middleLeftBannerZone1"
+              },
+              "type": "ZONE"
+             }
+            ],
+            "type": "slot"
+           },
+           "flow": "vertical",
+           "style": {
+            "gridColumns": 12,
+            "lgGridColumns": 4,
+            "mdGridColumns": 12,
+            "xlGridColumns": 4,
+            "xxlGridColumns": 4
+           },
+           "type": "container"
+          },
+          {
+           "content": {
+            "id": "middleCentralBannerContent",
+            "mapping": [
+             {
+              "options": {
+               "refId": "middleCentralBannerZone1"
+              },
+              "type": "ZONE"
+             }
+            ],
+            "type": "slot"
+           },
+           "flow": "vertical",
+           "style": {
+            "gridColumns": 12,
+            "lgGridColumns": 4,
+            "mdGridColumns": 12,
+            "xlGridColumns": 4,
+            "xxlGridColumns": 4
+           },
+           "type": "container"
+          },
+          {
+           "content": {
+            "id": "middleRightBannerContent",
+            "mapping": [
+             {
+              "options": {
+               "refId": "middleRightBannerZone1"
+              },
+              "type": "ZONE"
+             }
+            ],
+            "type": "slot"
+           },
+           "flow": "vertical",
+           "style": {
+            "gridColumns": 12,
+            "lgGridColumns": 4,
+            "mdGridColumns": 12,
+            "xlGridColumns": 4,
+            "xxlGridColumns": 4
+           },
+           "type": "container"
+          }
+         ],
+         "flow": "horizontal",
+         "type": "container"
+        },
+        {
+         "content": {
+          "id": "middleVerticalContent",
+          "mapping": [
+           {
+            "options": {
+             "refId": "contentZone26"
+            },
+            "type": "ZONE"
+           },
+           {
+            "options": {
+             "refId": "contentZone27"
+            },
+            "type": "ZONE"
+           },
+           {
+            "options": {
+             "refId": "contentZone28"
+            },
+            "type": "ZONE"
+           },
+           {
+            "options": {
+             "refId": "contentZone29"
+            },
+            "type": "ZONE"
+           },
+           {
+            "options": {
+             "refId": "contentZone30"
+            },
+            "type": "ZONE"
+           },
+           {
+            "options": {
+             "refId": "contentZone31"
+            },
+            "type": "ZONE"
+           },
+           {
+            "options": {
+             "refId": "contentZone32"
+            },
+            "type": "ZONE"
+           },
+           {
+            "options": {
+             "refId": "contentZone33"
+            },
+            "type": "ZONE"
+           },
+           {
+            "options": {
+             "refId": "contentZone34"
+            },
+            "type": "ZONE"
+           },
+           {
+            "options": {
+             "refId": "contentZone35"
+            },
+            "type": "ZONE"
+           }
+          ],
+          "type": "slot"
+         },
+         "flow": "horizontal",
+         "type": "container"
+        },
+        {
+         "content": [
+          {
+           "content": {
+            "id": "bottomLeftContent",
+            "mapping": [
+             {
+              "options": {
+               "refId": "contentZone36"
+              },
+              "type": "ZONE"
+             },
+             {
+              "options": {
+               "refId": "contentZone37"
+              },
+              "type": "ZONE"
+             },
+             {
+              "options": {
+               "refId": "contentZone38"
+              },
+              "type": "ZONE"
+             },
+             {
+              "options": {
+               "refId": "contentZone39"
+              },
+              "type": "ZONE"
+             },
+             {
+              "options": {
+               "refId": "contentZone40"
+              },
+              "type": "ZONE"
+             }
+            ],
+            "type": "slot"
+           },
+           "flow": "vertical",
+           "style": {
+            "gridColumns": 12,
+            "lgGridColumns": 6,
+            "mdGridColumns": 12,
+            "xlGridColumns": 6,
+            "xxlGridColumns": 6
+           },
+           "type": "container"
+          },
+          {
+           "content": {
+            "id": "bottomRightContent",
+            "mapping": [
+             {
+              "options": {
+               "refId": "contentZone41"
+              },
+              "type": "ZONE"
+             },
+             {
+              "options": {
+               "refId": "contentZone42"
+              },
+              "type": "ZONE"
+             },
+             {
+              "options": {
+               "refId": "contentZone43"
+              },
+              "type": "ZONE"
+             },
+             {
+              "options": {
+               "refId": "contentZone44"
+              },
+              "type": "ZONE"
+             },
+             {
+              "options": {
+               "refId": "contentZone45"
+              },
+              "type": "ZONE"
+             }
+            ],
+            "type": "slot"
+           },
+           "flow": "vertical",
+           "style": {
+            "gridColumns": 12,
+            "lgGridColumns": 6,
+            "mdGridColumns": 12,
+            "xlGridColumns": 6,
+            "xxlGridColumns": 6
+           },
+           "type": "container"
+          }
+         ],
+         "flow": "horizontal",
+         "type": "container"
+        },
+        {
+         "content": {
+          "id": "bottomVerticalContent",
+          "mapping": [
+           {
+            "options": {
+             "refId": "contentZone46"
+            },
+            "type": "ZONE"
+           },
+           {
+            "options": {
+             "refId": "contentZone47"
+            },
+            "type": "ZONE"
+           },
+           {
+            "options": {
+             "refId": "contentZone48"
+            },
+            "type": "ZONE"
+           },
+           {
+            "options": {
+             "refId": "contentZone49"
+            },
+            "type": "ZONE"
+           },
+           {
+            "options": {
+             "refId": "contentZone50"
+            },
+            "type": "ZONE"
+           }
+          ],
+          "type": "slot"
+         },
+         "flow": "horizontal",
+         "type": "container"
+        }
+       ],
+       "flow": "vertical",
+       "type": "container"
+      },
+      "name": "Store Pages Desktop Generic",
+      "status": "ACTIVE",
+      "type": "storePagesDesktopGeneric",
+      "version": "1.0-SNAPSHOT 1787287923902 looper"
+     }
+    },
+    {
+     "id": "base",
+     "layout": {
+      "channel": {
+       "id": "98466136-4b9a-4f16-8b0b-6f0b7395b602",
+       "status": "ACTIVE"
+      },
+      "definition": {
+       "content": [
+        {
+         "content": {
+          "id": "mainContentSlot",
+          "mapping": [
+           {
+            "options": {
+             "refId": "contentZone1"
+            },
+            "type": "ZONE"
+           },
+           {
+            "options": {
+             "refId": "contentZone2"
+            },
+            "type": "ZONE"
+           },
+           {
+            "options": {
+             "refId": "contentZone3"
+            },
+            "type": "ZONE"
+           },
+           {
+            "options": {
+             "refId": "contentZone4"
+            },
+            "type": "ZONE"
+           },
+           {
+            "options": {
+             "refId": "contentZone5"
+            },
+            "type": "ZONE"
+           },
+           {
+            "options": {
+             "refId": "contentZone6"
+            },
+            "type": "ZONE"
+           },
+           {
+            "options": {
+             "refId": "contentZone7"
+            },
+            "type": "ZONE"
+           },
+           {
+            "options": {
+             "refId": "contentZone8"
+            },
+            "type": "ZONE"
+           },
+           {
+            "options": {
+             "refId": "contentZone9"
+            },
+            "type": "ZONE"
+           },
+           {
+            "options": {
+             "refId": "contentZone10"
+            },
+            "type": "ZONE"
+           },
+           {
+            "options": {
+             "refId": "contentZone11"
+            },
+            "type": "ZONE"
+           },
+           {
+            "options": {
+             "refId": "contentZone12"
+            },
+            "type": "ZONE"
+           },
+           {
+            "options": {
+             "refId": "contentZone13"
+            },
+            "type": "ZONE"
+           },
+           {
+            "options": {
+             "refId": "contentZone14"
+            },
+            "type": "ZONE"
+           },
+           {
+            "options": {
+             "refId": "contentZone15"
+            },
+            "type": "ZONE"
+           },
+           {
+            "options": {
+             "refId": "contentZone16"
+            },
+            "type": "ZONE"
+           },
+           {
+            "options": {
+             "refId": "contentZone17"
+            },
+            "type": "ZONE"
+           },
+           {
+            "options": {
+             "refId": "contentZone18"
+            },
+            "type": "ZONE"
+           },
+           {
+            "options": {
+             "refId": "contentZone19"
+            },
+            "type": "ZONE"
+           },
+           {
+            "options": {
+             "refId": "contentZone20"
+            },
+            "type": "ZONE"
+           },
+           {
+            "options": {
+             "refId": "contentZone21"
+            },
+            "type": "ZONE"
+           },
+           {
+            "options": {
+             "refId": "contentZone22"
+            },
+            "type": "ZONE"
+           },
+           {
+            "options": {
+             "refId": "contentZone23"
+            },
+            "type": "ZONE"
+           },
+           {
+            "options": {
+             "refId": "contentZone24"
+            },
+            "type": "ZONE"
+           },
+           {
+            "options": {
+             "refId": "contentZone25"
+            },
+            "type": "ZONE"
+           },
+           {
+            "options": {
+             "refId": "middleLeftBannerZone1"
+            },
+            "type": "ZONE"
+           },
+           {
+            "options": {
+             "refId": "middleCentralBannerZone1"
+            },
+            "type": "ZONE"
+           },
+           {
+            "options": {
+             "refId": "middleRightBannerZone1"
+            },
+            "type": "ZONE"
+           },
+           {
+            "options": {
+             "refId": "contentZone26"
+            },
+            "type": "ZONE"
+           },
+           {
+            "options": {
+             "refId": "contentZone27"
+            },
+            "type": "ZONE"
+           },
+           {
+            "options": {
+             "refId": "contentZone28"
+            },
+            "type": "ZONE"
+           },
+           {
+            "options": {
+             "refId": "contentZone29"
+            },
+            "type": "ZONE"
+           },
+           {
+            "options": {
+             "refId": "contentZone30"
+            },
+            "type": "ZONE"
+           },
+           {
+            "options": {
+             "refId": "contentZone31"
+            },
+            "type": "ZONE"
+           },
+           {
+            "options": {
+             "refId": "contentZone32"
+            },
+            "type": "ZONE"
+           },
+           {
+            "options": {
+             "refId": "contentZone33"
+            },
+            "type": "ZONE"
+           },
+           {
+            "options": {
+             "refId": "contentZone34"
+            },
+            "type": "ZONE"
+           },
+           {
+            "options": {
+             "refId": "contentZone35"
+            },
+            "type": "ZONE"
+           },
+           {
+            "options": {
+             "refId": "contentZone36"
+            },
+            "type": "ZONE"
+           },
+           {
+            "options": {
+             "refId": "contentZone37"
+            },
+            "type": "ZONE"
+           },
+           {
+            "options": {
+             "refId": "contentZone38"
+            },
+            "type": "ZONE"
+           },
+           {
+            "options": {
+             "refId": "contentZone39"
+            },
+            "type": "ZONE"
+           },
+           {
+            "options": {
+             "refId": "contentZone40"
+            },
+            "type": "ZONE"
+           },
+           {
+            "options": {
+             "refId": "contentZone41"
+            },
+            "type": "ZONE"
+           },
+           {
+            "options": {
+             "refId": "contentZone42"
+            },
+            "type": "ZONE"
+           },
+           {
+            "options": {
+             "refId": "contentZone43"
+            },
+            "type": "ZONE"
+           },
+           {
+            "options": {
+             "refId": "contentZone44"
+            },
+            "type": "ZONE"
+           },
+           {
+            "options": {
+             "refId": "contentZone45"
+            },
+            "type": "ZONE"
+           },
+           {
+            "options": {
+             "refId": "contentZone46"
+            },
+            "type": "ZONE"
+           },
+           {
+            "options": {
+             "refId": "contentZone47"
+            },
+            "type": "ZONE"
+           },
+           {
+            "options": {
+             "refId": "contentZone48"
+            },
+            "type": "ZONE"
+           },
+           {
+            "options": {
+             "refId": "contentZone49"
+            },
+            "type": "ZONE"
+           },
+           {
+            "options": {
+             "refId": "contentZone50"
+            },
+            "type": "ZONE"
+           }
+          ],
+          "type": "slot"
+         },
+         "flow": "vertical",
+         "type": "container"
+        }
+       ],
+       "flow": "vertical",
+       "type": "container"
+      },
+      "name": "Base",
+      "status": "ACTIVE",
+      "type": "base",
+      "version": "1.0-SNAPSHOT 1787287923902 looper"
+     }
+    }
+   ]
+  }
+ },
+ "errors": [
+  {
+   "message": "An unknown error has occurred",
+   "path": [
+    "contentLayout",
+    "modules",
+    5,
+    "configs",
+    "nearByNodes"
+   ],
+   "extensions": {
+    "code": "UNEXPECTED_ERROR",
+    "service": "CE-AROUND-ME/prod/0"
+   }
+  },
+  {
+   "message": "Missing required header x-o-segment",
+   "path": [
+    "contentLayout",
+    "modules",
+    6,
+    "configs",
+    "storeDetails"
+   ],
+   "extensions": {
+    "code": "MISSING_REQUIRED_HEADER",
+    "service": "CE-AROUND-ME/prod/0"
+   }
+  }
+ ],
+ "extensions": {
+  "valueCompletion": [
+   {
+    "message": "Null value found for non-nullable type NodeDetail",
+    "path": [
+     "contentLayout",
+     "modules",
+     5,
+     "configs",
+     "nearByNodes"
+    ]
+   },
+   {
+    "message": "Null value found for non-nullable type Boolean",
+    "path": [
+     "contentLayout",
+     "modules",
+     6,
+     "configs",
+     "storeDetails"
+    ]
+   },
+   {
+    "message": "Null value found for non-nullable type NodeDetail",
+    "path": [
+     "contentLayout",
+     "modules",
+     6,
+     "configs",
+     "storeDetails"
+    ]
+   },
+   {
+    "message": "Null value found for non-nullable type TempoModuleConfigs",
+    "path": [
+     "contentLayout",
+     "modules",
+     6,
+     "configs"
+    ]
+   }
+  ]
+ }
+}

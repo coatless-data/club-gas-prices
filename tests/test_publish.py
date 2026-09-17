@@ -35,7 +35,8 @@ def price_row(capture_id, captured_at, station, grade_raw, grade, price):
         "captured_at_utc": captured_at,
         "local_date": (captured_at + timedelta(hours=8)).date(),
         "country": "TW",
-        "station_key": f"TW-{station}",
+        "brand": "COSTCO",
+        "station_key": f"TW-COSTCO-{station}",
         "source_station_id": station,
         "source": "costco-occ",
         "name": station,
@@ -110,8 +111,9 @@ def no_github_env(monkeypatch):
 
 def station_row(station, captured_at, grades, status="active"):
     return {
-        "station_key": f"TW-{station}",
+        "station_key": f"TW-COSTCO-{station}",
         "country": "TW",
+        "brand": "COSTCO",
         "source_station_id": station,
         "alt_id": "560",
         "name": station,
@@ -319,10 +321,10 @@ def test_a_second_capture_the_same_day_keeps_the_first(tmp_path: Path, cfg):
         store.download("current", "club-gas-latest.csv", tmp_path / "l.csv"),
         schema=schema.ROW_SCHEMA,
     )
-    chungli = latest.filter(pl.col("station_key") == "TW-Chungli")
+    chungli = latest.filter(pl.col("station_key") == "TW-COSTCO-Chungli")
     assert chungli["grade_raw"].to_list() == ["95"]
     assert chungli["price"].to_list() == [30.5]
-    xin = latest.filter(pl.col("station_key") == "TW-Xinzhuang")
+    xin = latest.filter(pl.col("station_key") == "TW-COSTCO-Xinzhuang")
     assert xin.height == 2
     assert xin["capture_id"].unique().to_list() == ["2026-09-15T0017Z"]
 
@@ -330,7 +332,7 @@ def test_a_second_capture_the_same_day_keeps_the_first(tmp_path: Path, cfg):
         store.download("current", "club-gas-all.parquet", tmp_path / "all.parquet")
     )
     regular = daily_all.filter(
-        (pl.col("station_key") == "TW-Chungli") & (pl.col("grade_raw") == "95")
+        (pl.col("station_key") == "TW-COSTCO-Chungli") & (pl.col("grade_raw") == "95")
     ).to_dicts()[0]
     assert regular["n_captures"] == 2
     assert regular["price_min"] == 30.0
@@ -1073,7 +1075,7 @@ def test_a_crash_after_all_captures_but_before_fx_is_still_reconciled(tmp_path: 
     )
     # Xinzhuang only appears in the August/September-15 captures' PRICES list,
     # so its presence (and "active" status) confirms A's station data landed.
-    assert "TW-Xinzhuang" in stations["station_key"].to_list()
+    assert "TW-COSTCO-Xinzhuang" in stations["station_key"].to_list()
 
     latest = pl.read_csv(
         inner.download("current", "club-gas-latest.csv", tmp_path / "latest-final.csv"),
@@ -1081,7 +1083,7 @@ def test_a_crash_after_all_captures_but_before_fx_is_still_reconciled(tmp_path: 
     )
     # 09-16 only republishes Chungli/95; Xinzhuang's newest rows must still be
     # the ones A (09-15, the latest capture to touch Xinzhuang) contributed.
-    xin = latest.filter(pl.col("station_key") == "TW-Xinzhuang")
+    xin = latest.filter(pl.col("station_key") == "TW-COSTCO-Xinzhuang")
     assert xin.height == 2
     assert xin["capture_id"].unique().to_list() == ["2026-09-15T0017Z"]
 
@@ -1120,7 +1122,7 @@ def test_current_stations_and_fx_go_out_through_the_schema_writer(tmp_path: Path
     stations = schema.read_csv(
         store.download("current", "stations.csv", tmp_path / "s.csv"), schema.STATION_SCHEMA
     )
-    assert stations["station_key"].to_list() == ["TW-Chungli", "TW-Xinzhuang"]
+    assert stations["station_key"].to_list() == ["TW-COSTCO-Chungli", "TW-COSTCO-Xinzhuang"]
     assert stations["first_seen_utc"].to_list() == [DAY1, DAY1]
 
 
@@ -1248,7 +1250,7 @@ def test_a_station_is_never_dropped_once_recorded(cfg):
 
     assert out.height == 1, "the station was dropped"
     row = out.to_dicts()[0]
-    assert row["station_key"] == "TW-Chungli"
+    assert row["station_key"] == "TW-COSTCO-Chungli"
     assert row["first_seen_utc"] == DAY1
     assert row["grades_seen"] == "95|98"
     assert (row["lat"], row["lon"]) == (24.9573, 121.2196)

@@ -40,6 +40,7 @@ class StubGrades:
         return [
             {
                 "country": country,
+                "brand": "COSTCO",
                 "grade_raw": grade_raw,
                 "grade": grade,
                 "priority": priority,
@@ -88,8 +89,9 @@ def _cfg() -> SimpleNamespace:
 def _daily_row(**overrides) -> dict:
     row = {
         "capture_date": date(2026, 9, 15),
-        "station_key": "US-1364",
+        "station_key": "US-COSTCO-1364",
         "country": "US",
+        "brand": "COSTCO",
         "region": "FL",
         "grade": "regular",
         "grade_raw": "regular",
@@ -110,6 +112,7 @@ def _daily_frame(rows: list[dict]) -> pl.DataFrame:
             "capture_date": pl.Date,
             "station_key": pl.String,
             "country": pl.String,
+            "brand": pl.String,
             "region": pl.String,
             "grade": pl.String,
             "grade_raw": pl.String,
@@ -131,7 +134,7 @@ def test_an_intraday_relabel_keeps_the_later_capture():
     frame = _daily_frame(
         [
             _daily_row(
-                station_key="AU-109",
+                station_key="AU-COSTCO-109",
                 country="AU",
                 region="NSW",
                 grade_raw="E10",
@@ -140,7 +143,7 @@ def test_an_intraday_relabel_keeps_the_later_capture():
                 n_captures=3,
             ),
             _daily_row(
-                station_key="AU-109",
+                station_key="AU-COSTCO-109",
                 country="AU",
                 region="NSW",
                 grade_raw="Unleaded 91",
@@ -161,7 +164,7 @@ def test_a_tie_on_time_is_broken_by_priority():
     frame = _daily_frame(
         [
             _daily_row(
-                station_key="AU-109",
+                station_key="AU-COSTCO-109",
                 country="AU",
                 region="NSW",
                 grade_raw="E10",
@@ -169,7 +172,7 @@ def test_a_tie_on_time_is_broken_by_priority():
                 price_local_per_litre=1.90,
             ),
             _daily_row(
-                station_key="AU-109",
+                station_key="AU-COSTCO-109",
                 country="AU",
                 region="NSW",
                 grade_raw="Unleaded 91",
@@ -198,10 +201,11 @@ def test_the_key_is_unique_per_day_station_and_grade():
 from club_gas.sitedata import build_site_data  # noqa: E402
 
 LATEST_ROWS = [
-    # US-1364: two grades from the same capture.
+    # US-COSTCO-1364: two grades from the same capture.
     {
-        "station_key": "US-1364",
+        "station_key": "US-COSTCO-1364",
         "country": "US",
+        "brand": "COSTCO",
         "name": "Bradenton",
         "name_local": None,
         "city": "BRADENTON",
@@ -223,8 +227,9 @@ LATEST_ROWS = [
         "fx_source": "identity",
     },
     {
-        "station_key": "US-1364",
+        "station_key": "US-COSTCO-1364",
         "country": "US",
+        "brand": "COSTCO",
         "name": "Bradenton",
         "name_local": None,
         "city": "BRADENTON",
@@ -245,10 +250,11 @@ LATEST_ROWS = [
         "fx_rate_date": "2026-09-15",
         "fx_source": "identity",
     },
-    # US-140 sells the "clear" grade, which maps to other and lands under other.
+    # US-COSTCO-140 sells the "clear" grade, which maps to other and lands under other.
     {
-        "station_key": "US-140",
+        "station_key": "US-COSTCO-140",
         "country": "US",
+        "brand": "COSTCO",
         "name": "Seattle",
         "name_local": None,
         "city": "SEATTLE",
@@ -271,7 +277,7 @@ LATEST_ROWS = [
     },
     # JP-Tomiya carries a native-script name and a real exchange rate.
     {
-        "station_key": "JP-Tomiya",
+        "station_key": "JP-COSTCO-Tomiya",
         "country": "JP",
         "name": "Tomiya",
         "name_local": "富谷倉庫店",
@@ -295,8 +301,9 @@ LATEST_ROWS = [
     },
     # No coordinates, so this station must not reach latest.json.
     {
-        "station_key": "GB-Reading",
+        "station_key": "GB-COSTCO-Reading",
         "country": "GB",
+        "brand": "COSTCO",
         "name": "Reading",
         "name_local": None,
         "city": "Reading",
@@ -321,8 +328,9 @@ LATEST_ROWS = [
 
 STATION_ROWS = [
     {
-        "station_key": "US-1364",
+        "station_key": "US-COSTCO-1364",
         "country": "US",
+        "brand": "COSTCO",
         "source_station_id": "1364",
         "alt_id": None,
         "name": "Bradenton",
@@ -341,8 +349,9 @@ STATION_ROWS = [
         "superseded_by": None,
     },
     {
-        "station_key": "US-140",
+        "station_key": "US-COSTCO-140",
         "country": "US",
+        "brand": "COSTCO",
         "source_station_id": "140",
         "alt_id": None,
         "name": "Seattle",
@@ -361,7 +370,7 @@ STATION_ROWS = [
         "superseded_by": None,
     },
     {
-        "station_key": "JP-Tomiya",
+        "station_key": "JP-COSTCO-Tomiya",
         "country": "JP",
         "source_station_id": "Tomiya",
         "alt_id": "676",
@@ -381,8 +390,9 @@ STATION_ROWS = [
         "superseded_by": None,
     },
     {
-        "station_key": "GB-Reading",
+        "station_key": "GB-COSTCO-Reading",
         "country": "GB",
+        "brand": "COSTCO",
         "source_station_id": "Reading",
         "alt_id": "5241",
         "name": "Reading",
@@ -398,7 +408,7 @@ STATION_ROWS = [
         "first_seen_utc": "2026-09-01T18:18:00Z",
         "last_seen_utc": "2026-09-15T18:18:00Z",
         "status": "missing",
-        "superseded_by": "GB-Reading2",
+        "superseded_by": "GB-COSTCO-Reading2",
     },
 ]
 
@@ -418,21 +428,27 @@ MANIFEST = {
 
 DAILY_ROWS = [
     # Four US stations on 2026-09-15: local 1, 2, 3, 4 with one null USD value.
-    _daily_row(station_key="US-1", region="FL", price_local_per_litre=1.0, price_usd_per_litre=1.0),
     _daily_row(
-        station_key="US-2", region="FL", price_local_per_litre=2.0, price_usd_per_litre=None
+        station_key="US-COSTCO-1", region="FL", price_local_per_litre=1.0, price_usd_per_litre=1.0
     ),
-    _daily_row(station_key="US-3", region="WA", price_local_per_litre=3.0, price_usd_per_litre=3.0),
-    _daily_row(station_key="US-4", region="WA", price_local_per_litre=4.0, price_usd_per_litre=4.0),
     _daily_row(
-        station_key="US-1",
+        station_key="US-COSTCO-2", region="FL", price_local_per_litre=2.0, price_usd_per_litre=None
+    ),
+    _daily_row(
+        station_key="US-COSTCO-3", region="WA", price_local_per_litre=3.0, price_usd_per_litre=3.0
+    ),
+    _daily_row(
+        station_key="US-COSTCO-4", region="WA", price_local_per_litre=4.0, price_usd_per_litre=4.0
+    ),
+    _daily_row(
+        station_key="US-COSTCO-1",
         grade="premium",
         grade_raw="premium",
         price_local_per_litre=1.5,
         price_usd_per_litre=1.5,
     ),
     _daily_row(
-        station_key="US-1",
+        station_key="US-COSTCO-1",
         grade="other",
         grade_raw="clear",
         price_local_per_litre=1.6,
@@ -440,7 +456,7 @@ DAILY_ROWS = [
     ),
     # The UK has no regions, so it contributes country rows only.
     _daily_row(
-        station_key="GB-Reading",
+        station_key="GB-COSTCO-Reading",
         country="GB",
         region=None,
         grade_raw="5301",
@@ -450,7 +466,7 @@ DAILY_ROWS = [
     ),
     # The Australian relabel, plus the previous day for the history sort order.
     _daily_row(
-        station_key="AU-109",
+        station_key="AU-COSTCO-109",
         country="AU",
         region="NSW",
         grade_raw="E10",
@@ -461,7 +477,7 @@ DAILY_ROWS = [
         n_captures=3,
     ),
     _daily_row(
-        station_key="AU-109",
+        station_key="AU-COSTCO-109",
         country="AU",
         region="NSW",
         grade_raw="Unleaded 91",
@@ -473,7 +489,7 @@ DAILY_ROWS = [
     ),
     _daily_row(
         capture_date=date(2026, 9, 14),
-        station_key="AU-109",
+        station_key="AU-COSTCO-109",
         country="AU",
         region="NSW",
         grade_raw="E10",
@@ -503,9 +519,13 @@ def test_latest_json_holds_every_displayed_field(current_dir, tmp_path):
         r["station_key"]: r for r in json.loads((out / "latest.json").read_text(encoding="utf-8"))
     }
 
-    assert set(records) == {"US-1364", "US-140", "JP-Tomiya"}  # GB-Reading has no coordinates
+    assert set(records) == {
+        "US-COSTCO-1364",
+        "US-COSTCO-140",
+        "JP-COSTCO-Tomiya",
+    }  # GB-Reading has no coordinates
 
-    bradenton = records["US-1364"]
+    bradenton = records["US-COSTCO-1364"]
     assert bradenton["country"] == "US"
     assert bradenton["name"] == "Bradenton"
     assert bradenton["city"] == "BRADENTON"
@@ -530,10 +550,10 @@ def test_latest_json_holds_every_displayed_field(current_dir, tmp_path):
     }
     assert bradenton["other"] == {}
 
-    assert records["US-140"]["grades"] == {}
-    assert records["US-140"]["other"]["clear"]["price_raw"] == "5.699"
+    assert records["US-COSTCO-140"]["grades"] == {}
+    assert records["US-COSTCO-140"]["other"]["clear"]["price_raw"] == "5.699"
 
-    tokyo = records["JP-Tomiya"]
+    tokyo = records["JP-COSTCO-Tomiya"]
     assert tokyo["name_local"] == "富谷倉庫店"
     assert tokyo["grades"]["regular"]["price_raw"] == "¥149"
     assert tokyo["grades"]["regular"]["fx_usd_per_unit"] == 0.006483402489
@@ -542,7 +562,7 @@ def test_latest_json_holds_every_displayed_field(current_dir, tmp_path):
 def test_latest_json_rejects_a_duplicate_grade(current_dir, tmp_path):
     duplicate = [*LATEST_ROWS, dict(LATEST_ROWS[0], price_raw="4.199", price=4.199)]
     pl.DataFrame(duplicate).write_csv(current_dir / "club-gas-latest.csv")
-    with pytest.raises(ValueError, match="US-1364"):
+    with pytest.raises(ValueError, match="US-COSTCO-1364"):
         build_site_data(current_dir, tmp_path / "data", _cfg(), now=NOW)
 
 
@@ -553,13 +573,19 @@ def test_stations_json_holds_every_search_field(current_dir, tmp_path):
         r["station_key"]: r for r in json.loads((out / "stations.json").read_text(encoding="utf-8"))
     }
 
-    assert set(records) == {"US-1364", "US-140", "JP-Tomiya", "GB-Reading"}
-    reading = records["GB-Reading"]
+    assert set(records) == {
+        "US-COSTCO-1364",
+        "US-COSTCO-140",
+        "JP-COSTCO-Tomiya",
+        "GB-COSTCO-Reading",
+    }
+    reading = records["GB-COSTCO-Reading"]
     # address and postcode are here for the directions link; alt_id and
     # source_station_id for the link to the warehouse's own page.
     assert reading == {
-        "station_key": "GB-Reading",
+        "station_key": "GB-COSTCO-Reading",
         "country": "GB",
+        "brand": "COSTCO",
         "name": "Reading",
         "name_local": None,
         "address": "1 Jenner Way",
@@ -571,7 +597,7 @@ def test_stations_json_holds_every_search_field(current_dir, tmp_path):
         "status": "missing",
         "first_seen_utc": "2026-09-01T18:18:00Z",
         "last_seen_utc": "2026-09-15T18:18:00Z",
-        "superseded_by": "GB-Reading2",
+        "superseded_by": "GB-COSTCO-Reading2",
         "alt_id": 5241,
         "source_station_id": "Reading",
     }
@@ -591,6 +617,7 @@ def test_summary_daily_columns_match_the_dashboard_contract(current_dir, tmp_pat
     assert sitedata.SUMMARY_COLUMNS == [
         "capture_date",
         "country",
+        "brand",
         "level",
         "region",
         "grade",
@@ -622,7 +649,7 @@ def test_summary_daily_levels_and_hand_computed_statistics(current_dir, tmp_path
     row = country.row(0, named=True)
     assert row["region"] is None
     assert row["n_stations"] == 4
-    assert row["n_stations_usd"] == 3  # US-2 has a null USD value
+    assert row["n_stations_usd"] == 3  # US-COSTCO-2 has a null USD value
     # local values 1, 2, 3, 4 with linear interpolation
     assert row["median_local_per_litre"] == 2.5
     assert row["p25_local_per_litre"] == 1.75
@@ -672,6 +699,7 @@ def test_history_columns_and_sort_order(current_dir, tmp_path):
     assert frame.columns == [
         "capture_date",
         "station_key",
+        "brand",
         "grade",
         "price_local_per_litre",
         "price_usd_per_litre",
@@ -683,7 +711,7 @@ def test_history_columns_and_sort_order(current_dir, tmp_path):
     order = ["station_key", "grade", "capture_date"]
     assert frame.equals(frame.sort(order))
 
-    au = frame.filter(pl.col("station_key") == "AU-109")
+    au = frame.filter(pl.col("station_key") == "AU-COSTCO-109")
     assert au["capture_date"].to_list() == [date(2026, 9, 14), date(2026, 9, 15)]
     assert au["n_captures"].to_list() == [4, 1]  # the relabelled evening row wins on the 15th
     assert frame.filter(pl.col("grade") == "other").height == 0
@@ -703,7 +731,7 @@ def test_history_is_written_with_the_dashboard_row_group_size(current_dir, tmp_p
     assert ("history.parquet", ["station_key", "grade", "capture_date"], 20000) in calls
     assert (
         "summary_daily.parquet",
-        ["country", "level", "region", "grade", "capture_date"],
+        ["country", "brand", "level", "region", "grade", "capture_date"],
         None,
     ) in calls
 
@@ -788,7 +816,7 @@ def test_change_flags_compare_consecutive_days_seen(tmp_path):
     frame = pl.DataFrame(
         {
             "capture_date": [date(2026, 9, 1), date(2026, 9, 2), date(2026, 9, 5)],
-            "station_key": ["US-1", "US-1", "US-1"],
+            "station_key": ["US-COSTCO-1", "US-COSTCO-1", "US-COSTCO-1"],
             "grade": ["regular", "regular", "regular"],
             "price_local_per_litre": [1.0, 1.0, 1.25],
             "price_min": [1.0, 1.0, 1.25],
@@ -808,7 +836,7 @@ def test_change_flags_ignore_rounding_dust():
     frame = pl.DataFrame(
         {
             "capture_date": [date(2026, 9, 1), date(2026, 9, 2)],
-            "station_key": ["US-1", "US-1"],
+            "station_key": ["US-COSTCO-1", "US-COSTCO-1"],
             "grade": ["regular", "regular"],
             "price_local_per_litre": [1.0, 1.00001],
             "price_min": [1.0, 1.00001],
