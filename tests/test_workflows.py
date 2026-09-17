@@ -183,7 +183,7 @@ def test_render_never_reads_temporary_asset_names():
 def test_render_stages_no_source_files_and_smoke_tests():
     text = read("render.yml")
     assert "uv run costco-gas site-data --current state/current --out site/data" in text
-    assert "quarto render site/index.qmd" in text
+    assert "quarto render site" in text
     assert "find _site \\( -name '*.qmd' -o -name '*.scss' \\) -print" in text
     assert "uv sync --locked --group smoke" in text
     assert "uv run python tests/smoke/smoke_site.py _site" in text
