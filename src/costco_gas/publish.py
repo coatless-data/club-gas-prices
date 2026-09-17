@@ -25,7 +25,7 @@ import re
 import tarfile
 import tempfile
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import polars as pl
@@ -315,6 +315,31 @@ def _split_grades(value: str | None) -> set[str]:
     return {part for part in (value or "").split("|") if part}
 
 
+def capture_time(capture_id: str) -> datetime | None:
+    """The capture id is its own UTC timestamp, to the minute (spec 6.1)."""
+    try:
+        return datetime.strptime(capture_id, "%Y-%m-%dT%H%MZ").replace(tzinfo=UTC)
+    except ValueError:
+        return None
+
+
+def station_status(last_seen, at: datetime | None, closed_after_days: int | None) -> str:
+    """What to call a station that its country's feed no longer lists.
+
+    A station is never dropped -- once seen it stays in the record forever -- so
+    the only question is what to call it. Absent for one capture is a feed
+    hiccup, a partial failure or a delisting over a refurbishment; absent for
+    weeks is a closure. Calling the first one closed would be wrong far more
+    often than right, so `missing` is the near term and `closed` is the durable
+    statement. Neither is terminal: a station that comes back reads active
+    again, because Costco does reopen them.
+    """
+    if not closed_after_days or at is None or last_seen is None:
+        return "missing"
+    gone = at - (last_seen if last_seen.tzinfo else last_seen.replace(tzinfo=UTC))
+    return "closed" if gone > timedelta(days=closed_after_days) else "missing"
+
+
 def upsert_stations(
     previous: pl.DataFrame,
     incoming: pl.DataFrame,
@@ -322,12 +347,16 @@ def upsert_stations(
     links: pl.DataFrame,
     newest_by_country: dict[str, str],
     capture_id: str,
+    closed_after_days: dict[str, int] | None = None,
 ) -> pl.DataFrame:
     """Spec 6.3 incremental upsert.
 
     A capture older than its country's newest merged capture touches only
     first_seen_utc, last_seen_utc and grades_seen; metadata, alt_id and status
     stay as they are. Capture ids sort chronologically as plain strings.
+
+    Stations are only ever added. One that disappears from its feed keeps its
+    row and its history and is relabelled; see `station_status`.
     """
     metadata = [
         "source_station_id",
@@ -369,13 +398,17 @@ def upsert_stations(
             sorted(_split_grades(current["grades_seen"]) | _split_grades(record["grades_seen"]))
         )
 
+    at = capture_time(capture_id)
+    thresholds = closed_after_days or {}
     for key, record in rows.items():
         if key in incoming_keys:
             continue
         if record["country"] in succeeded and capture_id > (
             newest_by_country.get(record["country"]) or ""
         ):
-            record["status"] = "missing"
+            record["status"] = station_status(
+                record["last_seen_utc"], at, thresholds.get(record["country"])
+            )
 
     link_map: dict[str, str] = {}
     if links.height:
@@ -585,6 +618,7 @@ def _update_current(
         cfg.station_links,
         manifest["newest_capture_by_country"],
         captured.capture_id,
+        {code: c.closed_after_days for code, c in cfg.countries.items()},
     )
     new_fx = upsert_fx(fx, captured.capture_id, captured.fx)
 

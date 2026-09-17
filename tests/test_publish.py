@@ -1224,3 +1224,70 @@ def test_a_late_capture_leaves_station_metadata_and_status_alone(cfg):
     assert fresh["alt_id"] == "111"
     assert fresh["city"] is None
     assert fresh["status"] == "active"
+
+
+def test_a_station_is_never_dropped_once_recorded(cfg):
+    """The whole point: a station that leaves its feed keeps its row, its
+    first_seen, its grades and its coordinates. Only its status changes."""
+    stored = station_row("Chungli", DAY1, {"95", "98"})
+    previous = pl.DataFrame([stored], schema=schema.STATION_SCHEMA)
+    incoming = pl.DataFrame([], schema=schema.STATION_SCHEMA)
+
+    out = upsert_stations(
+        previous,
+        incoming,
+        {"countries": {"TW": {"status": "ok"}}},
+        cfg.station_links,
+        {},
+        "2026-09-20T1200Z",
+        {"TW": 45},
+    )
+
+    assert out.height == 1, "the station was dropped"
+    row = out.to_dicts()[0]
+    assert row["station_key"] == "TW-Chungli"
+    assert row["first_seen_utc"] == DAY1
+    assert row["grades_seen"] == "95|98"
+    assert (row["lat"], row["lon"]) == (24.9573, 121.2196)
+
+
+def test_absent_is_missing_in_the_near_term_and_closed_after_the_threshold(cfg):
+    """One capture without a station is a feed hiccup; six weeks without it is a
+    closure. Calling the first one closed would be wrong far more often than
+    right."""
+    previous = pl.DataFrame([station_row("Chungli", DAY1, {"95"})], schema=schema.STATION_SCHEMA)
+
+    def status_at(capture_id):
+        return upsert_stations(
+            previous,
+            pl.DataFrame([], schema=schema.STATION_SCHEMA),
+            {"countries": {"TW": {"status": "ok"}}},
+            cfg.station_links,
+            {},
+            capture_id,
+            {"TW": 45},
+        ).to_dicts()[0]["status"]
+
+    day = DAY1.date()
+    assert status_at(f"{day:%Y-%m-%d}T2300Z") == "missing"
+    assert status_at("2026-10-10T1200Z") == "missing"
+    assert status_at("2026-12-01T1200Z") == "closed"
+
+
+def test_a_closed_station_that_comes_back_is_active_again(cfg):
+    """Costco reopens stations after a refurbishment, so closed is durable
+    rather than terminal."""
+    stored = station_row("Chungli", DAY1, {"95"}, status="closed")
+    arriving = station_row("Chungli", DAY1, {"95"})
+
+    out = upsert_stations(
+        pl.DataFrame([stored], schema=schema.STATION_SCHEMA),
+        pl.DataFrame([arriving], schema=schema.STATION_SCHEMA),
+        {"countries": {"TW": {"status": "ok"}}},
+        cfg.station_links,
+        {},
+        "2026-12-01T1200Z",
+        {"TW": 45},
+    )
+
+    assert out.to_dicts()[0]["status"] == "active"

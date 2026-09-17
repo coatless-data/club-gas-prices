@@ -21,7 +21,7 @@ from pathlib import Path
 
 import polars as pl
 
-from . import schema
+from . import publish, schema
 from .issues import Issues
 from .store import AssetNotFound, recover_temporaries, recovery_tags, sha256_file
 
@@ -455,9 +455,18 @@ def _apply_links(stations: pl.DataFrame, links: pl.DataFrame) -> pl.DataFrame:
 
 
 def _rebuild_stations(
-    captures: pl.DataFrame, existing: pl.DataFrame, links: pl.DataFrame
+    captures: pl.DataFrame,
+    existing: pl.DataFrame,
+    links: pl.DataFrame,
+    closed_after_days: dict[str, int] | None = None,
 ) -> pl.DataFrame:
-    """§6.3 full rebuild: recompute the three seen columns, keep everything else."""
+    """§6.3 full rebuild: recompute the three seen columns, keep everything else.
+
+    Additive by construction: it starts from every station already recorded and
+    only ever joins in ones it has not seen. A station that has left its feed
+    keeps its row and its history, and is relabelled by the same rule publish
+    applies incrementally.
+    """
     if captures.is_empty():
         return (
             _apply_links(existing, links)
@@ -502,7 +511,27 @@ def _rebuild_stations(
         .select(list(schema.STATION_SCHEMA))
     )
     out = pl.concat([kept, fresh], how="vertical")
+    out = _restate_absent(out, captures, closed_after_days or {})
     return _apply_links(out, links).cast(schema.STATION_SCHEMA).sort("station_key")
+
+
+def _restate_absent(
+    stations: pl.DataFrame, captures: pl.DataFrame, closed_after_days: dict[str, int]
+) -> pl.DataFrame:
+    """Relabel stations the newest capture no longer lists, the same way publish
+    does, so a rebuilt `current` and an incrementally-built one agree."""
+    if stations.is_empty() or captures.is_empty():
+        return stations
+    newest_at = captures["captured_at_utc"].max()
+    listed = set(captures.filter(pl.col("captured_at_utc") == newest_at)["station_key"].to_list())
+    rows = []
+    for record in stations.to_dicts():
+        if record["station_key"] not in listed and record["status"] != "active":
+            record["status"] = publish.station_status(
+                record["last_seen_utc"], newest_at, closed_after_days.get(record["country"])
+            )
+        rows.append(record)
+    return pl.DataFrame(rows, schema=schema.STATION_SCHEMA)
 
 
 def _newest_capture_by_country(statuses: dict[str, dict]) -> dict[str, str]:
@@ -581,7 +610,10 @@ def _rebuild_current_impl(store, cfg, *, now: datetime) -> None:
         # asset. publish.py's `ensure_current` runs first for the same reason.
         store.ensure_release("current", "Current", _current_body(cfg), False, "true")
         stations = _rebuild_stations(
-            captures, _read_current_stations(store, work), cfg.station_links
+            captures,
+            _read_current_stations(store, work),
+            cfg.station_links,
+            {code: c.closed_after_days for code, c in cfg.countries.items()},
         )
         assets: dict[str, dict] = {}
 
