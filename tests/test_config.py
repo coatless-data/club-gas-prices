@@ -191,24 +191,24 @@ def test_timezone_tables(cfg):
 
 def test_grade_table(cfg):
     grades = cfg.grades
-    assert grades.map("US", "regular").grade == "regular"
-    assert grades.map("US", "clear").grade == "other"
-    assert grades.map("GB", "5301").grade == "regular"
-    assert grades.map("GB", "5301").label == "Unleaded Petrol"
-    assert grades.map("GB", "5303").grade == "diesel"
-    assert grades.map("TW", "95").grade == "regular"
-    assert grades.map("JP", "Kerosene").grade == "other"
+    assert grades.map("US", "COSTCO", "regular").grade == "regular"
+    assert grades.map("US", "COSTCO", "clear").grade == "other"
+    assert grades.map("GB", "COSTCO", "5301").grade == "regular"
+    assert grades.map("GB", "COSTCO", "5301").label == "Unleaded Petrol"
+    assert grades.map("GB", "COSTCO", "5303").grade == "diesel"
+    assert grades.map("TW", "COSTCO", "95").grade == "regular"
+    assert grades.map("JP", "COSTCO", "Kerosene").grade == "other"
     # Australia lists E10 in NSW and QLD and Unleaded 91 elsewhere; both are the
     # regular grade, and the higher priority wins if a station lists both.
-    assert grades.map("AU", "Unleaded 91").grade == "regular"
-    assert grades.map("AU", "Unleaded 91").priority == 2
-    assert grades.map("AU", "E10").grade == "regular"
-    assert grades.map("AU", "E10").priority == 1
+    assert grades.map("AU", "COSTCO", "Unleaded 91").grade == "regular"
+    assert grades.map("AU", "COSTCO", "Unleaded 91").priority == 2
+    assert grades.map("AU", "COSTCO", "E10").grade == "regular"
+    assert grades.map("AU", "COSTCO", "E10").priority == 1
     # An unknown label is not an error at load time: normalization maps it to
     # "other" and warns, so a new label never breaks a capture.
-    assert grades.map("AU", "Unleaded 95") is None
-    assert grades.map("XX", "regular") is None
-    mx_regular = grades.map("MX", "Regular")
+    assert grades.map("AU", "COSTCO", "Unleaded 95") is None
+    assert grades.map("XX", "COSTCO", "regular") is None
+    mx_regular = grades.map("MX", "COSTCO", "Regular")
     assert mx_regular.spec_source == "reported"
     assert mx_regular.spec_source_url.startswith("https://")
 
@@ -323,7 +323,7 @@ def test_query_parameters_must_be_strings(config_copy: Path):
 def test_rejects_an_unknown_grade_mapping_target(config_copy: Path):
     path = config_copy / "config" / "grades.csv"
     with path.open("a", encoding="utf-8") as handle:
-        handle.write("US,midgrade,mid-grade,1,Midgrade,,,\n")
+        handle.write("COSTCO,US,midgrade,mid-grade,1,Midgrade,,,\n")
     with pytest.raises(ConfigError) as excinfo:
         load_config(config_copy)
     message = str(excinfo.value)
@@ -334,7 +334,7 @@ def test_rejects_an_unknown_grade_mapping_target(config_copy: Path):
 def test_rejects_a_grade_row_for_an_unknown_country(config_copy: Path):
     path = config_copy / "config" / "grades.csv"
     with path.open("a", encoding="utf-8") as handle:
-        handle.write("KR,Regular,regular,1,Regular,,,\n")
+        handle.write("COSTCO,KR,Regular,regular,1,Regular,,,\n")
     with pytest.raises(ConfigError, match="unknown country 'KR'"):
         load_config(config_copy)
 
@@ -343,9 +343,9 @@ def test_rejects_a_reported_spec_with_no_source_url(config_copy: Path):
     path = config_copy / "config" / "grades.csv"
     text = path.read_text(encoding="utf-8")
     broken = text.replace(
-        "MX,Regular,regular,1,Regular,Octane index ([RON+MON]/2) at least 87,reported,"
+        "COSTCO,MX,Regular,regular,1,Regular,Octane index ([RON+MON]/2) at least 87,reported,"
         "https://api-reportediario.cne.gob.mx/api/EstacionServicio/Petroliferos",
-        "MX,Regular,regular,1,Regular,Octane index ([RON+MON]/2) at least 87,reported,",
+        "COSTCO,MX,Regular,regular,1,Regular,Octane index ([RON+MON]/2) at least 87,reported,",
     )
     assert broken != text
     path.write_text(broken, encoding="utf-8")
@@ -435,7 +435,7 @@ def test_fetch_view_keeps_only_what_a_request_needs(cfg):
     assert fetch.us_extra_ids.height == 3
     # Interpretation config is blanked so that replaying an old capture cannot
     # accidentally reuse the grades or bounds stored with it.
-    assert fetch.grades.map("US", "regular") is None
+    assert fetch.grades.map("US", "COSTCO", "regular") is None
     assert fetch.station_links.height == 0
     assert us.bounds == {}
     assert us.timezones == {}
@@ -458,7 +458,7 @@ def test_interp_view_keeps_only_what_reading_a_response_needs(cfg):
     assert us.bounds["USD/gal"].max == 11.0
     assert us.timezone_for_region("PR") == "America/Puerto_Rico"
     assert us.floor == 585
-    assert interp.grades.map("US", "regular").grade == "regular"
+    assert interp.grades.map("US", "COSTCO", "regular").grade == "regular"
     assert interp.station_links.columns == [
         "old_station_key",
         "new_station_key",

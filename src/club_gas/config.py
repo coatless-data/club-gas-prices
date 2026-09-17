@@ -235,17 +235,23 @@ class GradeEntry:
 
 @dataclass(frozen=True)
 class GradeTable:
-    entries: dict[tuple[str, str], GradeEntry]
+    entries: dict[tuple[str, str, str], GradeEntry]
 
-    def map(self, country: str, grade_raw: str) -> GradeEntry | None:
-        """The mapping is by exact label. An unmapped label returns None."""
-        return self.entries.get((country, grade_raw))
+    def map(self, country: str, brand: str, grade_raw: str) -> GradeEntry | None:
+        """The mapping is by exact label, per chain.
+
+        Two chains in one country publish different vocabularies -- Costco says
+        `regular`, Sam's says `UNLEAD` -- and nothing stops them from one day
+        using the same word for different fuel. The brand is part of the key.
+        """
+        return self.entries.get((country, brand, grade_raw))
 
     def rows(self) -> list[dict[str, object]]:
         """The whole table, for the dashboard's About page."""
         return [
             {
                 "country": country,
+                "brand": brand,
                 "grade_raw": grade_raw,
                 "grade": entry.grade,
                 "priority": entry.priority,
@@ -254,8 +260,22 @@ class GradeTable:
                 "spec_source": entry.spec_source,
                 "spec_source_url": entry.spec_source_url,
             }
-            for (country, grade_raw), entry in self.entries.items()
+            for (country, brand, grade_raw), entry in self.entries.items()
         ]
+
+
+@dataclass(frozen=True)
+class FeedConfig:
+    """One chain in one country, for the feeds countries.toml cannot describe."""
+
+    feed_id: str
+    country: str
+    brand: str
+    url: str
+    floor: int
+    price_url: str | None = None
+    origin_postcode: str | None = None
+    params: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -290,6 +310,9 @@ class Config:
     us_extra_ids: pl.DataFrame
     station_links: pl.DataFrame
     site: SiteConfig
+    # Feeds that countries.toml cannot describe, keyed by feed id. Empty is
+    # normal: every country whose only chain is Costco is declared there.
+    feeds: dict[str, FeedConfig] = field(default_factory=dict)
 
     def fetch_view(self) -> Config:
         """URLs, parameters, HTTP policy and us_extra_ids; nothing else.
@@ -362,6 +385,7 @@ def load_config(root: Path) -> Config:
         us_extra_ids=_read_csv(cfg_dir / "us_extra_ids.csv", US_EXTRA_IDS_SCHEMA),
         station_links=_read_csv(cfg_dir / "station_links.csv", STATION_LINKS_SCHEMA),
         site=_load_site(cfg_dir / "site.toml"),
+        feeds=_load_feeds(cfg_dir / "feeds.toml"),
     )
     _validate(cfg)
     return cfg
@@ -511,6 +535,7 @@ def _text(value: object) -> str:
 
 def _load_grades(path: Path) -> GradeTable:
     columns: dict[str, pl.DataType] = {
+        "brand": pl.String,
         "country": pl.String,
         "grade_raw": pl.String,
         "grade": pl.String,
@@ -521,13 +546,13 @@ def _load_grades(path: Path) -> GradeTable:
         "spec_source_url": pl.String,
     }
     frame = _read_csv(path, columns)
-    entries: dict[tuple[str, str], GradeEntry] = {}
+    entries: dict[tuple[str, str, str], GradeEntry] = {}
     for row in frame.iter_rows(named=True):
-        key = (_text(row["country"]), _text(row["grade_raw"]))
+        key = (_text(row["country"]), _text(row["brand"]), _text(row["grade_raw"]))
         if key in entries:
-            raise ConfigError(f"{path}: duplicate row for {key[0]} {key[1]!r}")
+            raise ConfigError(f"{path}: duplicate row for {key[0]} {key[1]} {key[2]!r}")
         if row["priority"] is None:
-            raise ConfigError(f"{path}: {key[0]} {key[1]!r} has no priority")
+            raise ConfigError(f"{path}: {key[0]} {key[1]} {key[2]!r} has no priority")
         entries[key] = GradeEntry(
             grade=_text(row["grade"]),
             priority=int(row["priority"]),
@@ -537,6 +562,36 @@ def _load_grades(path: Path) -> GradeTable:
             spec_source_url=_text(row["spec_source_url"]),
         )
     return GradeTable(entries=entries)
+
+
+def _load_feeds(path: Path) -> dict[str, FeedConfig]:
+    """Feeds that are not a country's single Costco feed. Absent file is fine."""
+    if not path.exists():
+        return {}
+    table = _read_toml(path).get("feeds") or {}
+    feeds: dict[str, FeedConfig] = {}
+    for fid, spec in table.items():
+        try:
+            feeds[str(fid)] = FeedConfig(
+                feed_id=str(fid),
+                country=str(spec["country"]),
+                brand=str(spec["brand"]),
+                url=str(spec["url"]),
+                floor=int(spec["floor"]),
+                price_url=(str(spec["price_url"]) if spec.get("price_url") else None),
+                origin_postcode=(
+                    str(spec["origin_postcode"]) if spec.get("origin_postcode") else None
+                ),
+                params={str(k): str(v) for k, v in (spec.get("params") or {}).items()},
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ConfigError(f"{path}: feed {fid}: {exc}") from exc
+        if str(fid) != f"{feeds[str(fid)].country}-{feeds[str(fid)].brand}":
+            raise ConfigError(
+                f"{path}: feed {fid} does not match its own country and brand; the id is "
+                "the dispatch key, the bundle directory and the response-key prefix"
+            )
+    return feeds
 
 
 def _load_site(path: Path) -> SiteConfig:
@@ -603,7 +658,7 @@ def _validate(cfg: Config) -> None:
             if region not in country.timezones:
                 raise ConfigError(f"{code}: no timezone for region {region!r}")
 
-    for (country_code, grade_raw), entry in cfg.grades.entries.items():
+    for (country_code, _brand, grade_raw), entry in cfg.grades.entries.items():
         where = f"grades.csv: {country_code} {grade_raw!r}"
         if country_code not in cfg.countries:
             raise ConfigError(f"{where}: unknown country {country_code!r}")

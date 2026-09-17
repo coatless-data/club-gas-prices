@@ -15,6 +15,7 @@ exceptions. This module never uses the builtin `Warning`.
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -139,6 +140,7 @@ class _LazySource:
     module: str
     factory: str
     pass_country: bool = False
+    brand: str = "COSTCO"
     _impl: Source | None = field(default=None, init=False, repr=False, compare=False)
 
     def _resolve(self) -> Source:
@@ -154,18 +156,46 @@ class _LazySource:
         return self._resolve().fetch(client, ctx)
 
     def parse(self, responses: list[RawResponse], ctx: CaptureContext) -> FetchResult:
-        return self._resolve().parse(responses, ctx)
+        result = self._resolve().parse(responses, ctx)
+        # The registry is the authority on brand, so a source cannot disagree
+        # with the key its rows will be built from.
+        result.brand = self.brand
+        return result
 
 
+def feed_id(country: str, brand: str) -> str:
+    """The capture unit. One country can have more than one chain."""
+    return f"{country}-{brand}"
+
+
+# Keyed by feed, not country: the United States has two chains, and each is
+# fetched, parsed, bounded and reported on separately. The key is also the
+# bundle's response directory and the prefix of every response key inside it,
+# so a rebuild can hand each group back to the source that wrote it.
 SOURCES: dict[str, Source] = {
-    "US": _LazySource("US", "club_gas.sources.us", "UsSource"),
-    "CA": _LazySource("CA", "club_gas.sources.ca", "CaSource"),
-    "MX": _LazySource("MX", "club_gas.sources.occ", "OccSource", pass_country=True),
-    "GB": _LazySource("GB", "club_gas.sources.occ", "OccSource", pass_country=True),
-    "AU": _LazySource("AU", "club_gas.sources.occ", "OccSource", pass_country=True),
-    "JP": _LazySource("JP", "club_gas.sources.occ", "OccSource", pass_country=True),
-    "TW": _LazySource("TW", "club_gas.sources.occ", "OccSource", pass_country=True),
+    "US-COSTCO": _LazySource("US", "club_gas.sources.us", "UsSource"),
+    "CA-COSTCO": _LazySource("CA", "club_gas.sources.ca", "CaSource"),
+    "MX-COSTCO": _LazySource("MX", "club_gas.sources.occ", "OccSource", pass_country=True),
+    "GB-COSTCO": _LazySource("GB", "club_gas.sources.occ", "OccSource", pass_country=True),
+    "AU-COSTCO": _LazySource("AU", "club_gas.sources.occ", "OccSource", pass_country=True),
+    "JP-COSTCO": _LazySource("JP", "club_gas.sources.occ", "OccSource", pass_country=True),
+    "TW-COSTCO": _LazySource("TW", "club_gas.sources.occ", "OccSource", pass_country=True),
+    "US-SAMS": _LazySource("US", "club_gas.sources.sams", "SamsSource", brand="SAMS"),
 }
+
+
+def feeds_for(countries: Iterable[str]) -> list[str]:
+    """Every feed belonging to any of these countries, in registry order."""
+    wanted = set(countries)
+    return [fid for fid, source in SOURCES.items() if source.country in wanted]
+
+
+def country_of(fid: str) -> str:
+    return SOURCES[fid].country
+
+
+def brand_of(fid: str) -> str:
+    return SOURCES[fid].brand
 
 
 RESPONSES_DIRNAME = "responses"

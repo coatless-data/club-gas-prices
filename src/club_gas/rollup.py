@@ -532,14 +532,17 @@ def _restate_absent(
     return pl.DataFrame(rows, schema=schema.STATION_SCHEMA)
 
 
-def _newest_capture_by_country(statuses: dict[str, dict]) -> dict[str, str]:
-    """The same rule `publish` applies incrementally (§8.5): per country, the
-    greatest capture_id whose status block for that country was ok or degraded."""
+def _newest_capture_by_feed(statuses: dict[str, dict]) -> dict[str, str]:
+    """The same rule `publish` applies incrementally (§8.5): per FEED, the
+    greatest capture_id whose status block for that feed was ok or degraded.
+
+    Per feed rather than per country, because a capture that ran only one
+    chain must not decide the fate of the other chain's stations."""
     newest: dict[str, str] = {}
     for capture_id, status in statuses.items():
-        for code, block in ((status or {}).get("countries") or {}).items():
-            if block.get("status") in ("ok", "degraded") and capture_id > newest.get(code, ""):
-                newest[code] = capture_id
+        for fid, block in ((status or {}).get("feeds") or {}).items():
+            if block.get("status") in ("ok", "degraded") and capture_id > newest.get(fid, ""):
+                newest[fid] = capture_id
     return newest
 
 
@@ -676,7 +679,7 @@ def _rebuild_current_impl(store, cfg, *, now: datetime) -> None:
             "status": statuses[max(statuses)] if statuses else None,
             "closed_months": sorted(closed_months),
             "closed_years": sorted(m.group(1) for tag in releases if (m := YEAR_TAG.match(tag))),
-            "newest_capture_by_country": _newest_capture_by_country(statuses),
+            "newest_capture_by_feed": _newest_capture_by_feed(statuses),
             "assets": assets,
             "merged_captures": merged_captures,
         }

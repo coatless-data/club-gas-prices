@@ -43,7 +43,7 @@ def test_costco_hosts_get_the_browser_ua_and_x_project(monkeypatch):
         return json_ok(request)
 
     with Client(FAST, transport=httpx.MockTransport(handler)) as client:
-        client.request("US/01-gasprices", PRICE_URL)
+        client.request("US-COSTCO/01-gasprices", PRICE_URL)
         client.request("fx/01-frankfurter", FX_URL)
 
     costco = seen[PRICE_URL]
@@ -91,12 +91,12 @@ def test_from_header_follows_contact_email(monkeypatch):
 
     monkeypatch.setenv("CONTACT_EMAIL", "ops@example.org")
     with Client(FAST, transport=httpx.MockTransport(handler)) as client:
-        client.request("US/01", PRICE_URL)
+        client.request("US-COSTCO/01", PRICE_URL)
     assert seen[-1]["from"] == "ops@example.org"
 
     monkeypatch.setenv("CONTACT_EMAIL", "")
     with Client(FAST, transport=httpx.MockTransport(handler)) as client:
-        client.request("US/01", PRICE_URL)
+        client.request("US-COSTCO/01", PRICE_URL)
     assert "from" not in seen[-1]
 
 
@@ -228,7 +228,7 @@ def test_connection_errors_are_retried_and_then_reported():
         raise httpx.ConnectError("connection reset", request=request)
 
     with Client(FAST, transport=httpx.MockTransport(handler)) as client:
-        result = client.request("US/01", PRICE_URL)
+        result = client.request("US-COSTCO/01", PRICE_URL)
 
     assert len(calls) == 3
     assert result.status is None
@@ -250,8 +250,8 @@ def test_headers_that_arrive_after_30s_need_the_bulk_profile():
 
     url = "https://www.costco.ca/AjaxWarehouseBrowseLookupView?countryCode=US"
     with Client(FAST, transport=httpx.MockTransport(handler)) as client:
-        bulk = client.request("US/00-lookup", url, profile="bulk")
-        default = client.request("US/00-lookup", url)
+        bulk = client.request("US-COSTCO/00-lookup", url, profile="bulk")
+        default = client.request("US-COSTCO/00-lookup", url)
 
     assert bulk.status == 200
     assert default.status is None
@@ -353,12 +353,12 @@ def test_budget_ends_when_its_block_ends():
         with client.budget("fx", 0.0), pytest.raises(BudgetExceeded):
             client.request("fx/01", "https://fx.test/rates")
         # Outside the block the client works normally again.
-        assert client.request("US/01", PRICE_URL).status == 200
+        assert client.request("US-COSTCO/01", PRICE_URL).status == 200
 
 
 def test_json_served_as_text_html_is_not_a_block_signal():
     with Client(FAST, transport=httpx.MockTransport(json_ok)) as client:
-        result = client.request("US/01-gasprices", PRICE_URL)
+        result = client.request("US-COSTCO/01-gasprices", PRICE_URL)
         assert result.status == 200
         assert result.body.startswith(b'{"1090"')
         assert client.signals.get("www.costco.com", 0) == 0
@@ -377,7 +377,7 @@ def test_a_json_array_after_leading_crlf_is_not_a_block_signal():
 
     url = "https://www.costco.ca/AjaxWarehouseBrowseLookupView?countryCode=CA"
     with Client(FAST, transport=httpx.MockTransport(handler)) as client:
-        assert client.request("CA/01-lookup", url).status == 200
+        assert client.request("CA-COSTCO/01-lookup", url).status == 200
         assert client.signals.get("www.costco.ca", 0) == 0
 
 
@@ -393,19 +393,19 @@ def test_two_block_signals_abandon_the_host_for_every_thread():
         )
 
     with Client(FAST, transport=httpx.MockTransport(handler)) as client:
-        first = client.request("US/01", PRICE_URL)
+        first = client.request("US-COSTCO/01", PRICE_URL)
         assert first.status == 403
         assert client.signals["www.costco.com"] == 1
         assert client.abandoned(PRICE_URL) is False
 
-        client.request("US/02", PRICE_URL)
+        client.request("US-COSTCO/02", PRICE_URL)
         assert client.signals["www.costco.com"] == 2
         assert client.abandoned(PRICE_URL) is True
 
         result: dict[str, object] = {}
 
         def from_another_thread() -> None:
-            result["response"] = client.request("US/03", PRICE_URL)
+            result["response"] = client.request("US-COSTCO/03", PRICE_URL)
 
         thread = threading.Thread(target=from_another_thread)
         thread.start()
@@ -427,7 +427,7 @@ def test_a_request_gives_at_most_one_block_signal():
         return httpx.Response(429, content=b'<x>{"cpr_chlge":"true"}</x>')
 
     with Client(FAST, transport=httpx.MockTransport(handler)) as client:
-        client.request("US/01", PRICE_URL)
+        client.request("US-COSTCO/01", PRICE_URL)
         assert client.signals["www.costco.com"] == 1
         assert client.abandoned(PRICE_URL) is False
 
@@ -437,7 +437,7 @@ def test_cpr_chlge_in_a_200_body_is_a_block_signal():
         return httpx.Response(200, content=b'{"cpr_chlge":"true"}')
 
     with Client(FAST, transport=httpx.MockTransport(handler)) as client:
-        client.request("US/01", PRICE_URL)
+        client.request("US-COSTCO/01", PRICE_URL)
         assert client.signals["www.costco.com"] == 1
 
 
@@ -456,8 +456,8 @@ def test_a_403_or_a_429_is_a_block_signal_on_the_status_alone():
         return httpx.Response(status, content=b'{"message":"blocked"}')
 
     with Client(FAST, transport=httpx.MockTransport(handler)) as client:
-        forbidden = client.request("US/01", "https://forbidden.test/x")
-        limited = client.request("US/02", "https://limited.test/x")
+        forbidden = client.request("US-COSTCO/01", "https://forbidden.test/x")
+        limited = client.request("US-COSTCO/02", "https://limited.test/x")
 
         assert forbidden.status == 403
         assert limited.status == 429
@@ -471,7 +471,7 @@ def test_html_is_not_a_signal_when_json_was_not_expected():
         return httpx.Response(200, content=b"<html>a page</html>")
 
     with Client(FAST, transport=httpx.MockTransport(handler)) as client:
-        client.request("US/01", PRICE_URL, expect_json=False)
+        client.request("US-COSTCO/01", PRICE_URL, expect_json=False)
         assert client.signals.get("www.costco.com", 0) == 0
 
 
@@ -512,9 +512,9 @@ def test_raw_response_records_the_key_and_the_interesting_headers():
         )
 
     with Client(FAST, transport=httpx.MockTransport(handler)) as client:
-        result = client.request("US/03-gasprices", PRICE_URL)
+        result = client.request("US-COSTCO/03-gasprices", PRICE_URL)
 
-    assert result.key == "US/03-gasprices"
+    assert result.key == "US-COSTCO/03-gasprices"
     assert result.url == PRICE_URL
     assert result.status == 200
     assert result.error is None
@@ -533,11 +533,11 @@ def test_the_client_logs_one_entry_per_logical_request():
         return httpx.Response(503, content=b"unavailable")
 
     with Client(FAST, transport=httpx.MockTransport(handler)) as client:
-        client.request("US/01", PRICE_URL)
+        client.request("US-COSTCO/01", PRICE_URL)
 
     assert len(client.log) == 1
     entry = client.log[0]
-    assert entry["key"] == "US/01"
+    assert entry["key"] == "US-COSTCO/01"
     assert entry["host"] == "www.costco.com"
     assert entry["attempts"] == 3
     assert entry["status"] == 503
@@ -570,7 +570,7 @@ def test_a_budget_with_no_explicit_length_comes_from_the_config_file():
             pytest.raises(BudgetExceeded, match="country-AU"),
             client.budget("country-AU", key="country"),
         ):
-            client.request("AU/01-stores", PRICE_URL)
+            client.request("AU-COSTCO/01-stores", PRICE_URL)
         # An entry with room left does not abort anything.
         with client.budget("fx"):
             assert client.request("fx/01", FX_URL).status == 200

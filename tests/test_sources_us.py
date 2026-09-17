@@ -281,7 +281,7 @@ def test_batch_url_puts_the_ids_first_and_appends_configured_params():
 
 def test_price_service_processes_only_the_first_ten_ids():
     raw = response(
-        "US/02-gasprices-001",
+        "US-COSTCO/02-gasprices-001",
         "https://www.costco.com/AjaxGetGasPricesService?warehouseid=1_2_3_4_6_8_9_10_11_13_14",
         fixture="us_gasprices_batch_cap.json",
     )
@@ -294,12 +294,12 @@ def test_price_service_processes_only_the_first_ten_ids():
 
 def test_parse_price_batch_rejects_error_message_and_html():
     bad_id = response(
-        "US/02-gasprices-001",
+        "US-COSTCO/02-gasprices-001",
         "u",
         body=b'{"errorMessage":"warehouse id supplied, abc, is not a number"}',
     )
     blocked = response(
-        "US/02-gasprices-001",
+        "US-COSTCO/02-gasprices-001",
         "u",
         body=b"<HTML><HEAD><TITLE>Access Denied</TITLE></HEAD></HTML>",
     )
@@ -308,7 +308,7 @@ def test_parse_price_batch_rejects_error_message_and_html():
 
 
 def test_parse_price_batch_accepts_json_served_as_text_html():
-    raw = response("US/02-gasprices-001", "u", fixture="us_gasprices_batch_ua.json")
+    raw = response("US-COSTCO/02-gasprices-001", "u", fixture="us_gasprices_batch_ua.json")
     assert raw.headers["Content-Type"] == "text/html;charset=UTF-8"
     parsed = us.parse_price_batch(raw)
     assert parsed["1364"] == {"premium": "4.629", "regular": "3.999"}
@@ -416,7 +416,7 @@ def test_polled_id_set_uses_the_cache_when_step_one_fails():
 
 
 def test_parse_lookup_skips_element_zero_and_leading_whitespace():
-    raw = response("US/03-lookup-us", us.DEFAULT_LOOKUP_URL, fixture="us_lookup_us.json")
+    raw = response("US-COSTCO/03-lookup-us", us.DEFAULT_LOOKUP_URL, fixture="us_lookup_us.json")
     assert raw.body.startswith(b"\r\n")
     rows = us.parse_lookup(raw)
     assert set(rows) == {"1", "140", "335", "651", "1364", "1680", "1838"}
@@ -427,7 +427,7 @@ def test_parse_lookup_skips_element_zero_and_leading_whitespace():
 
 def test_lookup_prices_drop_the_two_non_grade_keys():
     rows = us.parse_lookup(
-        response("US/03-lookup-us", us.DEFAULT_LOOKUP_URL, fixture="us_lookup_us.json")
+        response("US-COSTCO/03-lookup-us", us.DEFAULT_LOOKUP_URL, fixture="us_lookup_us.json")
     )
     assert us.lookup_prices(rows["140"]) == {
         "diesel": "6.899",
@@ -446,8 +446,8 @@ def test_lookup_open_date_parsing():
 
 
 def test_parse_lookup_rejects_a_failed_response():
-    assert us.parse_lookup(response("US/03-lookup-us", "u", body=b"", status=403)) is None
-    assert us.parse_lookup(response("US/03-lookup-us", "u", body=b"<html>")) is None
+    assert us.parse_lookup(response("US-COSTCO/03-lookup-us", "u", body=b"", status=403)) is None
+    assert us.parse_lookup(response("US-COSTCO/03-lookup-us", "u", body=b"<html>")) is None
 
 
 # --------------------------------------------------------------------------- happy path
@@ -473,7 +473,7 @@ def happy_ctx() -> CaptureContext:
 def happy_result():
     ctx = happy_ctx()
     batch = response(
-        "US/02-gasprices-001",
+        "US-COSTCO/02-gasprices-001",
         "https://www.costco.com/AjaxGetGasPricesService?warehouseid="
         "1772_335_1680_1765_1793_140_1838_120_1090_1364",
         fixture="us_gasprices_batch_ua.json",
@@ -572,7 +572,7 @@ def test_step_one_failure_uses_cached_metadata():
 
     body = b'{"1":{"premium":"5.899","regular":"5.399"}}'
     batch = response(
-        "US/02-gasprices-001",
+        "US-COSTCO/02-gasprices-001",
         "https://www.costco.com/AjaxGetGasPricesService?warehouseid=1",
         body=body,
     )
@@ -585,7 +585,7 @@ def test_step_one_failure_uses_cached_metadata():
 def test_lookup_only_rows_are_used_when_step_one_failed_with_no_cache():
     ctx = make_ctx(ecom=ecom_failed())
     lookup = response(
-        "US/03-lookup-us", us.DEFAULT_LOOKUP_URL, fixture="us_lookup_us.json", offset=30
+        "US-COSTCO/03-lookup-us", us.DEFAULT_LOOKUP_URL, fixture="us_lookup_us.json", offset=30
     )
     result = us.parse_us([lookup], ctx)
     stations = by_id(result)
@@ -600,14 +600,14 @@ def test_lookup_only_rows_are_used_when_step_one_failed_with_no_cache():
 def test_merge_rule_keeps_step_two_prices_and_fills_only_unpriced_ids():
     ctx = make_ctx(ecom=ecom_ok())
     step_two = response(
-        "US/02-gasprices-001",
+        "US-COSTCO/02-gasprices-001",
         "https://www.costco.com/AjaxGetGasPricesService?warehouseid="
         "1772_335_1680_1765_1793_140_1838_120_1090_1364",
         fixture="us_gasprices_batch_ua.json",
         offset=5,
     )
     lookup = response(
-        "US/03-lookup-us", us.DEFAULT_LOOKUP_URL, fixture="us_lookup_us.json", offset=30
+        "US-COSTCO/03-lookup-us", us.DEFAULT_LOOKUP_URL, fixture="us_lookup_us.json", offset=30
     )
     result = us.parse_us([step_two, lookup], ctx)
     stations = by_id(result)
@@ -640,17 +640,19 @@ def test_fallback_when_more_than_half_the_batches_fail():
     def responder(key, url):
         if "lookup" in key:
             return response(key, url, fixture="us_lookup_us.json", offset=30)
-        if key == "US/02-gasprices-001":
+        if key == "US-COSTCO/02-gasprices-001":
             return response(key, url, body=b"", status=403, error=None)
         return response(key, url, body=TOPUP_BODY, offset=40)
 
     client = FakeClient(responder)
     responses = us.fetch_us(client, ctx)
     keys = [r.key for r in responses]
-    assert keys[0] == "US/02-gasprices-001"
-    assert "US/03-lookup-us" in keys
-    assert next(c[2] for c in client.calls if c[0] == "US/03-lookup-us") == "bulk"
-    assert next(c[1] for c in client.calls if c[0] == "US/03-lookup-us") == us.lookup_url(ctx)
+    assert keys[0] == "US-COSTCO/02-gasprices-001"
+    assert "US-COSTCO/03-lookup-us" in keys
+    assert next(c[2] for c in client.calls if c[0] == "US-COSTCO/03-lookup-us") == "bulk"
+    assert next(c[1] for c in client.calls if c[0] == "US-COSTCO/03-lookup-us") == us.lookup_url(
+        ctx
+    )
 
 
 def test_fallback_when_costco_com_is_abandoned_partway_through_step_two():
@@ -684,14 +686,14 @@ def test_fallback_when_costco_com_is_abandoned_partway_through_step_two():
     client = FakeClient(responder, abandon_after={"www.costco.com": 1})
     responses = us.fetch_us(client, ctx)
     keys = [r.key for r in responses]
-    assert keys == ["US/02-gasprices-001", "US/03-lookup-us"]
+    assert keys == ["US-COSTCO/02-gasprices-001", "US-COSTCO/03-lookup-us"]
 
 
 def test_fallback_when_step_one_failed_and_there_is_no_cache():
     ctx = make_ctx(ecom=ecom_failed())
     client = FakeClient(fallback_responder)
     responses = us.fetch_us(client, ctx)
-    assert [r.key for r in responses] == ["US/02-gasprices-001", "US/03-lookup-us"]
+    assert [r.key for r in responses] == ["US-COSTCO/02-gasprices-001", "US-COSTCO/03-lookup-us"]
 
 
 def test_force_fallback_skips_step_two_and_tops_up_the_rest():
@@ -699,8 +701,8 @@ def test_force_fallback_skips_step_two_and_tops_up_the_rest():
     client = FakeClient(fallback_responder)
     responses = us.fetch_us(client, ctx)
     keys = [r.key for r in responses]
-    assert keys == ["US/03-lookup-us", "US/04-gasprices-fb-001"]
-    topup_url = next(c[1] for c in client.calls if c[0] == "US/04-gasprices-fb-001")
+    assert keys == ["US-COSTCO/03-lookup-us", "US-COSTCO/04-gasprices-fb-001"]
+    topup_url = next(c[1] for c in client.calls if c[0] == "US-COSTCO/04-gasprices-fb-001")
     assert us.ids_in_url(topup_url) == ["1793", "1765", "1772"]
 
     result = us.parse_us(responses, ctx)
@@ -734,7 +736,7 @@ def test_budget_exhaustion_is_recorded_and_triggers_the_fallback():
     ctx = make_ctx(ecom=ecom_ok())
 
     def responder(key, url):
-        if key == "US/02-gasprices-001":
+        if key == "US-COSTCO/02-gasprices-001":
             raise BudgetExceeded("country budget")
         if "lookup" in key:
             return response(key, url, fixture="us_lookup_us.json", offset=30)
@@ -743,8 +745,8 @@ def test_budget_exhaustion_is_recorded_and_triggers_the_fallback():
     responses = us.fetch_us(FakeClient(responder), ctx)
     result = us.parse_us(responses, ctx)
     assert responses[0].error == "deadline_exceeded"
-    assert "US/02-gasprices-001" in warning_details(result, "deadline_exceeded")
-    assert "US/03-lookup-us" in [r.key for r in responses]
+    assert "US-COSTCO/02-gasprices-001" in warning_details(result, "deadline_exceeded")
+    assert "US-COSTCO/03-lookup-us" in [r.key for r in responses]
     assert result.errors == []
 
 
@@ -765,9 +767,9 @@ def test_us_source_is_wired_to_the_module_functions():
 
 
 def test_lazy_registry_resolves_us_without_touching_base():
-    assert SOURCES["US"].country == "US"
+    assert SOURCES["US-COSTCO"].country == "US"
     ctx = make_ctx(ecom=ecom_ok(), force_fallback={"US"})
     client = FakeClient(fallback_responder)
-    result = SOURCES["US"].parse(SOURCES["US"].fetch(client, ctx), ctx)
+    result = SOURCES["US-COSTCO"].parse(SOURCES["US-COSTCO"].fetch(client, ctx), ctx)
     assert result.country == "US"
     assert result.source == "costco-ca-lookup-us"

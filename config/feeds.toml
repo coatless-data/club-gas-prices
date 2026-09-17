@@ -1,0 +1,31 @@
+# Feeds that are not the Costco feed of a country in countries.toml.
+#
+# A feed is the capture unit: one chain in one country. Costco's fetch settings
+# still live under [countries.*] because each of those countries has exactly one
+# chain; anything else is declared here.
+#
+# Interpretation stays in countries.toml either way -- price_unit, bounds,
+# timezones and the close/stale windows are properties of the market, not of the
+# chain that sells into it.
+
+[feeds.US-SAMS]
+country = "US"
+brand = "SAMS"
+
+# The roster: every US club in one request, with coordinates and the grades each
+# sells. Its own `gasPrices` array is NOT read -- measured on 2026-09-17 it ran
+# 31-43% below what a member pays -- so this is the roster only.
+url = "https://www.samsclub.com/api/node/vivaldi/browse/v2/clubfinder/list"
+
+# Current prices, one club per request: the persisted query's $nodeId is typed
+# String!, so the schema itself refuses a batch.
+price_url = "https://www.samsclub.com/orchestra/home/graphql/HyperLocalPagesTempo"
+
+# The roster endpoint geocodes this and sorts by distance from it. The result set
+# is the whole country either way; only the ordering and the `distance` field
+# move, and neither is read.
+origin_postcode = "75001"
+
+# 531 of 601 clubs had fuel on 2026-09-17. Set below that so a short sweep is
+# degraded rather than a silent partial.
+floor = 460

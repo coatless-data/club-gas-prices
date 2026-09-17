@@ -166,9 +166,8 @@ def test_a_station_carries_what_the_dashboard_needs():
     assert station.lon == pytest.approx(-96.843062)
     # The fuel-centre page resolves from the id alone, with no city slug.
     assert station.alt_id == "6376"
-    # timeZone is an abbreviation like "CST", not an IANA zone, so it is left
-    # for downstream resolution rather than written in wrong.
-    assert station.timezone is None
+    # The feed says "CST" plus isDSTObserved; the pair resolves to a real zone.
+    assert station.timezone == "America/Chicago"
 
 
 def test_the_result_is_branded_so_keys_cannot_collide():
@@ -180,3 +179,45 @@ def _ctx():
     from types import SimpleNamespace
 
     return SimpleNamespace(fetch_config=SimpleNamespace(feeds={}), capture_date=None)
+
+
+# --------------------------------------------------------------- timezone
+
+
+@pytest.mark.parametrize(
+    ("abbreviation", "observes_dst", "expected"),
+    [
+        ("EST", True, "America/New_York"),
+        ("CST", True, "America/Chicago"),
+        ("MST", True, "America/Denver"),
+        ("PST", True, "America/Los_Angeles"),
+        ("MST", False, "America/Phoenix"),
+        ("HST", False, "Pacific/Honolulu"),
+    ],
+)
+def test_the_zone_needs_both_the_abbreviation_and_the_dst_flag(
+    abbreviation, observes_dst, expected
+):
+    """These six pairs are every one that occurs across the 531 fuel clubs.
+
+    MST is the case that matters: Denver where DST is observed, Phoenix where it
+    is not. The abbreviation alone cannot tell them apart, and 13 Arizona clubs
+    ride on it.
+    """
+    club = {"timeZone": abbreviation, "clubAttributes": {"isDSTObserved": observes_dst}}
+    assert sams.timezone_of(club) == expected
+
+
+def test_an_unknown_zone_pair_is_none_rather_than_a_guess():
+    """normalize drops a station with no timezone, which is the right outcome:
+    a wrong zone puts a price on the wrong local day."""
+    assert sams.timezone_of({"timeZone": "XYZ", "clubAttributes": {"isDSTObserved": True}}) is None
+    assert sams.timezone_of({"timeZone": None}) is None
+    assert sams.timezone_of({}) is None
+
+
+def test_every_resolved_zone_is_one_python_actually_knows():
+    from zoneinfo import ZoneInfo
+
+    for (abbreviation, dst), zone in sams.IANA_BY_ZONE.items():
+        assert ZoneInfo(zone), (abbreviation, dst, zone)

@@ -68,6 +68,36 @@ GRADE_LABELS = ("UNLEAD", "MIDGRAD", "PREMIUM", "DIESEL", "MID CLR", "PREM CLR")
 # the same record calls it GAS_SAMS.
 FUEL_SERVICE_NAMES = frozenset({"GAS", "GAS_SAMS"})
 
+# `timeZone` is a US abbreviation, not an IANA zone, and the abbreviation alone
+# is ambiguous: MST is Denver where DST is observed and Phoenix where it is not.
+# The pair (timeZone, clubAttributes.isDSTObserved) resolves it. Measured across
+# the 531 fuel clubs on 2026-09-17, exactly these six pairs occur.
+#
+# A state table cannot do this job: Florida, Indiana, Kentucky, Tennessee, South
+# Dakota and Texas each have fuel clubs in two different zones.
+IANA_BY_ZONE = {
+    ("EST", True): "America/New_York",
+    ("CST", True): "America/Chicago",
+    ("MST", True): "America/Denver",
+    ("PST", True): "America/Los_Angeles",
+    ("MST", False): "America/Phoenix",
+    ("HST", False): "Pacific/Honolulu",
+    # Not seen with fuel today; Puerto Rico's clubs sell none. Here so a club
+    # that gains a pump is not dropped for the want of one row.
+    ("AST", False): "America/Puerto_Rico",
+    ("AKST", True): "America/Anchorage",
+}
+
+
+def timezone_of(club: dict) -> str | None:
+    """The IANA zone for a club, or None if the pair is one we have not seen."""
+    abbreviation = club.get("timeZone")
+    if not isinstance(abbreviation, str):
+        return None
+    observes_dst = bool((club.get("clubAttributes") or {}).get("isDSTObserved"))
+    return IANA_BY_ZONE.get((abbreviation.strip().upper(), observes_dst))
+
+
 # `operationalHours` on a club is a near-useless default -- 596 of 601 clubs
 # carry an identical 09:00-20:00 -- so only the fuel centre's own hours count.
 _DAY_BUCKETS = ("monToFriHrs", "saturdayHrs", "sundayHrs")
@@ -169,10 +199,7 @@ def _station(club: dict, prices: tuple[RawPrice, ...]) -> RawStation | None:
         postcode=(address.get("postalCode") or None),
         lat=_as_float(point.get("latitude")),
         lon=_as_float(point.get("longitude")),
-        # `timeZone` is a US abbreviation like "CST", not an IANA zone, so it is
-        # resolved downstream from (timeZone, isDSTObserved). A state table gets
-        # 17 fuel clubs wrong.
-        timezone=None,
+        timezone=timezone_of(club),
         opening_date=None,
         has_hours=_fuel_hours(club),
         prices=prices,
@@ -320,4 +347,5 @@ __all__ = [
     "price_url",
     "roster_url",
     "store_fuel_prices",
+    "timezone_of",
 ]

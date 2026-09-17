@@ -40,7 +40,7 @@ def run_alerts(
     status["close"] = {"outcome": close_outcome}
 
     _publish_issue(status, issues, now, publish_outcome)
-    _country_issues(status, issues, now)
+    _feed_issues(status, issues, now)
     _ecom_api_issue(status, issues)
     _grade_issues(status, issues)
     _close_period_issue(status, issues, close_outcome)
@@ -145,28 +145,33 @@ def _publish_failing_body(status: dict, now: datetime) -> str:
     return "\n".join(lines)
 
 
-def _country_issues(status: dict, issues: Issues, now: datetime) -> None:
-    for country, entry in (status.get("countries") or {}).items():
+def _feed_issues(status: dict, issues: Issues, now: datetime) -> None:
+    """One issue per FEED.
+
+    The issue's identity is its title, so two chains in one country sharing a
+    "Capture failing: US" title would have one closing the other's issue. The
+    title names the feed, and so does the body -- a reader has to know which
+    chain to go and look at.
+    """
+    for fid, entry in (status.get("feeds") or {}).items():
         state = entry.get("status")
         if state == "skipped":
-            # A skipped country carries every field over unchanged, so it must
+            # A skipped feed carries every field over unchanged, so it must
             # not open, refresh or close anything.
             continue
-        title = f"Capture failing: {country}"
+        title = f"Capture failing: {fid}"
         if state == "failed":
             if int(entry.get("consecutive_failures") or 0) >= CAPTURE_FAILURE_THRESHOLD:
                 issues.ensure_open(
-                    title, _capture_failing_body(country, entry, now), ["capture-failure"]
+                    title, _capture_failing_body(fid, entry, now), ["capture-failure"]
                 )
         elif state in ("ok", "degraded"):
-            issues.close(
-                title, f"`{country}` was `{state}` in capture `{status.get('capture_id')}`."
-            )
+            issues.close(title, f"`{fid}` was `{state}` in capture `{status.get('capture_id')}`.")
 
 
-def _capture_failing_body(country: str, entry: dict, now: datetime) -> str:
+def _capture_failing_body(fid: str, entry: dict, now: datetime) -> str:
     lines = [
-        f"`{country}` has failed {entry.get('consecutive_failures', 0)} captures in a row.",
+        f"`{fid}` has failed {entry.get('consecutive_failures', 0)} captures in a row.",
         "",
         f"- Last successful capture: `{entry.get('last_success_capture_id') or 'none recorded'}`",
         f"- Checked at: {now:%Y-%m-%dT%H:%MZ}",
@@ -185,8 +190,7 @@ def _capture_failing_body(country: str, entry: dict, now: datetime) -> str:
         lines.append(f"| `{item.get('capture_id', '?')}` | {run_cell} | {errors} |")
     lines += [
         "",
-        "This issue closes automatically after the next `ok` or `degraded` capture for this "
-        "country.",
+        "This issue closes automatically after the next `ok` or `degraded` capture for this feed.",
     ]
     return "\n".join(lines)
 
@@ -233,7 +237,7 @@ def _ecom_api_issue(status: dict, issues: Issues) -> None:
 
 def _grade_issues(status: dict, issues: Issues) -> None:
     seen: set[tuple[str, str]] = set()
-    for country, entry in (status.get("countries") or {}).items():
+    for country, entry in (status.get("feeds") or {}).items():
         if entry.get("status") == "skipped":
             continue
         for warning in entry.get("warnings") or []:

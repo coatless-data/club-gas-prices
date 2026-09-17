@@ -26,8 +26,9 @@ from .base import (
 
 LOOKUP_SOURCE = "costco-ca-lookup"
 PRICE_SOURCE = "costco-ca-gasprices"
-LOOKUP_KEY = "CA/01-lookup"
-PRICE_KEY_PREFIX = "CA/02-gasprices-"
+FEED = "CA-COSTCO"
+LOOKUP_KEY = f"{FEED}/01-lookup"
+PRICE_KEY_PREFIX = f"{FEED}/02-gasprices-"
 
 # config/countries.toml supplies these three as fields of CountryConfig
 # (fallback_url, batch_size, seen_within_days). The constants below are the same
@@ -263,7 +264,7 @@ class CaSource:
             captured_at_utc=captured,
             stations=stations,
             responses=list(responses),
-            requests=len([r for r in responses if r.key.startswith("CA/")]),
+            requests=len([r for r in responses if r.key.startswith(f"{FEED}/")]),
             warnings=warnings,
             errors=errors,
         )
@@ -347,7 +348,7 @@ class CaSource:
             captured_at_utc=captured or _capture_time(ctx),
             stations=stations,
             responses=list(responses),
-            requests=len([r for r in responses if r.key.startswith("CA/")]),
+            requests=len([r for r in responses if r.key.startswith(f"{FEED}/")]),
             warnings=warnings,
             errors=errors,
         )

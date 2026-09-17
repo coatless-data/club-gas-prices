@@ -35,7 +35,7 @@ CURRENT_MANIFEST_KEYS = {
     "status",
     "closed_months",
     "closed_years",
-    "newest_capture_by_country",
+    "newest_capture_by_feed",
     "assets",
 }
 
@@ -119,7 +119,7 @@ def _status(capture_id: str) -> dict:
     return {
         "schema_version": 1,
         "capture_id": capture_id,
-        "countries": {"US": {"status": "ok", "rows": 2}},
+        "feeds": {"US-COSTCO": {"status": "ok", "rows": 2}},
     }
 
 
@@ -432,13 +432,13 @@ def test_full_rebuild_reads_closed_month_files_and_closed_month_manifest_fx(tmp_
     )
     assert manifest["status"]["capture_id"] == "2026-09-15T1817Z"
     assert manifest["closed_months"] == ["2026-08"]
-    assert manifest["newest_capture_by_country"] == {"US": "2026-09-15T1817Z"}
+    assert manifest["newest_capture_by_feed"] == {"US-COSTCO": "2026-09-15T1817Z"}
     assert set(manifest["assets"]) == CURRENT_DATA_ASSET_NAMES
 
 
 def test_full_rebuild_manifest_equals_the_incremental_one(tmp_path):
     """The rebuilt current/manifest.json is the same document publish writes: the
-    same keys, and newest_capture_by_country recomputed rather than carried over."""
+    same keys, and newest_capture_by_feed recomputed rather than carried over."""
     store = open_store(f"local:{tmp_path / 'releases'}")
     cfg = stub_config(tmp_path)
     store.ensure_release("current", "Current", "", False, "true")
@@ -450,13 +450,13 @@ def test_full_rebuild_manifest_equals_the_incremental_one(tmp_path):
                 "status": {
                     "schema_version": 1,
                     "capture_id": "2026-07-01T1817Z",
-                    "countries": {"JP": {"status": "ok"}},
+                    "feeds": {"JP-COSTCO": {"status": "ok"}},
                 },
                 "closed_months": [],
                 "closed_years": [],
-                "newest_capture_by_country": {
-                    "US": "2026-07-01T1817Z",
-                    "JP": "2026-07-01T1817Z",
+                "newest_capture_by_feed": {
+                    "US-COSTCO": "2026-07-01T1817Z",
+                    "JP-COSTCO": "2026-07-01T1817Z",
                 },
                 "assets": {},
             },
@@ -474,7 +474,7 @@ def test_full_rebuild_manifest_equals_the_incremental_one(tmp_path):
         store.download("current", "manifest.json", tmp_path / "out.json").read_text()
     )
     assert set(manifest) >= CURRENT_MANIFEST_KEYS
-    assert manifest["newest_capture_by_country"] == {"US": "2026-08-31T1817Z"}
+    assert manifest["newest_capture_by_feed"] == {"US-COSTCO": "2026-08-31T1817Z"}
     assert manifest["status"]["capture_id"] == "2026-08-31T1817Z"
     assert manifest["closed_months"] == []
     assert manifest["closed_years"] == []
@@ -556,7 +556,7 @@ def test_full_rebuild_recomputes_merged_captures_to_match_the_rebuilt_captures_f
                 "status": None,
                 "closed_months": [],
                 "closed_years": [],
-                "newest_capture_by_country": {},
+                "newest_capture_by_feed": {},
                 "assets": {},
                 # Neither id is a real capture in this test's data: one predates
                 # everything seeded below, the other never existed at all. Both

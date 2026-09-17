@@ -48,7 +48,7 @@ def test_raw_station_holds_the_spec_fields_and_is_frozen():
 
 def test_raw_response_keeps_the_body_as_bytes():
     response = RawResponse(
-        key="US/03-gasprices",
+        key="US-COSTCO/03-gasprices",
         url="https://www.costco.com/AjaxGetGasPricesService?warehouseid=1364",
         status=200,
         headers={"Content-Type": "text/html;charset=UTF-8"},
@@ -105,14 +105,28 @@ def test_capture_context_defaults_are_empty_not_shared():
     assert isinstance(first.previous_stations, pl.DataFrame)
 
 
-def test_sources_registry_covers_the_seven_countries():
-    from club_gas.sources.base import SOURCES
+def test_sources_registry_is_keyed_by_feed_not_country():
+    """The United States has two chains, so the country cannot be the key."""
+    from club_gas.sources.base import SOURCES, brand_of, country_of, feeds_for
 
-    assert set(SOURCES) == {"US", "CA", "MX", "GB", "AU", "JP", "TW"}
-    for code, source in SOURCES.items():
-        assert source.country == code
+    assert set(SOURCES) == {
+        "US-COSTCO",
+        "CA-COSTCO",
+        "MX-COSTCO",
+        "GB-COSTCO",
+        "AU-COSTCO",
+        "JP-COSTCO",
+        "TW-COSTCO",
+        "US-SAMS",
+    }
+    for fid, source in SOURCES.items():
+        assert fid == f"{source.country}-{source.brand}"
         assert callable(source.fetch)
         assert callable(source.parse)
+
+    assert feeds_for(["US"]) == ["US-COSTCO", "US-SAMS"]
+    assert feeds_for(["JP"]) == ["JP-COSTCO"]
+    assert (country_of("US-SAMS"), brand_of("US-SAMS")) == ("US", "SAMS")
 
 
 def test_lazy_source_imports_its_module_only_when_called(monkeypatch):
@@ -133,7 +147,13 @@ def test_lazy_source_imports_its_module_only_when_called(monkeypatch):
 
         def parse(self, responses, ctx):
             calls.append("parse")
-            return "parsed"
+            # A real FetchResult, because _LazySource stamps the registry's
+            # brand onto whatever comes back.
+            return FetchResult(
+                country=self.country,
+                source="fake",
+                captured_at_utc=datetime(2026, 9, 15, 19, 10, tzinfo=UTC),
+            )
 
     module = types.ModuleType("club_gas_fake_source")
     module.FakeSource = FakeSource
@@ -143,7 +163,10 @@ def test_lazy_source_imports_its_module_only_when_called(monkeypatch):
     assert source.country == "ZZ"
     assert calls == []
     assert source.fetch(None, None) == ["fetched"]
-    assert source.parse([], None) == "parsed"
+    parsed = source.parse([], None)
+    # The registry stamps its own brand, so a source cannot disagree with the
+    # key its rows will be built from.
+    assert (parsed.country, parsed.brand) == ("ZZ", "COSTCO")
     assert calls == ["fetch", "parse"]
 
 
@@ -157,7 +180,7 @@ def test_bundle_responses_round_trip(tmp_path):
     shared_body = gzip.compress(b'{"warehouses":[{"warehouseId":"1364"}]}')
 
     prices = RawResponse(
-        key="US/03-gasprices",
+        key="US-COSTCO/03-gasprices",
         url=(
             "https://www.costco.com/AjaxGetGasPricesService"
             "?warehouseid=1772_335_1680_1765_1793_140_1838_120_1090_1364"
@@ -189,21 +212,21 @@ def test_bundle_responses_round_trip(tmp_path):
     written = write_responses([prices, shared], tmp_path)
     assert len(written) == 4
 
-    body_path, meta_path = response_paths(tmp_path, "US/03-gasprices")
-    assert body_path == tmp_path / "responses" / "US" / "03-gasprices.body"
-    assert meta_path == tmp_path / "responses" / "US" / "03-gasprices.meta.json"
+    body_path, meta_path = response_paths(tmp_path, "US-COSTCO/03-gasprices")
+    assert body_path == tmp_path / "responses" / "US-COSTCO" / "03-gasprices.body"
+    assert meta_path == tmp_path / "responses" / "US-COSTCO" / "03-gasprices.meta.json"
     assert body_path.read_bytes() == body
 
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
-    assert meta["key"] == "US/03-gasprices"
+    assert meta["key"] == "US-COSTCO/03-gasprices"
     assert meta["status"] == 200
     assert meta["elapsed_ms"] == 560
     assert meta["error"] is None
     assert "body" not in meta
 
     back = {response.key: response for response in read_responses(tmp_path)}
-    assert set(back) == {"US/03-gasprices", "shared/ecom-api"}
-    assert back["US/03-gasprices"] == prices
+    assert set(back) == {"US-COSTCO/03-gasprices", "shared/ecom-api"}
+    assert back["US-COSTCO/03-gasprices"] == prices
     assert back["shared/ecom-api"] == shared
     assert back["shared/ecom-api"].status is None
     assert back["shared/ecom-api"].error == "ReadTimeout"
@@ -217,13 +240,17 @@ def test_read_responses_is_sorted_and_empty_without_a_responses_dir(tmp_path):
     received = datetime(2026, 9, 15, 19, 11, 0, tzinfo=UTC)
     write_responses(
         [
-            RawResponse("US/02", "https://example.test/2", 200, {}, received, 1, b"2"),
-            RawResponse("US/01", "https://example.test/1", 200, {}, received, 1, b"1"),
-            RawResponse("CA/01", "https://example.test/3", 200, {}, received, 1, b"3"),
+            RawResponse("US-COSTCO/02", "https://example.test/2", 200, {}, received, 1, b"2"),
+            RawResponse("US-COSTCO/01", "https://example.test/1", 200, {}, received, 1, b"1"),
+            RawResponse("CA-COSTCO/01", "https://example.test/3", 200, {}, received, 1, b"3"),
         ],
         tmp_path,
     )
-    assert [r.key for r in read_responses(tmp_path)] == ["CA/01", "US/01", "US/02"]
+    assert [r.key for r in read_responses(tmp_path)] == [
+        "CA-COSTCO/01",
+        "US-COSTCO/01",
+        "US-COSTCO/02",
+    ]
 
 
 @pytest.mark.parametrize(
@@ -243,7 +270,7 @@ def test_read_responses_requires_the_body_file(tmp_path):
     write_responses(
         [
             RawResponse(
-                key="CA/01-lookup",
+                key="CA-COSTCO/01-lookup",
                 url="https://www.costco.ca/AjaxWarehouseBrowseLookupView?countryCode=CA",
                 status=200,
                 headers={},
@@ -254,6 +281,6 @@ def test_read_responses_requires_the_body_file(tmp_path):
         ],
         tmp_path,
     )
-    (tmp_path / "responses" / "CA" / "01-lookup.body").unlink()
+    (tmp_path / "responses" / "CA-COSTCO" / "01-lookup.body").unlink()
     with pytest.raises(FileNotFoundError, match="missing response body"):
         read_responses(tmp_path)

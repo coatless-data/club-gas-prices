@@ -173,7 +173,7 @@ def test_lookup_fields_and_grade_keys():
 
     assert result.country == "CA"
     assert result.source == "costco-ca-lookup"
-    assert [r.key for r in responses] == ["CA/01-lookup"]
+    assert [r.key for r in responses] == ["CA-COSTCO/01-lookup"]
     assert result.requests == 1
     assert result.errors == []
 
@@ -213,7 +213,7 @@ def test_not_open_no_hours_and_priced_before_open():
     # #1790 is priced at 1.549 CAD/L before it opens, inside bounds["CAD/L"];
     # #1813 has no price at all.
     # The source does NOT emit priced_before_open: normalize() owns that rule and
-    # applies it to the same stations, and checks.evaluate_country concatenates
+    # applies it to the same stations, and checks.evaluate_feed concatenates
     # both lists, so emitting here counted every affected station twice.
     assert ("priced_before_open", "1790") not in codes(result.warnings)
     assert ("priced_before_open", "1813") not in codes(result.warnings)
@@ -270,7 +270,7 @@ def test_a_failed_lookup_falls_back_to_the_price_service():
 
     result, responses = run(handler, previous=previous)
 
-    assert [r.key for r in responses] == ["CA/01-lookup", "CA/02-gasprices-01"]
+    assert [r.key for r in responses] == ["CA-COSTCO/01-lookup", "CA-COSTCO/02-gasprices-01"]
     assert str(seen[1].url) == "https://www.costco.ca/AjaxGetGasPricesService?warehouseid=530_1213"
     assert result.source == "costco-ca-gasprices"
     assert codes(result.warnings)[:2] == [
@@ -312,7 +312,7 @@ def test_an_unparseable_body_triggers_the_fallback():
 
     result, responses = run(handler, previous=previous)
 
-    assert [r.key for r in responses] == ["CA/01-lookup", "CA/02-gasprices-01"]
+    assert [r.key for r in responses] == ["CA-COSTCO/01-lookup", "CA-COSTCO/02-gasprices-01"]
     assert result.source == "costco-ca-gasprices"
     assert ("fallback_used", "unparseable_body") in codes(result.warnings)
 
@@ -337,7 +337,7 @@ def test_a_lookup_with_no_usable_station_triggers_the_fallback():
 
     result, responses = run(handler, previous=previous)
 
-    assert [r.key for r in responses] == ["CA/01-lookup", "CA/02-gasprices-01"]
+    assert [r.key for r in responses] == ["CA-COSTCO/01-lookup", "CA-COSTCO/02-gasprices-01"]
     assert ("fallback_used", "zero_stations") in codes(result.warnings)
 
 
@@ -354,7 +354,7 @@ def test_force_fallback_skips_the_lookup_entirely():
     assert [str(r.url) for r in seen] == [
         "https://www.costco.ca/AjaxGetGasPricesService?warehouseid=1213"
     ]
-    assert [r.key for r in responses] == ["CA/02-gasprices-01"]
+    assert [r.key for r in responses] == ["CA-COSTCO/02-gasprices-01"]
     assert result.source == "costco-ca-gasprices"
     assert ("fallback_used", "forced") in codes(result.warnings)
 
@@ -380,7 +380,7 @@ def test_stale_cached_stations_are_not_polled():
 def test_priced_before_open_is_emitted_exactly_once_end_to_end():
     """The rule lives in one place, and the status block proves it.
 
-    `ca.py` used to apply it too, and `checks.evaluate_country` concatenates the
+    `ca.py` used to apply it too, and `checks.evaluate_feed` concatenates the
     source's warnings with normalize's -- so every affected station appeared
     twice in status.json and in the alert body. This runs the real chain rather
     than either half, because that double-count was invisible to both halves'
@@ -388,7 +388,7 @@ def test_priced_before_open_is_emitted_exactly_once_end_to_end():
     """
     from collections import Counter
 
-    from club_gas.checks import evaluate_country
+    from club_gas.checks import evaluate_feed
     from club_gas.fx import FxRates
     from club_gas.normalize import normalize
 
@@ -399,7 +399,7 @@ def test_priced_before_open_is_emitted_exactly_once_end_to_end():
     responses = source.fetch(client, ctx)
     result = source.parse(responses, ctx)
     out = normalize(result, FxRates(status="failed", rows=[]), ctx)
-    block = evaluate_country("CA", result, out, ctx, datetime(2026, 9, 15, 19, 10, tzinfo=UTC))
+    block = evaluate_feed("CA", result, out, ctx, datetime(2026, 9, 15, 19, 10, tzinfo=UTC))
 
     seen = Counter((w["code"], w.get("detail")) for w in block.get("warnings", []))
     repeated = {k: n for k, n in seen.items() if n > 1}

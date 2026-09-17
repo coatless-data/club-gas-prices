@@ -343,13 +343,13 @@ def upsert_stations(
     incoming: pl.DataFrame,
     status: dict,
     links: pl.DataFrame,
-    newest_by_country: dict[str, str],
+    newest_by_feed: dict[str, str],
     capture_id: str,
     closed_after_days: dict[str, int] | None = None,
 ) -> pl.DataFrame:
     """Spec 6.3 incremental upsert.
 
-    A capture older than its country's newest merged capture touches only
+    A capture older than its feed's newest merged capture touches only
     first_seen_utc, last_seen_utc and grades_seen; metadata, alt_id and status
     stay as they are. Capture ids sort chronologically as plain strings.
 
@@ -370,16 +370,23 @@ def upsert_stations(
         "timezone",
     ]
     rows: dict[str, dict] = {r["station_key"]: dict(r) for r in previous.to_dicts()}
+    # Per feed. A station is only ever relabelled by a capture that actually
+    # looked at its chain: a Sam's capture lists no Costco stations, and judging
+    # those against "the US succeeded" would mark every one of them missing.
     succeeded = {
-        code
-        for code, block in (status.get("countries") or {}).items()
+        fid
+        for fid, block in (status.get("feeds") or {}).items()
         if block.get("status") in ("ok", "degraded")
     }
     incoming_keys = set(incoming["station_key"].to_list())
 
     for record in incoming.to_dicts():
         key = record["station_key"]
-        newest = capture_id > (newest_by_country.get(record["country"]) or "")
+        # Per FEED, not per country. A Sam's capture lists no Costco stations,
+        # so judging it against "the newest US capture" would let it decide the
+        # fate of a chain it never looked at.
+        fid = f"{record['country']}-{record['brand']}"
+        newest = capture_id > (newest_by_feed.get(fid) or "")
         current = rows.get(key)
         if current is None:
             rows[key] = dict(record)
@@ -401,9 +408,8 @@ def upsert_stations(
     for key, record in rows.items():
         if key in incoming_keys:
             continue
-        if record["country"] in succeeded and capture_id > (
-            newest_by_country.get(record["country"]) or ""
-        ):
+        fid = f"{record['country']}-{record['brand']}"
+        if fid in succeeded and capture_id > (newest_by_feed.get(fid) or ""):
             record["status"] = station_status(
                 record["last_seen_utc"], at, thresholds.get(record["country"])
             )
@@ -565,13 +571,13 @@ def _update_current(
         "status": None,
         "closed_months": [],
         "closed_years": [],
-        "newest_capture_by_country": {},
+        "newest_capture_by_feed": {},
         "assets": {},
         "merged_captures": [],
     }
     if not first:
         manifest.update(json.loads(local["manifest.json"].read_text(encoding="utf-8")))
-        manifest.setdefault("newest_capture_by_country", {})
+        manifest.setdefault("newest_capture_by_feed", {})
         manifest.setdefault("assets", {})
         manifest.setdefault("merged_captures", [])
 
@@ -616,7 +622,7 @@ def _update_current(
         captured.stations,
         captured.status,
         cfg.station_links,
-        manifest["newest_capture_by_country"],
+        manifest["newest_capture_by_feed"],
         captured.capture_id,
         {code: c.closed_after_days for code, c in cfg.countries.items()},
     )
@@ -699,13 +705,13 @@ def _update_current(
     stored = (manifest.get("status") or {}).get("capture_id") or ""
     if captured.capture_id > stored:
         manifest["status"] = captured.status
-    # newest_capture_by_country drives the spec 6.3 late-capture rule, so it is
+    # newest_capture_by_feed drives the spec 6.3 late-capture rule, so it is
     # part of current/manifest.json and the full rebuild recomputes it too.
-    for code, block in (captured.status.get("countries") or {}).items():
+    for fid, block in (captured.status.get("feeds") or {}).items():
         if block.get("status") in ("ok", "degraded") and captured.capture_id > (
-            manifest["newest_capture_by_country"].get(code) or ""
+            manifest["newest_capture_by_feed"].get(fid) or ""
         ):
-            manifest["newest_capture_by_country"][code] = captured.capture_id
+            manifest["newest_capture_by_feed"][fid] = captured.capture_id
     manifest["merged_captures"] = sorted(
         {*manifest.get("merged_captures", []), captured.capture_id}
     )

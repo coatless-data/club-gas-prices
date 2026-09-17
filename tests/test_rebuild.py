@@ -296,7 +296,7 @@ def test_rebuild_of_an_open_month_then_refreshes_current(tmp_path, monkeypatch):
     manifest = json.loads(
         store.download("current", "manifest.json", tmp_path / "m.json").read_text()
     )
-    assert manifest["newest_capture_by_country"] == {"AU": "2026-09-02T1817Z"}
+    assert manifest["newest_capture_by_feed"] == {"AU-COSTCO": "2026-09-02T1817Z"}
 
 
 def test_rebuild_interrupted_mid_month_lets_close_periods_close_cleanly_after_resume(
@@ -432,7 +432,7 @@ def test_rebuild_reads_a_bundle_written_by_the_real_capture_path(
     )
 
     assert result.capture_id == CAPTURE_ID
-    assert result.status["countries"]["AU"]["rows"] == 3
+    assert result.status["feeds"]["AU-COSTCO"]["rows"] == 3
     unavailable = "previous_state_unavailable" in {w["code"] for w in result.status["warnings"]}
     assert unavailable is not with_previous_state
     stored = result.out.parent / "bundle" / "inputs" / "stations_used.csv"
@@ -514,11 +514,11 @@ def test_a_response_group_no_source_claims_refuses_the_rebuild(tmp_path, monkeyp
         work=tmp_path / "seed",
     )
 
-    # The bundle holds AU responses; this is what renaming that dispatch key
-    # would look like to a rebuild written against the new names.
+    # The bundle holds AU-COSTCO responses; a SOURCES that knows only some other
+    # feed is what renaming a dispatch key looks like to a later rebuild.
     import club_gas.rebuild as rebuild_module
 
-    monkeypatch.setattr(rebuild_module, "SOURCES", {"AU-COSTCO": object()})
+    monkeypatch.setattr(rebuild_module, "SOURCES", {"AU-SAMS": object()})
 
     with pytest.raises(RuntimeError, match="which no source claims"):
         rebuild(store, cfg, scope="month", value="2026-09", now=NOW)

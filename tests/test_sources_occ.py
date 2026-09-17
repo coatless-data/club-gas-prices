@@ -266,7 +266,7 @@ def test_pagination_follows_current_page_until_the_last_one():
     assert "currentPage=1" in str(seen[1].url)
     assert sorted(s.source_station_id for s in result.stations) == ["103", "109", "116", "118"]
     assert result.requests == 2
-    assert [r.key for r in result.responses] == ["AU/01-stores", "AU/02-stores"]
+    assert [r.key for r in result.responses] == ["AU-COSTCO/01-stores", "AU-COSTCO/02-stores"]
     assert result.warnings == []
 
 
