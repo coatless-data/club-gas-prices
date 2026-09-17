@@ -121,6 +121,19 @@ STATION_JSON_FIELDS = (
 )
 CORE_GRADES = ("regular", "premium", "diesel")
 
+# `build_site_data` writes the left-hand names into a directory; `publish` uploads
+# them to the `current` release under the right-hand names. The dashboard lives in
+# its own repository, downloads them with the pattern `site-*`, and renames them
+# back. Keep the prefix: it is what makes one download pattern enough, and what
+# keeps `stations.json` from reading like a sibling of `stations.csv`.
+SITE_ASSETS = {
+    "meta.json": "site-meta.json",
+    "latest.json": "site-latest.json",
+    "stations.json": "site-stations.json",
+    "summary_daily.parquet": "site-summary-daily.parquet",
+    "history.parquet": "site-history.parquet",
+}
+
 
 def build_site_data(current_dir: Path, out_dir: Path, cfg, *, now: datetime) -> None:
     current_dir = Path(current_dir)
@@ -323,7 +336,7 @@ def history(deduped: pl.DataFrame) -> pl.DataFrame:
     return with_change_flags(deduped).select(HISTORY_COLUMNS)
 
 
-DEFAULT_RELEASE_BASE_URL = "https://github.com/coatless-dashboard/costco-gas-prices/releases"
+DEFAULT_RELEASE_BASE_URL = "https://github.com/coatless-datasets/costco-gas-prices/releases"
 DEFAULT_NOTICE = (
     "Unofficial. Not affiliated with, endorsed by, or connected to Costco Wholesale "
     "Corporation. Prices are collected from Costco's public websites and may differ "
@@ -358,12 +371,16 @@ GRADE_TABLE_FIELDS = (
 def _meta(current_dir: Path, cfg, *, now: datetime) -> dict:
     manifest = _read_json(current_dir / "manifest.json")
     status = _manifest_status(manifest)
+    # Sorted, so meta.json is byte-stable for a given capture: publish builds it
+    # from a status dict that came straight off the capture the first time and
+    # out of a round-tripped manifest.json the next, and those two differ only in
+    # key order.
     countries = {
         code: {
             "status": entry.get("status"),
             "last_success_capture_id": entry.get("last_success_capture_id"),
         }
-        for code, entry in (status.get("countries") or {}).items()
+        for code, entry in sorted((status.get("countries") or {}).items())
     }
     base = str(_site_value(cfg, "release_base_url", DEFAULT_RELEASE_BASE_URL)).rstrip("/")
     return {

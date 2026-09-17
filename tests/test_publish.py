@@ -15,7 +15,7 @@ import polars as pl
 import pytest
 
 from costco_gas import publish as publish_module
-from costco_gas import rollup, schema
+from costco_gas import rollup, schema, sitedata
 from costco_gas.config import load_config
 from costco_gas.publish import publish, upsert_stations
 from costco_gas.store import LocalReleaseStore, StorageError, sha256_file
@@ -233,6 +233,7 @@ def test_first_publish_creates_current_and_the_month_release(tmp_path: Path, cfg
         "stations.csv",
         "fx.csv",
         "manifest.json",
+        *sitedata.SITE_ASSETS.values(),
     }
     assert store.get_release("data-2026-09").prerelease is True
     assert store.get_release("current").prerelease is False
@@ -1176,7 +1177,9 @@ def test_a_merge_that_would_drop_a_capture_date_refuses_to_write(tmp_path: Path,
     digest = sha256_file(before)
 
     with pytest.raises(StorageError, match=r"all-captures would lose capture dates"):
-        publish_module._update_current(store, cfg, captured, empty, tmp_path / "scratch", [])
+        publish_module._update_current(
+            store, cfg, captured, empty, tmp_path / "scratch", [], now=NOW
+        )
 
     after = store.download("current", "costco-gas-all-captures.parquet", tmp_path / "after.pq")
     assert sha256_file(after) == digest
@@ -1291,3 +1294,34 @@ def test_a_closed_station_that_comes_back_is_active_again(cfg):
     )
 
     assert out.to_dicts()[0]["status"] == "active"
+
+
+def test_publish_puts_the_dashboard_files_into_current(tmp_path: Path, cfg):
+    """The dashboard repository renders from `current` and runs no Python.
+
+    So the five files it reads have to be published here, checksummed in
+    manifest.json like every other asset, and built from the capture that is
+    being published rather than from whatever `current` held before.
+    """
+    store = LocalReleaseStore(tmp_path / "releases")
+    capture_dir = make_capture_dir(tmp_path / "captures", "2026-09-15T1817Z", DAY1, prices=PRICES)
+
+    publish(store, capture_dir, cfg, now=NOW)
+
+    manifest = json.loads(
+        store.download("current", "manifest.json", tmp_path / "manifest.json").read_text()
+    )
+    for name, asset in sitedata.SITE_ASSETS.items():
+        entry = manifest["assets"].get(asset)
+        assert entry is not None, f"manifest.json does not cover {asset}"
+        path = store.download("current", asset, tmp_path / name)
+        data = path.read_bytes()
+        assert len(data) == entry["size"]
+        assert hashlib.sha256(data).hexdigest() == entry["sha256"]
+
+    meta = json.loads((tmp_path / "meta.json").read_text(encoding="utf-8"))
+    assert meta["capture_id"] == "2026-09-15T1817Z"
+    assert meta["built_at_utc"].startswith(NOW.date().isoformat())
+    latest = json.loads((tmp_path / "latest.json").read_text(encoding="utf-8"))
+    assert latest, "latest.json has no stations"
+    assert pl.read_parquet(tmp_path / "history.parquet").height > 0

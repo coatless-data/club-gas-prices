@@ -9,7 +9,7 @@ def _status(tmp_path: Path) -> Path:
         "schema_version": 1,
         "capture_id": "2026-09-15T1817Z",
         "run_id": 123,
-        "run_url": "https://github.com/coatless-dashboard/costco-gas-prices/actions/runs/123",
+        "run_url": "https://github.com/coatless-datasets/costco-gas-prices/actions/runs/123",
         "ecom_api": {"attempted": True, "http_status": 200},
         "publish": {"outcome": None, "consecutive_failures": 0, "unpublished": []},
         "close": {},
