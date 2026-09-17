@@ -344,7 +344,7 @@ def _month_body(month: str, captures: pl.DataFrame, cfg, *, now: datetime) -> st
         "",
         f"Closed {_stamp(now)}.",
         "",
-        cfg.site.notice,
+        cfg.site.notice_text(),
     ]
     return "\n".join(lines)
 
@@ -549,7 +549,7 @@ def _current_body(cfg) -> str:
     return (
         "# Current Costco gas prices\n\n"
         "All-time files at both grains, the latest snapshot, the station and FX "
-        f"tables, and `manifest.json`.\n\nSchema: {SCHEMA_URL}\n\n{cfg.site.notice}\n"
+        f"tables, and `manifest.json`.\n\nSchema: {SCHEMA_URL}\n\n{cfg.site.notice_text()}\n"
     )
 
 
@@ -710,7 +710,7 @@ def _year_body(year: str, months: list[str], cfg) -> str:
         f"- `club-gas-{year}.parquet`, `club-gas-{year}.csv.gz` — daily grain\n"
         f"- `club-gas-{year}-captures.parquet` — capture grain\n"
         f"- `manifest-{year}.json` — the SHA-256 of each input month file\n\n"
-        f"Schema: {SCHEMA_URL}\n\n{cfg.site.notice}\n"
+        f"Schema: {SCHEMA_URL}\n\n{cfg.site.notice_text()}\n"
     )
 
 

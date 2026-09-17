@@ -156,7 +156,8 @@ def build_site_data(current_dir: Path, out_dir: Path, cfg, *, now: datetime) -> 
         row_group_size=HISTORY_ROW_GROUP_SIZE,
     )
 
-    _write_json(out_dir / "meta.json", _meta(current_dir, cfg, now=now))
+    brands = sorted({b for b in stations["brand"].drop_nulls().unique().to_list() if b})
+    _write_json(out_dir / "meta.json", _meta(current_dir, cfg, now=now, brands=brands))
 
 
 def _read_csv(path: Path, numeric: tuple[str, ...]) -> pl.DataFrame:
@@ -343,11 +344,9 @@ def history(deduped: pl.DataFrame) -> pl.DataFrame:
 
 
 DEFAULT_RELEASE_BASE_URL = "https://github.com/coatless-datasets/club-gas-prices/releases"
-DEFAULT_NOTICE = (
-    "Unofficial. Not affiliated with, endorsed by, or connected to Costco Wholesale "
-    "Corporation. Prices are collected from Costco's public websites and may differ "
-    "from the price at the pump."
-)
+# A placeholder, not a second verbatim copy of legal text: config/site.toml is
+# the only place the real notice lives.
+DEFAULT_NOTICE = ["Unofficial. Not affiliated with any retailer named here."]
 DEFAULT_BASEMAP_KEY_ENV = "CARTO_BASEMAP_KEY"
 KEYED_PROVIDER = "carto"
 FALLBACK_PROVIDER = "osm"
@@ -374,7 +373,7 @@ GRADE_TABLE_FIELDS = (
 )
 
 
-def _meta(current_dir: Path, cfg, *, now: datetime) -> dict:
+def _meta(current_dir: Path, cfg, *, now: datetime, brands: list[str]) -> dict:
     manifest = _read_json(current_dir / "manifest.json")
     status = _manifest_status(manifest)
     # Sorted, so meta.json is byte-stable for a given capture: publish builds it
@@ -396,7 +395,7 @@ def _meta(current_dir: Path, cfg, *, now: datetime) -> dict:
         "closed_months": manifest.get("closed_months") or [],
         "closed_years": manifest.get("closed_years") or [],
         "grades": _grade_table(cfg),
-        "notice": _site_value(cfg, "notice", DEFAULT_NOTICE),
+        "notice": _notice(cfg, brands),
         "stale_after_hours": STALE_AFTER_HOURS,
         "releases": {
             "current": f"{base}/tag/current",
@@ -405,6 +404,14 @@ def _meta(current_dir: Path, cfg, *, now: datetime) -> dict:
         },
         "basemap": _basemap(cfg),
     }
+
+
+def _notice(cfg, brands: list[str]) -> list[str]:
+    """The affiliation notice for exactly the chains in this capture."""
+    builder = getattr(getattr(cfg, "site", None), "notice", None)
+    if not callable(builder):
+        return list(DEFAULT_NOTICE)
+    return builder(brands or None)
 
 
 def _read_json(path: Path) -> dict:

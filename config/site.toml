@@ -1,13 +1,21 @@
 [site]
-notice = "Unofficial. Not affiliated with, endorsed by, or connected to Costco Wholesale Corporation. Prices are collected from Costco's public websites and may differ from the price at the pump."
+# The notice is built as this prefix plus one clause per brand in the data, so a
+# third chain is a config line rather than an edit in four files. It is the only
+# copy: publish, rollup and the dashboard all read it from here.
+notice_prefix = "Unofficial. Prices are collected from public websites and may differ from the price at the pump."
 release_base_url = "https://github.com/coatless-datasets/club-gas-prices/releases"
 # The dashboard uses carto when this repository variable is set, otherwise osm.
 basemap_key_env = "CARTO_BASEMAP_KEY"
+
+[site.notices]
+COSTCO = "Not affiliated with, endorsed by, or connected to Costco Wholesale Corporation."
+SAMS = "Not affiliated with, endorsed by, or connected to Sam's West, Inc., Sam's Club, or Walmart Inc."
 
 # sitedata copies the chosen provider table into meta.json verbatim, adding
 # only "provider", so these key names are the ones the dashboard's Leaflet
 # layer reads: light_url, dark_url, subdomains, max_zoom, dark_filter,
 # attribution.
+
 [site.basemaps.carto]
 light_url = "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png?key={key}"
 dark_url = "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png?key={key}"

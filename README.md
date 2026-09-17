@@ -9,9 +9,13 @@ Costco's own public websites, stored by day, and published as GitHub Releases.
 [coatless-dashboard/club-gas-prices](https://github.com/coatless-dashboard/club-gas-prices)
 
 > [!IMPORTANT]
-> Unofficial. Not affiliated with, endorsed by, or connected to Costco Wholesale
-> Corporation. Prices are collected from Costco's public websites and may differ from
-> the price at the pump.
+> Unofficial. Prices are collected from public websites and may differ from the price at
+> the pump.
+>
+> Not affiliated with, endorsed by, or connected to Costco Wholesale Corporation.
+>
+> Not affiliated with, endorsed by, or connected to Sam's West, Inc., Sam's Club, or
+> Walmart Inc.
 
 ## Using the dashboard
 

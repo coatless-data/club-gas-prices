@@ -25,6 +25,10 @@ NOTICE = (
     "Corporation. Prices are collected from Costco's public websites and may differ "
     "from the price at the pump."
 )
+NOTICES = {
+    "COSTCO": "Not affiliated with, endorsed by, or connected to Costco Wholesale Corporation.",
+    "SAMS": "Not affiliated with, endorsed by, or connected to Sam's West, Inc.",
+}
 
 
 class StubGrades:
@@ -58,7 +62,7 @@ def _cfg() -> SimpleNamespace:
     return SimpleNamespace(
         grades=StubGrades(),
         site=SimpleNamespace(
-            notice=NOTICE,
+            notice=lambda brands=None: [NOTICE, *(NOTICES[b] for b in sorted(brands or NOTICES))],
             release_base_url="https://github.com/coatless-datasets/club-gas-prices/releases",
             basemap_key_env="CARTO_BASEMAP_KEY",
             basemaps={
@@ -761,7 +765,10 @@ def test_meta_json_carries_status_grades_and_releases(current_dir, tmp_path, mon
     }
     assert meta["countries"]["GB"]["status"] == "failed"
     assert meta["closed_months"] == ["2026-08"]
-    assert meta["notice"].startswith("Unofficial. Not affiliated with")
+    # One shared prefix, then one clause per chain actually in the data.
+    assert meta["notice"][0].startswith("Unofficial.")
+    assert any("Costco Wholesale" in line for line in meta["notice"])
+    assert not any("Sam" in line for line in meta["notice"]), "no Sam's data in this capture"
     # The freshness notice reads this instead of hardcoding 12 hours.
     assert meta["stale_after_hours"] == 12
     assert {row["grade_raw"] for row in meta["grades"] if row["country"] == "AU"} == {
