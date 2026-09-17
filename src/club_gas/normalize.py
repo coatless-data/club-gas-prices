@@ -9,9 +9,9 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import polars as pl
 
-from costco_gas.fx import FxRates
-from costco_gas.schema import ROW_SCHEMA, STATION_SCHEMA
-from costco_gas.sources.base import CaptureContext, FetchResult, RawStation, Warning
+from club_gas.fx import FxRates
+from club_gas.schema import ROW_SCHEMA, STATION_SCHEMA
+from club_gas.sources.base import CaptureContext, FetchResult, RawStation, Warning
 
 LITRES_PER_US_GALLON = 3.785411784
 

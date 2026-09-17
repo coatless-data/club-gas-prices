@@ -65,20 +65,20 @@ def test_page_table_lists_every_dashboard_page():
 def test_release_layout_names_every_asset_at_both_grains():
     text = readme()
     for asset in (
-        "costco-gas-all.parquet",
-        "costco-gas-all.csv.gz",
-        "costco-gas-all-captures.parquet",
-        "costco-gas-latest.csv",
+        "club-gas-all.parquet",
+        "club-gas-all.csv.gz",
+        "club-gas-all-captures.parquet",
+        "club-gas-latest.csv",
         "stations.csv",
         "fx.csv",
         "manifest.json",
-        "costco-gas-YYYY-MM-DD.csv.gz",
+        "club-gas-YYYY-MM-DD.csv.gz",
         "capture-<capture_id>.tar.gz",
         "manifest-YYYY-MM.json",
-        "costco-gas-YYYY-MM.parquet",
-        "costco-gas-YYYY-MM-captures.parquet",
-        "costco-gas-YYYY.parquet",
-        "costco-gas-YYYY-captures.parquet",
+        "club-gas-YYYY-MM.parquet",
+        "club-gas-YYYY-MM-captures.parquet",
+        "club-gas-YYYY.parquet",
+        "club-gas-YYYY-captures.parquet",
         "manifest-YYYY.json",
     ):
         assert asset in text, asset
@@ -137,9 +137,9 @@ def test_data_conventions_cover_the_five_required_topics():
 
 def test_running_it_matches_the_supported_commands():
     text = readme()
-    assert "uv run costco-gas capture --out out" in text
-    assert "COSTCO_GAS_STORE=local:./releases uv run costco-gas publish out/capture" in text
-    assert "uv run costco-gas site-data --current state/current --out site/data" in text
+    assert "uv run club-gas capture --out out" in text
+    assert "CLUB_GAS_STORE=local:./releases uv run club-gas publish out/capture" in text
+    assert "uv run club-gas site-data --current state/current --out site/data" in text
     assert "Publishing to the GitHub store from a local machine is unsupported" in flowed()
 
 

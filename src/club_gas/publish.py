@@ -46,13 +46,13 @@ from .store import (
 BUNDLE_RE = re.compile(r"^capture-(?P<capture_id>.+)\.tar\.gz$")
 
 # The seven `current` assets publish reads back before rewriting them (spec 8.2).
-# `costco-gas-all.csv.gz` belongs here too: this function writes it, so leaving it out
+# `club-gas-all.csv.gz` belongs here too: this function writes it, so leaving it out
 # would let a half-replaced copy slip past the completeness guard below.
 CURRENT_INPUT_ASSETS = (
-    "costco-gas-all.parquet",
-    "costco-gas-all.csv.gz",
-    "costco-gas-all-captures.parquet",
-    "costco-gas-latest.csv",
+    "club-gas-all.parquet",
+    "club-gas-all.csv.gz",
+    "club-gas-all-captures.parquet",
+    "club-gas-latest.csv",
     "stations.csv",
     "fx.csv",
     "manifest.json",
@@ -101,7 +101,7 @@ def read_or_rebuild_manifest(
 
     assets = store.list_assets(tag)
     daily_names = sorted(
-        a.name for a in assets if re.fullmatch(r"costco-gas-\d{4}-\d{2}-\d{2}\.csv\.gz", a.name)
+        a.name for a in assets if re.fullmatch(r"club-gas-\d{4}-\d{2}-\d{2}\.csv\.gz", a.name)
     )
     if not daily_names:
         return _empty_manifest(month)
@@ -117,7 +117,7 @@ def read_or_rebuild_manifest(
     # itself lists it in `merged_captures` -- being in the daily file alone
     # only means merge_capture reached that far, not that `current` was ever
     # fully updated for it. Checking a data file (spec review round 2 checked
-    # costco-gas-all-captures.parquet) is not enough: that file is only the
+    # club-gas-all-captures.parquet) is not enough: that file is only the
     # third of seven `current` assets `_update_current` writes, so a crash
     # after it but before, say, fx.csv would still fabricate a "done" entry
     # (spec review round 3). `merged_captures` is written last, as part of
@@ -139,7 +139,7 @@ def read_or_rebuild_manifest(
 
     manifest = _empty_manifest(month)
     for daily_name in daily_names:
-        day = daily_name[len("costco-gas-") : -len(".csv.gz")]
+        day = daily_name[len("club-gas-") : -len(".csv.gz")]
         local = store.download(tag, daily_name, scratch / f"{tag}-{daily_name}")
         rows = schema.read_rows_csv_gz(local)
         digest = sha256_file(local)
@@ -471,7 +471,7 @@ def merge_capture(
     tag = f"data-{month}"
     manifest = read_or_rebuild_manifest(store, tag, scratch, warnings)
     day = captured.capture_date
-    daily_name = f"costco-gas-{day}.csv.gz"
+    daily_name = f"club-gas-{day}.csv.gz"
 
     recorded = {
         capture_id: entry["rows_by_capture_date"][day]
@@ -581,17 +581,17 @@ def _update_current(
         manifest.setdefault("merged_captures", [])
 
     all_caps = (
-        pl.read_parquet(local["costco-gas-all-captures.parquet"])
+        pl.read_parquet(local["club-gas-all-captures.parquet"])
         if not first
         else pl.DataFrame(schema=schema.ROW_SCHEMA)
     )
     all_daily = (
-        pl.read_parquet(local["costco-gas-all.parquet"])
+        pl.read_parquet(local["club-gas-all.parquet"])
         if not first
         else pl.DataFrame(schema=rollup.DAILY_SCHEMA)
     )
     latest = (
-        pl.read_csv(local["costco-gas-latest.csv"], schema=schema.ROW_SCHEMA)
+        pl.read_csv(local["club-gas-latest.csv"], schema=schema.ROW_SCHEMA)
         if not first
         else pl.DataFrame(schema=schema.ROW_SCHEMA)
     )
@@ -635,9 +635,9 @@ def _update_current(
         raise StorageError("stations.csv would lose rows")
     if new_fx.height < fx.height:
         raise StorageError("fx.csv would lose rows")
-    _check_unique(new_caps, ROW_KEY, "costco-gas-all-captures.parquet")
-    _check_unique(new_all, rollup.DAILY_KEYS, "costco-gas-all.parquet")
-    _check_unique(new_latest, ["station_key", "grade_raw"], "costco-gas-latest.csv")
+    _check_unique(new_caps, ROW_KEY, "club-gas-all-captures.parquet")
+    _check_unique(new_all, rollup.DAILY_KEYS, "club-gas-all.parquet")
+    _check_unique(new_latest, ["station_key", "grade_raw"], "club-gas-latest.csv")
     _check_unique(new_stations, ["station_key"], "stations.csv")
     _check_unique(new_fx, ["capture_id", "currency"], "fx.csv")
 
@@ -645,21 +645,21 @@ def _update_current(
     capture_sort = ["station_key", "grade_raw", "capture_id"]
     outputs: dict[str, Path] = {}
 
-    path = scratch / "out-costco-gas-all.parquet"
+    path = scratch / "out-club-gas-all.parquet"
     schema.write_parquet(new_all, path, sort_by=daily_sort)
-    outputs["costco-gas-all.parquet"] = path
+    outputs["club-gas-all.parquet"] = path
 
-    path = scratch / "out-costco-gas-all.csv.gz"
+    path = scratch / "out-club-gas-all.csv.gz"
     _write_csv_gz(new_all.sort(daily_sort), path)
-    outputs["costco-gas-all.csv.gz"] = path
+    outputs["club-gas-all.csv.gz"] = path
 
-    path = scratch / "out-costco-gas-all-captures.parquet"
+    path = scratch / "out-club-gas-all-captures.parquet"
     schema.write_parquet(new_caps, path, sort_by=capture_sort)
-    outputs["costco-gas-all-captures.parquet"] = path
+    outputs["club-gas-all-captures.parquet"] = path
 
-    path = scratch / "out-costco-gas-latest.csv"
+    path = scratch / "out-club-gas-latest.csv"
     new_latest.write_csv(path)
-    outputs["costco-gas-latest.csv"] = path
+    outputs["club-gas-latest.csv"] = path
 
     # Both assets go out through `schema.write_csv`, which validates them against
     # their schema, re-checks the key, rounds the rate columns and writes the

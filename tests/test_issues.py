@@ -3,7 +3,7 @@ import json
 import httpx
 import pytest
 
-from costco_gas.issues import Issues
+from club_gas.issues import Issues
 
 OPEN_ISSUES = [
     {"number": 8, "title": "Publish failing", "pull_request": {"url": "https://example/pr/8"}},

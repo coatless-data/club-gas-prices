@@ -4,7 +4,7 @@
 turns them into a `FetchResult`. The split exists so that a rebuild can re-run
 `parse()` over the responses stored in an old capture bundle, with no network.
 
-`costco_gas.http` is imported only under `if TYPE_CHECKING`. That module imports
+`club_gas.http` is imported only under `if TYPE_CHECKING`. That module imports
 `RawResponse` from here at module scope, so the runtime dependency must stay
 one-directional: http.py -> sources/base.py.
 
@@ -25,8 +25,8 @@ import polars as pl
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
-    from costco_gas.config import Config
-    from costco_gas.http import Client
+    from club_gas.config import Config
+    from club_gas.http import Client
 
 
 @dataclass(frozen=True)
@@ -155,13 +155,13 @@ class _LazySource:
 
 
 SOURCES: dict[str, Source] = {
-    "US": _LazySource("US", "costco_gas.sources.us", "UsSource"),
-    "CA": _LazySource("CA", "costco_gas.sources.ca", "CaSource"),
-    "MX": _LazySource("MX", "costco_gas.sources.occ", "OccSource", pass_country=True),
-    "GB": _LazySource("GB", "costco_gas.sources.occ", "OccSource", pass_country=True),
-    "AU": _LazySource("AU", "costco_gas.sources.occ", "OccSource", pass_country=True),
-    "JP": _LazySource("JP", "costco_gas.sources.occ", "OccSource", pass_country=True),
-    "TW": _LazySource("TW", "costco_gas.sources.occ", "OccSource", pass_country=True),
+    "US": _LazySource("US", "club_gas.sources.us", "UsSource"),
+    "CA": _LazySource("CA", "club_gas.sources.ca", "CaSource"),
+    "MX": _LazySource("MX", "club_gas.sources.occ", "OccSource", pass_country=True),
+    "GB": _LazySource("GB", "club_gas.sources.occ", "OccSource", pass_country=True),
+    "AU": _LazySource("AU", "club_gas.sources.occ", "OccSource", pass_country=True),
+    "JP": _LazySource("JP", "club_gas.sources.occ", "OccSource", pass_country=True),
+    "TW": _LazySource("TW", "club_gas.sources.occ", "OccSource", pass_country=True),
 }
 
 

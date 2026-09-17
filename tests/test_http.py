@@ -9,9 +9,9 @@ from pathlib import Path
 import httpx
 import pytest
 
-from costco_gas import http
-from costco_gas.config import HttpConfig, TimeoutProfile
-from costco_gas.http import BudgetExceeded, Client
+from club_gas import http
+from club_gas.config import HttpConfig, TimeoutProfile
+from club_gas.http import BudgetExceeded, Client
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 US_BATCH = FIXTURES / "us" / "gasprices_batch.json"
@@ -50,7 +50,7 @@ def test_costco_hosts_get_the_browser_ua_and_x_project(monkeypatch):
     assert costco["user-agent"] == FAST.costco_user_agent
     assert costco["user-agent"].endswith("Safari/537.36")
     # Appending a project token to the UA made this host reset the connection.
-    assert "costco-gas-prices" not in costco["user-agent"]
+    assert "club-gas-prices" not in costco["user-agent"]
     assert costco["x-project"] == FAST.x_project
     assert costco["accept"] == "application/json"
     assert costco["accept-encoding"] == "gzip"

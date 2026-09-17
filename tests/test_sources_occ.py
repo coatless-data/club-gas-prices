@@ -8,10 +8,10 @@ import httpx
 import polars as pl
 import pytest
 
-from costco_gas.config import load_config
-from costco_gas.http import Client
-from costco_gas.sources.base import CaptureContext
-from costco_gas.sources.occ import (
+from club_gas.config import load_config
+from club_gas.http import Client
+from club_gas.sources.base import CaptureContext
+from club_gas.sources.occ import (
     OccSource,
     au_city,
     au_region,
@@ -316,7 +316,7 @@ def test_only_countries_with_a_real_warehouse_number_are_keyed_on_it():
     which is the failure the numeric key exists to avoid. They stay on the name,
     and the code rides along as alt_id.
     """
-    from costco_gas.sources.occ import NUMERIC_ID_COUNTRIES, _warehouse_number
+    from club_gas.sources.occ import NUMERIC_ID_COUNTRIES, _warehouse_number
 
     assert NUMERIC_ID_COUNTRIES == ("AU", "MX", "TW")
     assert _warehouse_number("costcoMexicoWharehouse750") == "750"

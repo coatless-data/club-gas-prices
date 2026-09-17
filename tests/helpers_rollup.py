@@ -10,7 +10,7 @@ from pathlib import Path
 
 import polars as pl
 
-from costco_gas.schema import ROW_SCHEMA, STATION_SCHEMA, write_rows_csv_gz
+from club_gas.schema import ROW_SCHEMA, STATION_SCHEMA, write_rows_csv_gz
 
 GALLON_LITRES = 3.785411784
 NOTICE = (
@@ -210,7 +210,7 @@ def seed_month(
     store.ensure_release(tag, f"Data {month}", "", prerelease, "false")
     daily_meta: dict[str, dict] = {}
     for day, frame in days.items():
-        path = work / f"costco-gas-{day}.csv.gz"
+        path = work / f"club-gas-{day}.csv.gz"
         write_csv_gz(frame, path)
         store.upload_new(tag, path, path.name)
         daily_meta[day] = {"sha256": sha256_file(path), "rows": frame.height}

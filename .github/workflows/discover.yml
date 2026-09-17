@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: costco-gas-data
+  group: club-gas-data
   cancel-in-progress: false
 
 permissions:
@@ -38,4 +38,4 @@ jobs:
 
       - name: Discover US station IDs
         timeout-minutes: 15
-        run: uv run costco-gas discover
+        run: uv run club-gas discover

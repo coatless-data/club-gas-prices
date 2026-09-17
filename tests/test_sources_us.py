@@ -9,9 +9,9 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-from costco_gas.http import BudgetExceeded
-from costco_gas.sources import us
-from costco_gas.sources.base import SOURCES, CaptureContext, RawResponse
+from club_gas.http import BudgetExceeded
+from club_gas.sources import us
+from club_gas.sources.base import SOURCES, CaptureContext, RawResponse
 
 FIXTURES = Path(__file__).parent / "fixtures"
 CAPTURE_ID = "2026-09-15T1910Z"

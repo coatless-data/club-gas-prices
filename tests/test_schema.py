@@ -3,7 +3,7 @@ import datetime as dt
 import polars as pl
 import pytest
 
-from costco_gas.schema import (
+from club_gas.schema import (
     FX_SCHEMA,
     FX_SORT,
     ROW_SCHEMA,
@@ -254,7 +254,7 @@ def test_cast_to_schema_reorders_and_casts_strings():
 
 def test_rows_csv_gz_round_trips_and_is_sorted(tmp_path):
     df = frame(us_row(), row())
-    path = write_rows_csv_gz(df, tmp_path / "costco-gas-2026-09-15.csv.gz")
+    path = write_rows_csv_gz(df, tmp_path / "club-gas-2026-09-15.csv.gz")
     back = read_rows_csv_gz(path)
 
     assert back.schema == pl.Schema(ROW_SCHEMA)

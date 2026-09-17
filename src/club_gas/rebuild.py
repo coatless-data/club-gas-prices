@@ -269,7 +269,7 @@ def _rebuild_month(
             )
             merged = merged.sort(ROW_SORT)
             validate_rows(merged)
-            name = f"costco-gas-{day}.csv.gz"
+            name = f"club-gas-{day}.csv.gz"
             path = work / name
             write_rows_csv_gz(merged, path)
             store.replace_atomic(tag, path, name, token)

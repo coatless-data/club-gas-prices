@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import polars as pl
 import pytest
 
-from costco_gas.sitedata import dedupe_daily
+from club_gas.sitedata import dedupe_daily
 
 NOW = datetime(2026, 9, 16, 2, 0, tzinfo=UTC)
 
@@ -58,7 +58,7 @@ def _cfg() -> SimpleNamespace:
         grades=StubGrades(),
         site=SimpleNamespace(
             notice=NOTICE,
-            release_base_url="https://github.com/coatless-datasets/costco-gas-prices/releases",
+            release_base_url="https://github.com/coatless-datasets/club-gas-prices/releases",
             basemap_key_env="CARTO_BASEMAP_KEY",
             basemaps={
                 "carto": {
@@ -195,7 +195,7 @@ def test_the_key_is_unique_per_day_station_and_grade():
     assert out.select("capture_date", "station_key", "grade").is_unique().all()
 
 
-from costco_gas.sitedata import build_site_data  # noqa: E402
+from club_gas.sitedata import build_site_data  # noqa: E402
 
 LATEST_ROWS = [
     # US-1364: two grades from the same capture.
@@ -489,8 +489,8 @@ DAILY_ROWS = [
 def current_dir(tmp_path) -> Path:
     directory = tmp_path / "current"
     directory.mkdir()
-    _daily_frame(DAILY_ROWS).write_parquet(directory / "costco-gas-all.parquet")
-    pl.DataFrame(LATEST_ROWS).write_csv(directory / "costco-gas-latest.csv")
+    _daily_frame(DAILY_ROWS).write_parquet(directory / "club-gas-all.parquet")
+    pl.DataFrame(LATEST_ROWS).write_csv(directory / "club-gas-latest.csv")
     pl.DataFrame(STATION_ROWS).write_csv(directory / "stations.csv")
     (directory / "manifest.json").write_text(json.dumps(MANIFEST), encoding="utf-8")
     return directory
@@ -541,7 +541,7 @@ def test_latest_json_holds_every_displayed_field(current_dir, tmp_path):
 
 def test_latest_json_rejects_a_duplicate_grade(current_dir, tmp_path):
     duplicate = [*LATEST_ROWS, dict(LATEST_ROWS[0], price_raw="4.199", price=4.199)]
-    pl.DataFrame(duplicate).write_csv(current_dir / "costco-gas-latest.csv")
+    pl.DataFrame(duplicate).write_csv(current_dir / "club-gas-latest.csv")
     with pytest.raises(ValueError, match="US-1364"):
         build_site_data(current_dir, tmp_path / "data", _cfg(), now=NOW)
 
@@ -577,8 +577,8 @@ def test_stations_json_holds_every_search_field(current_dir, tmp_path):
     }
 
 
-from costco_gas import sitedata  # noqa: E402
-from costco_gas.sitedata import summary_daily  # noqa: E402
+from club_gas import sitedata  # noqa: E402
+from club_gas.sitedata import summary_daily  # noqa: E402
 
 
 def test_summary_daily_columns_match_the_dashboard_contract(current_dir, tmp_path):
@@ -740,11 +740,11 @@ def test_meta_json_carries_status_grades_and_releases(current_dir, tmp_path, mon
         "Unleaded 91",
         "E10",
     }
-    base = "https://github.com/coatless-datasets/costco-gas-prices/releases"
+    base = "https://github.com/coatless-datasets/club-gas-prices/releases"
     assert meta["releases"]["all"] == base
     assert meta["releases"]["current"] == f"{base}/tag/current"
-    assert meta["releases"]["latest_csv"] == f"{base}/download/current/costco-gas-latest.csv"
-    assert meta["releases"]["all_parquet"] == f"{base}/download/current/costco-gas-all.parquet"
+    assert meta["releases"]["latest_csv"] == f"{base}/download/current/club-gas-latest.csv"
+    assert meta["releases"]["all_parquet"] == f"{base}/download/current/club-gas-all.parquet"
 
 
 def test_meta_json_falls_back_to_osm_without_a_key(current_dir, tmp_path, monkeypatch, capsys):

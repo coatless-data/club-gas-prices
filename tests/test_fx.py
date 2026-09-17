@@ -11,10 +11,10 @@ import httpx
 import polars as pl
 import pytest
 
-from costco_gas.config import HttpConfig, load_config
-from costco_gas.fx import fetch_rates
-from costco_gas.http import Client
-from costco_gas.sources.base import CaptureContext
+from club_gas.config import HttpConfig, load_config
+from club_gas.fx import fetch_rates
+from club_gas.http import Client
+from club_gas.sources.base import CaptureContext
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "fx"
@@ -327,7 +327,7 @@ class BudgetStubClient:
         return False
 
     def request(self, key, url, *, profile="default", headers=None, expect_json=True):
-        from costco_gas.http import BudgetExceeded
+        from club_gas.http import BudgetExceeded
 
         self.requests.append(url)
         raise BudgetExceeded(f"fx budget exhausted before {key}")
@@ -364,7 +364,7 @@ def test_an_exhausted_budget_without_previous_rates_fails_softly():
 
 
 def test_fx_rates_json_round_trip():
-    from costco_gas.fx import FxRates
+    from club_gas.fx import FxRates
 
     original = FxRates(
         status="ok",
@@ -457,7 +457,7 @@ def test_missing_and_warnings_cannot_disagree_regardless_of_how_fxrates_is_built
     immediately if the derivation were deleted or `missing`/`warnings` stopped
     being populated.
     """
-    from costco_gas.fx import CURRENCIES, FxRates
+    from club_gas.fx import CURRENCIES, FxRates
 
     # An old bundle's fx.json that only ever recorded CAD.
     rows = [

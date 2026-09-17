@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from costco_gas.cli import main
+from club_gas.cli import main
 
 
 def _status(tmp_path: Path) -> Path:
@@ -9,7 +9,7 @@ def _status(tmp_path: Path) -> Path:
         "schema_version": 1,
         "capture_id": "2026-09-15T1817Z",
         "run_id": 123,
-        "run_url": "https://github.com/coatless-datasets/costco-gas-prices/actions/runs/123",
+        "run_url": "https://github.com/coatless-datasets/club-gas-prices/actions/runs/123",
         "ecom_api": {"attempted": True, "http_status": 200},
         "publish": {"outcome": None, "consecutive_failures": 0, "unpublished": []},
         "close": {},
@@ -23,7 +23,7 @@ def _status(tmp_path: Path) -> Path:
 
 
 def test_alerts_subcommand_updates_the_status_file(tmp_path, monkeypatch, capsys):
-    monkeypatch.setenv("COSTCO_GAS_STORE", f"local:{tmp_path / 'releases'}")
+    monkeypatch.setenv("CLUB_GAS_STORE", f"local:{tmp_path / 'releases'}")
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     monkeypatch.delenv("GITHUB_REPOSITORY", raising=False)
     path = _status(tmp_path)

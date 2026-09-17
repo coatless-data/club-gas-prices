@@ -33,7 +33,7 @@ from typing import Literal, Protocol
 
 import httpx
 
-DEFAULT_STORE = "github:coatless-datasets/costco-gas-prices"
+DEFAULT_STORE = "github:coatless-datasets/club-gas-prices"
 SIDECAR_NAME = "_release.json"
 LATEST_NAME = "_latest.json"
 POLL_SECONDS = 60.0
@@ -234,7 +234,7 @@ class _BaseStore:
         if asset.digest is not None:
             return asset.digest == expected_label
         # GitHub reports no digest for older assets: download and hash instead.
-        scratch = Path(tempfile.mkdtemp(prefix="costco-gas-verify-"))
+        scratch = Path(tempfile.mkdtemp(prefix="club-gas-verify-"))
         try:
             path = self._fetch_asset(tag, asset, scratch / "asset")
             return sha256_label(path) == expected_label
@@ -662,7 +662,7 @@ class GitHubReleaseStore(_BaseStore):
 
     Reads need no token and pull asset bytes from `browser_download_url`, which
     does not count against the API rate limit. Writes require both
-    `GITHUB_TOKEN` and `COSTCO_GAS_WRITER=1`; the second is set only by the two
+    `GITHUB_TOKEN` and `CLUB_GAS_WRITER=1`; the second is set only by the two
     workflows allowed to write, so an accidental local publish cannot corrupt
     the published data.
     """
@@ -683,7 +683,7 @@ class GitHubReleaseStore(_BaseStore):
         now_epoch: Callable[[], float] = time.time,
         writes_per_minute: int = 60,
         writes_per_hour: int = 450,
-        user_agent: str = "costco-gas-prices",
+        user_agent: str = "club-gas-prices",
     ) -> None:
         self._owner = owner
         self._repo = repo
@@ -713,9 +713,9 @@ class GitHubReleaseStore(_BaseStore):
     def _require_writer(self) -> None:
         if not self._token:
             raise StorageError("release writes require GITHUB_TOKEN")
-        if os.environ.get("COSTCO_GAS_WRITER") != "1":
+        if os.environ.get("CLUB_GAS_WRITER") != "1":
             raise StorageError(
-                "release writes require COSTCO_GAS_WRITER=1; publishing to GitHub "
+                "release writes require CLUB_GAS_WRITER=1; publishing to GitHub "
                 "from a local machine is unsupported"
             )
 

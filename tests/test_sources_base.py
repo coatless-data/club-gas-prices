@@ -11,7 +11,7 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-from costco_gas.sources.base import (
+from club_gas.sources.base import (
     CaptureContext,
     Error,
     FetchResult,
@@ -106,7 +106,7 @@ def test_capture_context_defaults_are_empty_not_shared():
 
 
 def test_sources_registry_covers_the_seven_countries():
-    from costco_gas.sources.base import SOURCES
+    from club_gas.sources.base import SOURCES
 
     assert set(SOURCES) == {"US", "CA", "MX", "GB", "AU", "JP", "TW"}
     for code, source in SOURCES.items():
@@ -119,7 +119,7 @@ def test_lazy_source_imports_its_module_only_when_called(monkeypatch):
     import sys
     import types
 
-    from costco_gas.sources.base import _LazySource
+    from club_gas.sources.base import _LazySource
 
     calls: list[str] = []
 
@@ -135,11 +135,11 @@ def test_lazy_source_imports_its_module_only_when_called(monkeypatch):
             calls.append("parse")
             return "parsed"
 
-    module = types.ModuleType("costco_gas_fake_source")
+    module = types.ModuleType("club_gas_fake_source")
     module.FakeSource = FakeSource
-    monkeypatch.setitem(sys.modules, "costco_gas_fake_source", module)
+    monkeypatch.setitem(sys.modules, "club_gas_fake_source", module)
 
-    source = _LazySource("ZZ", "costco_gas_fake_source", "FakeSource", pass_country=True)
+    source = _LazySource("ZZ", "club_gas_fake_source", "FakeSource", pass_country=True)
     assert source.country == "ZZ"
     assert calls == []
     assert source.fetch(None, None) == ["fetched"]
@@ -148,7 +148,7 @@ def test_lazy_source_imports_its_module_only_when_called(monkeypatch):
 
 
 def test_bundle_responses_round_trip(tmp_path):
-    from costco_gas.sources.base import read_responses, response_paths, write_responses
+    from club_gas.sources.base import read_responses, response_paths, write_responses
 
     body = (FIXTURES / "bundle" / "us_gasprices_batch.body").read_bytes()
     assert len(body) == 463
@@ -210,7 +210,7 @@ def test_bundle_responses_round_trip(tmp_path):
 
 
 def test_read_responses_is_sorted_and_empty_without_a_responses_dir(tmp_path):
-    from costco_gas.sources.base import read_responses, write_responses
+    from club_gas.sources.base import read_responses, write_responses
 
     assert read_responses(tmp_path) == []
 
@@ -231,14 +231,14 @@ def test_read_responses_is_sorted_and_empty_without_a_responses_dir(tmp_path):
     ["", "/US/01", "US/../../etc/passwd", "US//01", "US\\01", "US/./01"],
 )
 def test_response_paths_rejects_unsafe_keys(tmp_path, key):
-    from costco_gas.sources.base import response_paths
+    from club_gas.sources.base import response_paths
 
     with pytest.raises(ValueError, match="unsafe response key"):
         response_paths(tmp_path, key)
 
 
 def test_read_responses_requires_the_body_file(tmp_path):
-    from costco_gas.sources.base import read_responses, write_responses
+    from club_gas.sources.base import read_responses, write_responses
 
     write_responses(
         [

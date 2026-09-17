@@ -10,12 +10,12 @@ import httpx
 import polars as pl
 import pytest
 
-from costco_gas.capture import run_capture
-from costco_gas.config import load_config
-from costco_gas.http import Client
-from costco_gas.rebuild import rebuild
-from costco_gas.rollup import read_month_manifest
-from costco_gas.schema import (
+from club_gas.capture import run_capture
+from club_gas.config import load_config
+from club_gas.http import Client
+from club_gas.rebuild import rebuild
+from club_gas.rollup import read_month_manifest
+from club_gas.schema import (
     FX_SCHEMA,
     FX_SORT,
     STATION_SCHEMA,
@@ -23,7 +23,7 @@ from costco_gas.schema import (
     read_rows_csv_gz,
     write_csv,
 )
-from costco_gas.store import open_store
+from club_gas.store import open_store
 from helpers_rebuild import (
     REPO_ROOT,
     au_body,
@@ -40,7 +40,7 @@ NOW = datetime(2026, 10, 2, 4, 41, tzinfo=UTC)
 
 
 def _daily(store, tag, day, tmp_path, name="d.csv.gz"):
-    return read_rows_csv_gz(store.download(tag, f"costco-gas-{day}.csv.gz", tmp_path / name))
+    return read_rows_csv_gz(store.download(tag, f"club-gas-{day}.csv.gz", tmp_path / name))
 
 
 def test_rebuild_applies_the_checkouts_grades_to_stored_responses(tmp_path, monkeypatch):
@@ -190,7 +190,7 @@ def test_rebuild_resumes_after_the_last_completed_day_when_everything_matches(
     checkout = checkout_with_config(tmp_path)
     _two_day_month(store, tmp_path, checkout)
     cfg = load_config(checkout)
-    from costco_gas.rebuild import interp_config_sha256
+    from club_gas.rebuild import interp_config_sha256
 
     _put_state(
         store,
@@ -228,7 +228,7 @@ def test_rebuild_restarts_when_the_git_sha_differs(tmp_path, monkeypatch):
     checkout = checkout_with_config(tmp_path)
     _two_day_month(store, tmp_path, checkout)
     cfg = load_config(checkout)
-    from costco_gas.rebuild import interp_config_sha256
+    from club_gas.rebuild import interp_config_sha256
 
     _put_state(
         store,
@@ -273,7 +273,7 @@ def test_a_second_rebuild_after_a_grades_change_reprocesses_every_day(tmp_path, 
 
 def test_rebuild_of_an_open_month_then_refreshes_current(tmp_path, monkeypatch):
     monkeypatch.setenv("GITHUB_SHA", "sha-six")
-    from costco_gas.rollup import rebuild_current
+    from club_gas.rollup import rebuild_current
 
     store = open_store(f"local:{tmp_path / 'releases'}")
     checkout = checkout_with_config(tmp_path)
@@ -286,7 +286,7 @@ def test_rebuild_of_an_open_month_then_refreshes_current(tmp_path, monkeypatch):
     stations = pl.read_csv(store.download("current", "stations.csv", tmp_path / "stations.csv"))
     assert "AU-109" in stations["station_key"].to_list()
     captures = pl.read_parquet(
-        store.download("current", "costco-gas-all-captures.parquet", tmp_path / "all.parquet")
+        store.download("current", "club-gas-all-captures.parquet", tmp_path / "all.parquet")
     )
     assert captures.height == 6
     fx = pl.read_csv(store.download("current", "fx.csv", tmp_path / "fx.csv"))
@@ -311,7 +311,7 @@ def test_rebuild_interrupted_mid_month_lets_close_periods_close_cleanly_after_re
     _two_day_month(store, tmp_path, checkout)
     cfg = load_config(checkout)
 
-    import costco_gas.rebuild as rebuild_module
+    import club_gas.rebuild as rebuild_module
 
     real_rebuild_capture = rebuild_module._rebuild_capture
     calls = {"n": 0}
@@ -340,7 +340,7 @@ def test_rebuild_interrupted_mid_month_lets_close_periods_close_cleanly_after_re
     assert result.resumed is True
     assert result.captures == 1
 
-    from costco_gas.rollup import close_periods
+    from club_gas.rollup import close_periods
 
     close_result = close_periods(store, cfg, now=datetime(2026, 11, 2, tzinfo=UTC))
 
@@ -457,8 +457,8 @@ def test_a_bundle_whose_columns_moved_is_refused_not_misread(tmp_path: Path):
     that no longer matches would load each value into its neighbour among the
     adjacent String columns — silently, and into published data.
     """
-    from costco_gas.rebuild import _read_input_csv
-    from costco_gas.schema import FX_SCHEMA
+    from club_gas.rebuild import _read_input_csv
+    from club_gas.schema import FX_SCHEMA
 
     names = list(FX_SCHEMA)
     swapped = [names[1], names[0], *names[2:]]

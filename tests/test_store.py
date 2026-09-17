@@ -1,4 +1,4 @@
-"""Tests for costco_gas.store: release storage, atomic replace and recovery."""
+"""Tests for club_gas.store: release storage, atomic replace and recovery."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from costco_gas import store
+from club_gas import store
 
 
 def test_temporary_name_helpers_round_trip():
@@ -25,11 +25,11 @@ def test_temporary_name_helpers_round_trip():
         "stations.csv",
         "next",
     )
-    assert store.split_temp_name("costco-gas-all.parquet.old-run-2026-10-01T0300Z") == (
-        "costco-gas-all.parquet",
+    assert store.split_temp_name("club-gas-all.parquet.old-run-2026-10-01T0300Z") == (
+        "club-gas-all.parquet",
         "old",
     )
-    assert store.split_temp_name("costco-gas-2026-09-15.csv.gz") is None
+    assert store.split_temp_name("club-gas-2026-09-15.csv.gz") is None
 
 
 def test_sha256_label_is_the_github_digest_format(tmp_path: Path):
@@ -128,19 +128,17 @@ def test_upload_new_records_digest_size_and_state(tmp_path: Path):
     src = tmp_path / "rows.csv"
     src.write_bytes(b"capture_id,price\n2026-09-15T1817Z,3.999\n")
 
-    asset = s.upload_new("data-2026-09", src, "costco-gas-2026-09-15.csv.gz")
-    assert asset.name == "costco-gas-2026-09-15.csv.gz"
+    asset = s.upload_new("data-2026-09", src, "club-gas-2026-09-15.csv.gz")
+    assert asset.name == "club-gas-2026-09-15.csv.gz"
     assert asset.state == "uploaded"
     assert asset.size == src.stat().st_size
     assert asset.digest == store.sha256_label(src)
     assert asset.label is None
 
     listed = s.list_assets("data-2026-09")
-    assert [a.name for a in listed] == ["costco-gas-2026-09-15.csv.gz"]
+    assert [a.name for a in listed] == ["club-gas-2026-09-15.csv.gz"]
     assert listed[0].id == asset.id
-    assert (root / "data-2026-09" / "costco-gas-2026-09-15.csv.gz").read_bytes() == (
-        src.read_bytes()
-    )
+    assert (root / "data-2026-09" / "club-gas-2026-09-15.csv.gz").read_bytes() == (src.read_bytes())
 
 
 def test_upload_new_keeps_an_explicit_label(tmp_path: Path):
@@ -598,11 +596,11 @@ def test_recover_handles_several_names_and_a_closed_release(tmp_path: Path):
     s.update_release("data-2026-09", prerelease=False)  # a closed month
     rows = _write(tmp_path, "rows.csv", b"rows-v1\n")
     manifest = _write(tmp_path, "m.json", b"{}\n")
-    s.upload_new("data-2026-09", rows, "costco-gas-2026-09-15.csv.gz")
+    s.upload_new("data-2026-09", rows, "club-gas-2026-09-15.csv.gz")
     s.upload_new(
         "data-2026-09",
         rows,
-        "costco-gas-2026-09-15.csv.gz.next-tok-1",
+        "club-gas-2026-09-15.csv.gz.next-tok-1",
         label=store.sha256_label(rows),
     )
     s.upload_new(
@@ -615,7 +613,7 @@ def test_recover_handles_several_names_and_a_closed_release(tmp_path: Path):
     store.recover_temporaries(s, "data-2026-09")
 
     assert sorted(a.name for a in s.list_assets("data-2026-09")) == [
-        "costco-gas-2026-09-15.csv.gz",
+        "club-gas-2026-09-15.csv.gz",
         "manifest-2026-09.json",
     ]
     assert s.get_release("data-2026-09").prerelease is False
@@ -649,7 +647,7 @@ def test_recover_temporaries_over_recovery_tags_leaves_other_releases_alone(
     payload = _write(tmp_path, "p.csv", b"p\n")
     label = store.sha256_label(payload)
     s.upload_new("current", payload, "stations.csv.old-tok")
-    s.upload_new("data-2026", payload, "costco-gas-2026.parquet.next-tok-1", label=label)
+    s.upload_new("data-2026", payload, "club-gas-2026.parquet.next-tok-1", label=label)
     s.upload_new("notes", payload, "readme.txt.old-tok")
 
     actions = {tag: store.recover_temporaries(s, tag) for tag in store.recovery_tags(s)}
@@ -660,7 +658,7 @@ def test_recover_temporaries_over_recovery_tags_leaves_other_releases_alone(
     ]
     assert actions["data-2026-09"] == []
     assert [a.name for a in s.list_assets("current")] == ["stations.csv"]
-    assert [a.name for a in s.list_assets("data-2026")] == ["costco-gas-2026.parquet"]
+    assert [a.name for a in s.list_assets("data-2026")] == ["club-gas-2026.parquet"]
     # `notes` is not a data release, so recovery never looked at it.
     assert [a.name for a in s.list_assets("notes")] == ["readme.txt.old-tok"]
 
@@ -901,7 +899,7 @@ class FakeGitHub:
 @pytest.fixture
 def writer_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GITHUB_TOKEN", "ghs-test-token")
-    monkeypatch.setenv("COSTCO_GAS_WRITER", "1")
+    monkeypatch.setenv("CLUB_GAS_WRITER", "1")
 
 
 def test_github_reads_need_no_token_and_no_auth_on_downloads(
@@ -1030,15 +1028,15 @@ def test_github_writes_require_the_token_and_the_writer_flag(
     payload = _write(tmp_path, "rows.csv", b"rows-v1\n")
 
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
-    monkeypatch.setenv("COSTCO_GAS_WRITER", "1")
+    monkeypatch.setenv("CLUB_GAS_WRITER", "1")
     no_token = store.GitHubReleaseStore("acme", "gas", transport=fake.transport())
     with pytest.raises(store.StorageError, match="GITHUB_TOKEN"):
         no_token.upload_new("data-2026-09", payload, "rows.csv")
 
     monkeypatch.setenv("GITHUB_TOKEN", "ghs-test-token")
-    monkeypatch.delenv("COSTCO_GAS_WRITER", raising=False)
+    monkeypatch.delenv("CLUB_GAS_WRITER", raising=False)
     no_flag = store.GitHubReleaseStore("acme", "gas", transport=fake.transport())
-    with pytest.raises(store.StorageError, match="COSTCO_GAS_WRITER"):
+    with pytest.raises(store.StorageError, match="CLUB_GAS_WRITER"):
         no_flag.ensure_release("current", "Current data", "b", False, "true")
 
     assert not [c for c in fake.calls if c["method"] in ("POST", "PATCH", "DELETE")]
@@ -1246,9 +1244,9 @@ def test_open_store_builds_both_kinds(tmp_path: Path):
     local.ensure_release("current", "Current data", "b", False, "true")
     assert (tmp_path / "releases" / "current" / "_release.json").exists()
 
-    remote = store.open_store("github:coatless-datasets/costco-gas-prices")
+    remote = store.open_store("github:coatless-datasets/club-gas-prices")
     assert isinstance(remote, store.GitHubReleaseStore)
-    assert store.DEFAULT_STORE == "github:coatless-datasets/costco-gas-prices"
+    assert store.DEFAULT_STORE == "github:coatless-datasets/club-gas-prices"
 
     with pytest.raises(store.StorageError, match="unsupported store spec"):
         store.open_store("s3://bucket/prefix")

@@ -7,8 +7,8 @@ from types import SimpleNamespace
 
 import polars as pl
 
-from costco_gas.discover import candidate_ids, read_bundle, select_bundle
-from costco_gas.store import open_store
+from club_gas.discover import candidate_ids, read_bundle, select_bundle
+from club_gas.store import open_store
 
 NOW = datetime(2026, 10, 2, 3, 41, tzinfo=UTC)
 
@@ -207,10 +207,10 @@ def test_candidate_range_runs_to_the_highest_id_plus_200(tmp_path):
     assert len(ids) == 2038 - 6  # 5 polled ids plus the Canadian 1775
 
 
-from costco_gas.config import Bounds  # noqa: E402
-from costco_gas.discover import US_PRICE_URL, discover  # noqa: E402
-from costco_gas.issues import Issues  # noqa: E402
-from costco_gas.sources.base import RawResponse  # noqa: E402
+from club_gas.config import Bounds  # noqa: E402
+from club_gas.discover import US_PRICE_URL, discover  # noqa: E402
+from club_gas.issues import Issues  # noqa: E402
+from club_gas.sources.base import RawResponse  # noqa: E402
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "us_gasprices_discover.json"
 

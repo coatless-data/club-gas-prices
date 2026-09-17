@@ -7,10 +7,10 @@ import httpx
 import polars as pl
 import pytest
 
-from costco_gas.config import load_config
-from costco_gas.http import Client
-from costco_gas.sources.base import CaptureContext, RawResponse
-from costco_gas.sources.ca import (
+from club_gas.config import load_config
+from club_gas.http import Client
+from club_gas.sources.base import CaptureContext, RawResponse
+from club_gas.sources.ca import (
     CaSource,
     cached_stations,
     parse_lookup_body,

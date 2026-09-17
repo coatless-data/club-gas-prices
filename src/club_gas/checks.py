@@ -9,9 +9,9 @@ from datetime import UTC, datetime, timedelta
 
 import polars as pl
 
-from costco_gas.fx import FxRates
-from costco_gas.normalize import NormalizedCountry
-from costco_gas.sources.base import CaptureContext, FetchResult
+from club_gas.fx import FxRates
+from club_gas.normalize import NormalizedCountry
+from club_gas.sources.base import CaptureContext, FetchResult
 
 SCHEMA_VERSION = 1
 CAPTURE_ID_FORMAT = "%Y-%m-%dT%H%MZ"

@@ -6,7 +6,7 @@ from typing import ClassVar
 
 import pytest
 
-from costco_gas import cli
+from club_gas import cli
 
 
 class FakeIssues:
@@ -27,7 +27,7 @@ class FakeIssues:
 @pytest.fixture(autouse=True)
 def _wired(monkeypatch, tmp_path):
     FakeIssues.instances = []
-    monkeypatch.setenv("COSTCO_GAS_STORE", f"local:{tmp_path / 'releases'}")
+    monkeypatch.setenv("CLUB_GAS_STORE", f"local:{tmp_path / 'releases'}")
     monkeypatch.setattr(cli, "Issues", FakeIssues)
     monkeypatch.setattr(cli, "load_config", lambda root: object())
 

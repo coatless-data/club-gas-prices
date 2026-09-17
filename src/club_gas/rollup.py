@@ -1,10 +1,10 @@
 """Roll-ups: the daily grain, month and year closes, and the full `current` rebuild.
 
 Release layout (spec 8.1-8.2):
-  data-YYYY-MM  prerelease while open: costco-gas-YYYY-MM-DD.csv.gz (capture grain),
+  data-YYYY-MM  prerelease while open: club-gas-YYYY-MM-DD.csv.gz (capture grain),
                 capture-<capture_id>.tar.gz, manifest-YYYY-MM.json; at close it also
-                gets costco-gas-YYYY-MM.parquet / .csv.gz (daily grain) and
-                costco-gas-YYYY-MM-captures.parquet (capture grain).
+                gets club-gas-YYYY-MM.parquet / .csv.gz (daily grain) and
+                club-gas-YYYY-MM-captures.parquet (capture grain).
   data-YYYY     year files, written by the year close.
   current       the 7 all-time assets, rebuilt in full whenever a month closes.
 """
@@ -27,21 +27,21 @@ from .store import AssetNotFound, recover_temporaries, recovery_tags, sha256_fil
 
 MONTH_TAG = re.compile(r"^data-(\d{4})-(\d{2})$")
 YEAR_TAG = re.compile(r"^data-(\d{4})$")
-DAILY_ASSET = re.compile(r"^costco-gas-(\d{4}-\d{2}-\d{2})\.csv\.gz$")
+DAILY_ASSET = re.compile(r"^club-gas-(\d{4}-\d{2}-\d{2})\.csv\.gz$")
 BUNDLE_ASSET = re.compile(r"^capture-(.+)\.tar\.gz$")
 TEMP_ASSET = re.compile(r"\.(next|old)-")
 
 DAILY_SORT = ["capture_date", "country", "station_key", "grade_raw"]
 CAPTURE_SORT = ["station_key", "grade_raw", "capture_id"]
 CURRENT_DATA_ASSETS = (
-    "costco-gas-all.parquet",
-    "costco-gas-all.csv.gz",
-    "costco-gas-all-captures.parquet",
-    "costco-gas-latest.csv",
+    "club-gas-all.parquet",
+    "club-gas-all.csv.gz",
+    "club-gas-all-captures.parquet",
+    "club-gas-latest.csv",
     "stations.csv",
     "fx.csv",
 )
-SCHEMA_URL = "https://github.com/coatless-datasets/costco-gas-prices#getting-the-data"
+SCHEMA_URL = "https://github.com/coatless-datasets/club-gas-prices#getting-the-data"
 
 
 @dataclass
@@ -334,9 +334,9 @@ def _month_body(month: str, captures: pl.DataFrame, cfg, *, now: datetime) -> st
         "",
         "## Files",
         "",
-        f"- `costco-gas-{month}.parquet`, `costco-gas-{month}.csv.gz` — daily grain",
-        f"- `costco-gas-{month}-captures.parquet` — capture grain",
-        f"- `costco-gas-{month}-DD.csv.gz` — one file per UTC day, capture grain",
+        f"- `club-gas-{month}.parquet`, `club-gas-{month}.csv.gz` — daily grain",
+        f"- `club-gas-{month}-captures.parquet` — capture grain",
+        f"- `club-gas-{month}-DD.csv.gz` — one file per UTC day, capture grain",
         "- `capture-<capture_id>.tar.gz` — raw capture bundles",
         f"- `manifest-{month}.json` — per-capture manifest",
         "",
@@ -366,13 +366,13 @@ def _close_month(store, cfg, tag: str, month: str, *, token: str, now: datetime)
             if day in per_file and per_file[day] != rows:
                 raise ValueError(f"{tag}: {day} has {per_file[day]} rows, manifest records {rows}")
         grain = daily_grain(captures)
-        parquet = work / f"costco-gas-{month}.parquet"
+        parquet = work / f"club-gas-{month}.parquet"
         schema.write_parquet(grain, parquet, sort_by=DAILY_SORT)
         store.replace_atomic(tag, parquet, parquet.name, token)
-        csv_gz = work / f"costco-gas-{month}.csv.gz"
+        csv_gz = work / f"club-gas-{month}.csv.gz"
         _write_csv_gz(grain.sort(DAILY_SORT), csv_gz)
         store.replace_atomic(tag, csv_gz, csv_gz.name, token)
-        caps = work / f"costco-gas-{month}-captures.parquet"
+        caps = work / f"club-gas-{month}-captures.parquet"
         schema.write_parquet(captures, caps, sort_by=CAPTURE_SORT)
         store.replace_atomic(tag, caps, caps.name, token)
         store.update_release(
@@ -592,7 +592,7 @@ def _rebuild_current_impl(store, cfg, *, now: datetime) -> None:
                         frames.append(schema.read_rows_csv_gz(path))
             else:
                 closed_months.append(month)
-                name = f"costco-gas-{month}-captures.parquet"
+                name = f"club-gas-{month}-captures.parquet"
                 path = store.download(tag, name, work / name)
                 frames.append(
                     pl.read_parquet(path).select(list(schema.ROW_SCHEMA)).cast(schema.ROW_SCHEMA)
@@ -624,15 +624,15 @@ def _rebuild_current_impl(store, cfg, *, now: datetime) -> None:
             assets[name] = {"sha256": sha256_file(path), "size": path.stat().st_size}
 
         put(
-            "costco-gas-all.parquet",
+            "club-gas-all.parquet",
             lambda p: schema.write_parquet(grain, p, sort_by=DAILY_SORT),
         )
-        put("costco-gas-all.csv.gz", lambda p: _write_csv_gz(grain.sort(DAILY_SORT), p))
+        put("club-gas-all.csv.gz", lambda p: _write_csv_gz(grain.sort(DAILY_SORT), p))
         put(
-            "costco-gas-all-captures.parquet",
+            "club-gas-all-captures.parquet",
             lambda p: schema.write_parquet(captures, p, sort_by=CAPTURE_SORT),
         )
-        put("costco-gas-latest.csv", latest.write_csv)
+        put("club-gas-latest.csv", latest.write_csv)
         # Through `schema.write_csv`, exactly as publish._update_current writes
         # them: same validation, same key check, same rounding, same canonical
         # date formats, so the incremental and full writers cannot drift apart.
@@ -653,7 +653,7 @@ def _rebuild_current_impl(store, cfg, *, now: datetime) -> None:
         # `merged_captures` (Task 14, spec review round 3) is the commit marker
         # `read_or_rebuild_manifest` trusts to decide a bundle is already merged
         # into `current`. A full rebuild starts from nothing and reads every row it
-        # writes to `costco-gas-all-captures.parquet` right here as `captures`, so
+        # writes to `club-gas-all-captures.parquet` right here as `captures`, so
         # the correct value is exactly the capture ids present in that frame -- not
         # whatever a previous, possibly stale or incomplete, manifest.json claimed.
         # Carrying the old list over, or omitting the key, would either resurrect
@@ -707,8 +707,8 @@ def _year_body(year: str, months: list[str], cfg) -> str:
     return (
         f"# Costco gas prices {year}\n\n"
         f"Concatenated from the closed month releases:\n\n{listed}\n\n"
-        f"- `costco-gas-{year}.parquet`, `costco-gas-{year}.csv.gz` — daily grain\n"
-        f"- `costco-gas-{year}-captures.parquet` — capture grain\n"
+        f"- `club-gas-{year}.parquet`, `club-gas-{year}.csv.gz` — daily grain\n"
+        f"- `club-gas-{year}-captures.parquet` — capture grain\n"
         f"- `manifest-{year}.json` — the SHA-256 of each input month file\n\n"
         f"Schema: {SCHEMA_URL}\n\n{cfg.site.notice}\n"
     )
@@ -734,8 +734,8 @@ def _close_years(store, cfg, *, now: datetime, token: str) -> list[str]:
                 month = tag.removeprefix("data-")
                 entry = {}
                 for name in (
-                    f"costco-gas-{month}.parquet",
-                    f"costco-gas-{month}-captures.parquet",
+                    f"club-gas-{month}.parquet",
+                    f"club-gas-{month}-captures.parquet",
                 ):
                     path = store.download(tag, name, work / name)
                     entry[name] = sha256_file(path)
@@ -760,27 +760,25 @@ def _close_years(store, cfg, *, now: datetime, token: str) -> list[str]:
             )
             grain = pl.concat(
                 [
-                    pl.read_parquet(paths[f"costco-gas-{tag.removeprefix('data-')}.parquet"])
+                    pl.read_parquet(paths[f"club-gas-{tag.removeprefix('data-')}.parquet"])
                     for tag in months
                 ],
                 how="vertical",
             )
             caps = pl.concat(
                 [
-                    pl.read_parquet(
-                        paths[f"costco-gas-{tag.removeprefix('data-')}-captures.parquet"]
-                    )
+                    pl.read_parquet(paths[f"club-gas-{tag.removeprefix('data-')}-captures.parquet"])
                     for tag in months
                 ],
                 how="vertical",
             )
-            parquet = work / f"costco-gas-{year}.parquet"
+            parquet = work / f"club-gas-{year}.parquet"
             schema.write_parquet(grain, parquet, sort_by=DAILY_SORT)
             store.replace_atomic(year_tag, parquet, parquet.name, token)
-            csv_gz = work / f"costco-gas-{year}.csv.gz"
+            csv_gz = work / f"club-gas-{year}.csv.gz"
             _write_csv_gz(grain.sort(DAILY_SORT), csv_gz)
             store.replace_atomic(year_tag, csv_gz, csv_gz.name, token)
-            caps_path = work / f"costco-gas-{year}-captures.parquet"
+            caps_path = work / f"club-gas-{year}-captures.parquet"
             schema.write_parquet(caps, caps_path, sort_by=CAPTURE_SORT)
             store.replace_atomic(year_tag, caps_path, caps_path.name, token)
             manifest = work / f"manifest-{year}.json"

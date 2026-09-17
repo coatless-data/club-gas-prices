@@ -1,4 +1,4 @@
-"""costco-gas command line (spec 5.4, 12.2)."""
+"""club-gas command line (spec 5.4, 12.2)."""
 
 from __future__ import annotations
 
@@ -23,8 +23,8 @@ from .store import DEFAULT_STORE, open_store
 
 
 def open_configured_store():
-    """Pick the release store from COSTCO_GAS_STORE (spec 12.1)."""
-    return open_store(os.environ.get("COSTCO_GAS_STORE") or DEFAULT_STORE)
+    """Pick the release store from CLUB_GAS_STORE (spec 12.1)."""
+    return open_store(os.environ.get("CLUB_GAS_STORE") or DEFAULT_STORE)
 
 
 def utc_now() -> datetime:
@@ -190,7 +190,7 @@ def cmd_site_data(args) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="costco-gas")
+    parser = argparse.ArgumentParser(prog="club-gas")
     sub = parser.add_subparsers(dest="command", required=True)
 
     capture = sub.add_parser("capture", help="collect prices into DIR")
