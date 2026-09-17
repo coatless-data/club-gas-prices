@@ -11,8 +11,8 @@ from pathlib import Path
 
 import polars as pl
 
-from costco_gas.capture import US_ID_SET_SCHEMA
-from costco_gas.schema import FX_SCHEMA, ROW_SCHEMA, STATION_SCHEMA, write_rows_csv_gz
+from club_gas.capture import US_ID_SET_SCHEMA
+from club_gas.schema import FX_SCHEMA, ROW_SCHEMA, STATION_SCHEMA, write_rows_csv_gz
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 REPO_CONFIG = REPO_ROOT / "config"
@@ -186,7 +186,7 @@ def seed_month(
     for capture_id, archive in bundles.items():
         day = capture_id[:10]
         store.upload_new(tag, archive, f"capture-{capture_id}.tar.gz")
-        daily = work / f"costco-gas-{day}.csv.gz"
+        daily = work / f"club-gas-{day}.csv.gz"
         if not daily.exists():
             write_rows_csv_gz(pl.DataFrame(schema=ROW_SCHEMA), daily)
             store.upload_new(tag, daily, daily.name)

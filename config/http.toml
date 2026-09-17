@@ -8,9 +8,9 @@
 costco_user_agent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
 # Non-Costco hosts (Frankfurter, jsDelivr) get an honest project UA instead.
 # Cloudflare blocks the default Python UA on api.frankfurter.dev.
-project_user_agent = "costco-gas-prices/0.1 (+https://github.com/coatless-datasets/costco-gas-prices)"
+project_user_agent = "club-gas-prices/0.1 (+https://github.com/coatless-datasets/club-gas-prices)"
 # Sent as X-Project on every Costco request so the operator is identifiable.
-x_project = "https://github.com/coatless-datasets/costco-gas-prices"
+x_project = "https://github.com/coatless-datasets/club-gas-prices"
 costco_host_suffixes = [
   "costco.com",
   "costco.ca",

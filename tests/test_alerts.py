@@ -4,9 +4,9 @@ from pathlib import Path
 
 import pytest
 
-from costco_gas.alerts import run_alerts
-from costco_gas.issues import Issues
-from costco_gas.store import open_store
+from club_gas.alerts import run_alerts
+from club_gas.issues import Issues
+from club_gas.store import open_store
 
 NOW = datetime(2026, 9, 15, 18, 19, 2, tzinfo=UTC)
 COUNTRIES = ("US", "CA", "MX", "GB", "AU", "JP", "TW")
@@ -33,7 +33,7 @@ def _status(tmp_path: Path, **overrides) -> Path:
         "schema_version": 1,
         "capture_id": "2026-09-15T1817Z",
         "run_id": 123,
-        "run_url": "https://github.com/coatless-datasets/costco-gas-prices/actions/runs/123",
+        "run_url": "https://github.com/coatless-datasets/club-gas-prices/actions/runs/123",
         "fx": {"status": "ok", "source": "frankfurter-v2", "rate_date": "2026-09-15"},
         "ecom_api": {"attempted": True, "http_status": 200},
         "publish": {"outcome": None, "consecutive_failures": 0, "unpublished": []},
@@ -80,7 +80,7 @@ def test_failure_increments_the_counter_and_records_the_capture(tmp_path, issues
         {
             "capture_id": "2026-09-15T1817Z",
             "run_id": 123,
-            "run_url": "https://github.com/coatless-datasets/costco-gas-prices/actions/runs/123",
+            "run_url": "https://github.com/coatless-datasets/club-gas-prices/actions/runs/123",
         }
     ]
     # One failure is below the threshold of 2, but a recorded capture opens it anyway.
@@ -204,7 +204,7 @@ def test_capture_failing_opens_at_three_consecutive_failures(tmp_path, issues):
         recent_errors=[
             {
                 "capture_id": "2026-09-15T1817Z",
-                "run_url": "https://github.com/coatless-datasets/costco-gas-prices/actions/runs/123",
+                "run_url": "https://github.com/coatless-datasets/club-gas-prices/actions/runs/123",
                 "errors": [{"code": "http_error", "host": "www.costco.co.jp", "http_status": 403}],
             }
         ],

@@ -21,7 +21,7 @@ on:
 run-name: Rebuild ${{ inputs.scope }} ${{ inputs.value }}
 
 concurrency:
-  group: costco-gas-data
+  group: club-gas-data
   cancel-in-progress: false
 
 permissions:
@@ -38,7 +38,7 @@ jobs:
       GITHUB_TOKEN: ${{ github.token }}
       GH_TOKEN: ${{ github.token }}
       CONTACT_EMAIL: ${{ vars.CONTACT_EMAIL }}
-      COSTCO_GAS_WRITER: "1"
+      CLUB_GAS_WRITER: "1"
       SCOPE: ${{ inputs.scope }}
       VALUE: ${{ inputs.value }}
     steps:
@@ -84,13 +84,13 @@ jobs:
           set -euo pipefail
           case "$SCOPE" in
             month)
-              uv run costco-gas rebuild --month "$VALUE"
+              uv run club-gas rebuild --month "$VALUE"
               ;;
             year)
-              uv run costco-gas rebuild --year "$VALUE"
+              uv run club-gas rebuild --year "$VALUE"
               ;;
             all)
-              uv run costco-gas rebuild --all
+              uv run club-gas rebuild --all
               ;;
             artifact)
               shopt -s nullglob
@@ -107,7 +107,7 @@ jobs:
                 exit 1
               fi
               for d in "${dirs[@]}"; do
-                uv run costco-gas publish "$d" || exit 1
+                uv run club-gas publish "$d" || exit 1
               done
               ;;
             *)
@@ -119,4 +119,4 @@ jobs:
       - name: Close periods and rebuild current
         if: ${{ steps.rebuild.outcome == 'success' }}
         timeout-minutes: 60
-        run: uv run costco-gas close-periods --rebuild-current
+        run: uv run club-gas close-periods --rebuild-current

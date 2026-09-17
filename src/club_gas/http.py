@@ -20,8 +20,8 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from costco_gas.config import HttpConfig, TimeoutProfile
-from costco_gas.sources.base import RawResponse
+from club_gas.config import HttpConfig, TimeoutProfile
+from club_gas.sources.base import RawResponse
 
 # Kept in the capture bundle. Everything else, cookies above all, is dropped.
 RECORDED_HEADERS = frozenset(

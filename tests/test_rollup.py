@@ -8,9 +8,9 @@ from datetime import UTC, date, datetime
 import polars as pl
 import pytest
 
-from costco_gas import rollup
-from costco_gas.rollup import close_periods, daily_grain, rebuild_current
-from costco_gas.store import next_name, open_store, sha256_label
+from club_gas import rollup
+from club_gas.rollup import close_periods, daily_grain, rebuild_current
+from club_gas.store import next_name, open_store, sha256_label
 from helpers_rollup import (
     RecordingIssues,
     RecordingStore,
@@ -23,10 +23,10 @@ from helpers_rollup import (
 )
 
 CURRENT_DATA_ASSET_NAMES = {
-    "costco-gas-all.parquet",
-    "costco-gas-all.csv.gz",
-    "costco-gas-all-captures.parquet",
-    "costco-gas-latest.csv",
+    "club-gas-all.parquet",
+    "club-gas-all.csv.gz",
+    "club-gas-all-captures.parquet",
+    "club-gas-latest.csv",
     "stations.csv",
     "fx.csv",
 }
@@ -184,7 +184,7 @@ def test_close_periods_blocks_a_month_whose_recorded_day_has_no_uploaded_file(tm
     cfg = stub_config(tmp_path)
     _seed_august(store, tmp_path)
     missing = next(
-        a for a in store.list_assets("data-2026-08") if a.name == "costco-gas-2026-08-31.csv.gz"
+        a for a in store.list_assets("data-2026-08") if a.name == "club-gas-2026-08-31.csv.gz"
     )
     store.delete("data-2026-08", missing.id)
     issues = RecordingIssues()
@@ -197,7 +197,7 @@ def test_close_periods_blocks_a_month_whose_recorded_day_has_no_uploaded_file(tm
     assert issues.opened[0][0] == "Period close blocked: 2026-08"
     assert "2026-08-31" in issues.opened[0][1]
     names = {a.name for a in store.list_assets("data-2026-08")}
-    assert "costco-gas-2026-08.parquet" not in names
+    assert "club-gas-2026-08.parquet" not in names
 
 
 def test_month_close_writes_both_grains_and_clears_prerelease_last(tmp_path):
@@ -215,27 +215,27 @@ def test_month_close_writes_both_grains_and_clears_prerelease_last(tmp_path):
     assert result.closed_months == ["2026-08"]
     names = {a.name for a in store.list_assets("data-2026-08")}
     assert {
-        "costco-gas-2026-08.parquet",
-        "costco-gas-2026-08.csv.gz",
-        "costco-gas-2026-08-captures.parquet",
+        "club-gas-2026-08.parquet",
+        "club-gas-2026-08.csv.gz",
+        "club-gas-2026-08-captures.parquet",
     } <= names
     captures = pl.read_parquet(
         store.download(
             "data-2026-08",
-            "costco-gas-2026-08-captures.parquet",
+            "club-gas-2026-08-captures.parquet",
             tmp_path / "caps.parquet",
         )
     )
     assert captures.height == 4
     grain = pl.read_parquet(
-        store.download("data-2026-08", "costco-gas-2026-08.parquet", tmp_path / "grain.parquet")
+        store.download("data-2026-08", "club-gas-2026-08.parquet", tmp_path / "grain.parquet")
     )
     assert grain.height == 4
     assert set(grain["n_captures"].to_list()) == {1}
     assert store.get_release("data-2026-08").prerelease is False
     cleared = store.log.index("update_release:data-2026-08:prerelease=False")
     assert cleared > store.log.index(
-        "replace_atomic:data-2026-08:costco-gas-2026-08-captures.parquet"
+        "replace_atomic:data-2026-08:club-gas-2026-08-captures.parquet"
     )
     assert cleared > store.log.index("replace_atomic:current:manifest.json")
 
@@ -335,8 +335,8 @@ def test_a_close_refuses_a_capture_grain_that_lost_rows_the_daily_files_hold(tmp
 
     # Nothing was written and the month is still open, so a fixed run can retry.
     names = {a.name for a in store.list_assets("data-2026-08")}
-    assert "costco-gas-2026-08.parquet" not in names
-    assert "costco-gas-2026-08-captures.parquet" not in names
+    assert "club-gas-2026-08.parquet" not in names
+    assert "club-gas-2026-08-captures.parquet" not in names
     assert store.get_release("data-2026-08").prerelease is True
 
 
@@ -413,7 +413,7 @@ def test_full_rebuild_reads_closed_month_files_and_closed_month_manifest_fx(tmp_
     rebuild_current(store, cfg, now=datetime(2026, 9, 15, 18, 30, tzinfo=UTC))
 
     caps = pl.read_parquet(
-        store.download("current", "costco-gas-all-captures.parquet", tmp_path / "all.parquet")
+        store.download("current", "club-gas-all-captures.parquet", tmp_path / "all.parquet")
     )
     assert caps.height == 6
     assert set(caps["capture_id"].unique().to_list()) == {
@@ -424,9 +424,7 @@ def test_full_rebuild_reads_closed_month_files_and_closed_month_manifest_fx(tmp_
     fx = pl.read_csv(store.download("current", "fx.csv", tmp_path / "fx.csv"))
     assert fx["currency"].to_list() == ["AUD", "AUD"]
     assert fx["fx_usd_per_unit"].to_list() == [0.7147962831, 0.7147962831]
-    latest = pl.read_csv(
-        store.download("current", "costco-gas-latest.csv", tmp_path / "latest.csv")
-    )
+    latest = pl.read_csv(store.download("current", "club-gas-latest.csv", tmp_path / "latest.csv"))
     assert latest.height == 2
     assert set(latest["capture_id"].to_list()) == {"2026-09-15T1817Z"}
     manifest = json.loads(
@@ -587,7 +585,7 @@ def test_full_rebuild_recomputes_merged_captures_to_match_the_rebuilt_captures_f
     rebuild_current(store, cfg, now=datetime(2026, 9, 15, 19, 0, tzinfo=UTC))
 
     caps = pl.read_parquet(
-        store.download("current", "costco-gas-all-captures.parquet", tmp_path / "caps.parquet")
+        store.download("current", "club-gas-all-captures.parquet", tmp_path / "caps.parquet")
     )
     manifest = json.loads(
         store.download("current", "manifest.json", tmp_path / "m.json").read_text()
@@ -611,9 +609,9 @@ def test_rebuild_current_recovers_an_interrupted_replace_before_reading(tmp_path
     cfg = stub_config(tmp_path)
     store.ensure_release("data-2026-09", "Data 2026-09", "", True, "false")
     frame = _us_rows("2026-09-15T1817Z", 4.099)
-    path = tmp_path / "costco-gas-2026-09-15.csv.gz"
+    path = tmp_path / "club-gas-2026-09-15.csv.gz"
     write_csv_gz(frame, path)
-    name = "costco-gas-2026-09-15.csv.gz"
+    name = "club-gas-2026-09-15.csv.gz"
     # Simulates a replace_atomic that uploaded and verified the new bytes but
     # crashed before promoting them to the live name: exactly what an
     # interrupted first-ever write of this day's file leaves behind.
@@ -624,7 +622,7 @@ def test_rebuild_current_recovers_an_interrupted_replace_before_reading(tmp_path
     names = {a.name for a in store.list_assets("data-2026-09")}
     assert name in names
     caps = pl.read_parquet(
-        store.download("current", "costco-gas-all-captures.parquet", tmp_path / "caps.parquet")
+        store.download("current", "club-gas-all-captures.parquet", tmp_path / "caps.parquet")
     )
     assert caps.height == 2
     assert set(caps["capture_id"].to_list()) == {"2026-09-15T1817Z"}
@@ -669,17 +667,17 @@ def test_year_close_creates_the_release_first_and_the_manifest_last(tmp_path):
     assert store.get_release("data-2026").prerelease is False
     names = {a.name for a in store.list_assets("data-2026")}
     assert {
-        "costco-gas-2026.parquet",
-        "costco-gas-2026.csv.gz",
-        "costco-gas-2026-captures.parquet",
+        "club-gas-2026.parquet",
+        "club-gas-2026.csv.gz",
+        "club-gas-2026-captures.parquet",
         "manifest-2026.json",
     } <= names
     caps = pl.read_parquet(
-        store.download("data-2026", "costco-gas-2026-captures.parquet", tmp_path / "y.parquet")
+        store.download("data-2026", "club-gas-2026-captures.parquet", tmp_path / "y.parquet")
     )
     assert caps.height == 6
     assert store.log.index("ensure_release:data-2026") < store.log.index(
-        "replace_atomic:data-2026:costco-gas-2026.parquet"
+        "replace_atomic:data-2026:club-gas-2026.parquet"
     )
     assert store.log.index("replace_atomic:data-2026:manifest-2026.json") == max(
         i for i, entry in enumerate(store.log) if entry.startswith("replace_atomic:data-2026:")
@@ -763,4 +761,4 @@ def test_rebuild_current_flag_runs_without_a_close_and_restores_latest(tmp_path)
     assert result.rebuilt_current is True
     assert store.get_release("current").is_latest is True
     names = {a.name for a in store.list_assets("current")}
-    assert "costco-gas-all.parquet" in names and "manifest.json" in names
+    assert "club-gas-all.parquet" in names and "manifest.json" in names

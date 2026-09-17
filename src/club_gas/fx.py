@@ -29,12 +29,12 @@ from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
-from costco_gas.http import BudgetExceeded
-from costco_gas.sources.base import Warning
+from club_gas.http import BudgetExceeded
+from club_gas.sources.base import Warning
 
 if TYPE_CHECKING:
-    from costco_gas.http import Client
-    from costco_gas.sources.base import CaptureContext, RawResponse
+    from club_gas.http import Client
+    from club_gas.sources.base import CaptureContext, RawResponse
 
 CURRENCIES: tuple[str, ...] = ("CAD", "MXN", "GBP", "AUD", "JPY", "TWD")
 FRANKFURTER_URL = "https://api.frankfurter.dev/v2/rates?base=USD&quotes=" + ",".join(CURRENCIES)

@@ -1,11 +1,11 @@
 from types import SimpleNamespace
 
-from costco_gas import cli
-from costco_gas.discover import DiscoverResult
+from club_gas import cli
+from club_gas.discover import DiscoverResult
 
 
 def test_discover_subcommand_wires_the_pieces(tmp_path, monkeypatch, capsys):
-    monkeypatch.setenv("COSTCO_GAS_STORE", f"local:{tmp_path / 'releases'}")
+    monkeypatch.setenv("CLUB_GAS_STORE", f"local:{tmp_path / 'releases'}")
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     monkeypatch.delenv("GITHUB_REPOSITORY", raising=False)
     seen = {}

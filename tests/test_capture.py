@@ -1,4 +1,4 @@
-"""Tests for costco_gas.capture (spec 5.3)."""
+"""Tests for club_gas.capture (spec 5.3)."""
 
 from __future__ import annotations
 
@@ -12,11 +12,11 @@ import httpx
 import polars as pl
 import pytest
 
-from costco_gas import capture as capture_module
-from costco_gas.capture import capture_id_for, github_output, run_capture
-from costco_gas.config import load_config
-from costco_gas.http import Client
-from costco_gas.store import LocalReleaseStore
+from club_gas import capture as capture_module
+from club_gas.capture import capture_id_for, github_output, run_capture
+from club_gas.config import load_config
+from club_gas.http import Client
+from club_gas.store import LocalReleaseStore
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = Path(__file__).resolve().parent / "fixtures"

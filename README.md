@@ -4,9 +4,9 @@ Posted fuel prices at every Costco gas station in the United States, Canada, Mex
 the United Kingdom, Australia, Japan and Taiwan, collected four times a day from
 Costco's own public websites, stored by day, and published as GitHub Releases.
 
-**Dashboard:** <https://dashboard.thecoatlessprofessor.com/costco-gas-prices/>
+**Dashboard:** <https://dashboard.thecoatlessprofessor.com/club-gas-prices/>
  · built from this repository's releases by
-[coatless-dashboard/costco-gas-prices](https://github.com/coatless-dashboard/costco-gas-prices)
+[coatless-dashboard/club-gas-prices](https://github.com/coatless-dashboard/club-gas-prices)
 
 > [!IMPORTANT]
 > Unofficial. Not affiliated with, endorsed by, or connected to Costco Wholesale
@@ -43,33 +43,33 @@ file lives in git.
 
 ```
 current                 rolling, all-time, marked Latest
-├── costco-gas-all.parquet            daily grain, every day so far
-├── costco-gas-all.csv.gz             the same rows as CSV
-├── costco-gas-all-captures.parquet   capture grain, every row so far
-├── costco-gas-latest.csv             every row of each station's newest capture
+├── club-gas-all.parquet            daily grain, every day so far
+├── club-gas-all.csv.gz             the same rows as CSV
+├── club-gas-all-captures.parquet   capture grain, every row so far
+├── club-gas-latest.csv             every row of each station's newest capture
 ├── stations.csv                      one row per station_key ever seen
 ├── fx.csv                            one row per capture and non-USD currency
 └── manifest.json                     newest status.json, closed periods, SHA-256 of the six assets above
 
 data-YYYY-MM            one release per month, a prerelease while the month is open
-├── costco-gas-YYYY-MM-DD.csv.gz      capture grain, one file per UTC day
+├── club-gas-YYYY-MM-DD.csv.gz      capture grain, one file per UTC day
 ├── capture-<capture_id>.tar.gz       one bundle per capture: raw responses, inputs, config, rows
 ├── manifest-YYYY-MM.json             one entry per capture merged into the month
-├── costco-gas-YYYY-MM.parquet        daily grain, written when the month closes
-├── costco-gas-YYYY-MM.csv.gz         the same rows as CSV
-└── costco-gas-YYYY-MM-captures.parquet   capture grain, written when the month closes
+├── club-gas-YYYY-MM.parquet        daily grain, written when the month closes
+├── club-gas-YYYY-MM.csv.gz         the same rows as CSV
+└── club-gas-YYYY-MM-captures.parquet   capture grain, written when the month closes
 
 data-YYYY               one release per year, written when the year closes
-├── costco-gas-YYYY.parquet           daily grain
-├── costco-gas-YYYY.csv.gz            the same rows as CSV
-├── costco-gas-YYYY-captures.parquet  capture grain
+├── club-gas-YYYY.parquet           daily grain
+├── club-gas-YYYY.csv.gz            the same rows as CSV
+├── club-gas-YYYY-captures.parquet  capture grain
 └── manifest-YYYY.json                SHA-256 of each input month file, both grains
 ```
 
 Download the whole rolling release with the GitHub CLI:
 
 ```bash
-gh release download current -R coatless-datasets/costco-gas-prices -D state/current
+gh release download current -R coatless-datasets/club-gas-prices -D state/current
 ```
 
 ### The two grains
@@ -177,10 +177,10 @@ so the two dates differ for part of each day. Charts use `capture_date`.
 
 ```
 .
-├── pyproject.toml            # uv project; console script `costco-gas`
+├── pyproject.toml            # uv project; console script `club-gas`
 ├── uv.lock
 ├── .python-version           # 3.13
-├── src/costco_gas/
+├── src/club_gas/
 │   ├── cli.py                # capture | publish | close-periods | alerts | rebuild | discover | site-data
 │   ├── config.py             # load + validate config/*
 │   ├── http.py                # shared Client: headers, deadlines, retries, pacing, block signals
@@ -217,24 +217,24 @@ so the two dates differ for part of each day. Charts use `capture_date`.
 Collect without publishing anything. Reads from the GitHub release store need no token:
 
 ```bash
-uv run costco-gas capture --out out
+uv run club-gas capture --out out
 ```
 
 Publish into a local directory instead of GitHub:
 
 ```bash
-COSTCO_GAS_STORE=local:./releases uv run costco-gas publish out/capture
+CLUB_GAS_STORE=local:./releases uv run club-gas publish out/capture
 ```
 
 Publishing to the GitHub store from a local machine is unsupported: release writes
-require both `GITHUB_TOKEN` and `COSTCO_GAS_WRITER=1`, which only `capture.yml` and
+require both `GITHUB_TOKEN` and `CLUB_GAS_WRITER=1`, which only `capture.yml` and
 `rebuild.yml` set.
 
 Check what the dashboard would receive, without publishing:
 
 ```bash
-gh release download current -R coatless-datasets/costco-gas-prices -D state/current
-uv run costco-gas site-data --current state/current --out site/data
+gh release download current -R coatless-datasets/club-gas-prices -D state/current
+uv run club-gas site-data --current state/current --out site/data
 ```
 
 To render them, clone the dashboard and point it at that directory; its README has

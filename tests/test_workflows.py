@@ -14,7 +14,7 @@ import re
 from pathlib import Path
 
 WORKFLOWS = Path(__file__).resolve().parents[1] / ".github" / "workflows"
-SERIAL_CONCURRENCY = "concurrency:\n  group: costco-gas-data\n  cancel-in-progress: false\n"
+SERIAL_CONCURRENCY = "concurrency:\n  group: club-gas-data\n  cancel-in-progress: false\n"
 
 
 def read(name: str) -> str:
@@ -75,7 +75,7 @@ def test_capture_triggers_and_job_settings():
     assert '- cron: "17 */6 * * *"' in text
     assert "run-name: ${{ inputs.dry_run && 'Capture (dry run)' || 'Capture' }}" in text
     assert "    timeout-minutes: 45\n" in text
-    assert '      COSTCO_GAS_WRITER: "1"\n' in text
+    assert '      CLUB_GAS_WRITER: "1"\n' in text
     assert "      COUNTRIES: ${{ inputs.countries || 'all' }}\n" in text
     assert "      FORCE_FALLBACK: ${{ inputs.force_fallback || '' }}\n" in text
     assert "ref: ${{ github.event.repository.default_branch || github.ref_name }}" in text
@@ -89,11 +89,11 @@ def test_capture_step_commands_conditions_and_timeouts():
     # directory positionally; `close-periods` takes no flag here; `alerts` takes
     # status.json positionally plus the two outcome flags.
     commands = [
-        'run: uv run costco-gas capture --out out --countries "$COUNTRIES"'
+        'run: uv run club-gas capture --out out --countries "$COUNTRIES"'
         ' --force-fallback "$FORCE_FALLBACK"',
-        "run: uv run costco-gas publish out/capture",
-        "run: uv run costco-gas close-periods",
-        "uv run costco-gas alerts out/capture/status.json",
+        "run: uv run club-gas publish out/capture",
+        "run: uv run club-gas close-periods",
+        "uv run club-gas alerts out/capture/status.json",
         '--publish-outcome "${{ steps.publish.outcome }}"',
         '--close-outcome "${{ steps.close.outcome }}"',
     ]
@@ -135,9 +135,9 @@ def test_discover_conventions_and_settings():
     assert "    timeout-minutes: 20\n" in text
     # `discover` takes only an optional --root, which defaults to the working
     # directory, so the workflow passes no flag at all.
-    assert "run: uv run costco-gas discover\n" in text
+    assert "run: uv run club-gas discover\n" in text
     # discover only reads releases, so it must never claim the writer flag.
-    assert "COSTCO_GAS_WRITER" not in text
+    assert "CLUB_GAS_WRITER" not in text
 
 
 def test_rebuild_conventions_and_settings():
@@ -147,16 +147,16 @@ def test_rebuild_conventions_and_settings():
     assert SERIAL_CONCURRENCY in text
     assert "permissions:\n  contents: write\n  issues: write\n  actions: read\n" in text
     assert "    timeout-minutes: 350\n" in text
-    assert '      COSTCO_GAS_WRITER: "1"\n' in text
+    assert '      CLUB_GAS_WRITER: "1"\n' in text
     assert "      SCOPE: ${{ inputs.scope }}\n" in text
     assert "      VALUE: ${{ inputs.value }}\n" in text
     assert "ref: ${{ github.event.repository.default_branch || github.ref_name }}" in text
-    # store.py refuses a GitHub release write without COSTCO_GAS_WRITER=1, so it
+    # store.py refuses a GitHub release write without CLUB_GAS_WRITER=1, so it
     # is declared by exactly the two workflows that write releases.
     writers = {
         name
         for name in ("capture.yml", "discover.yml", "rebuild.yml")
-        if 'COSTCO_GAS_WRITER: "1"' in read(name)
+        if 'CLUB_GAS_WRITER: "1"' in read(name)
     }
     assert writers == {"capture.yml", "rebuild.yml"}
 
@@ -174,12 +174,12 @@ def test_rebuild_dispatches_every_scope():
     assert "pattern: capture-*" in text
     assert "run-id: ${{ inputs.value }}" in text
     assert 'case "$SCOPE" in' in text
-    assert 'uv run costco-gas rebuild --month "$VALUE"' in text
-    assert 'uv run costco-gas rebuild --year "$VALUE"' in text
-    assert "uv run costco-gas rebuild --all" in text
-    assert 'uv run costco-gas publish "$d"' in text
+    assert 'uv run club-gas rebuild --month "$VALUE"' in text
+    assert 'uv run club-gas rebuild --year "$VALUE"' in text
+    assert "uv run club-gas rebuild --all" in text
+    assert 'uv run club-gas publish "$d"' in text
     assert "if: ${{ steps.rebuild.outcome == 'success' }}" in text
-    assert "run: uv run costco-gas close-periods --rebuild-current" in text
+    assert "run: uv run club-gas close-periods --rebuild-current" in text
 
 
 def test_test_workflow_conventions():

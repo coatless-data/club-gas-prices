@@ -141,12 +141,12 @@ def build_site_data(current_dir: Path, out_dir: Path, cfg, *, now: datetime) -> 
     out_dir.mkdir(parents=True, exist_ok=True)
 
     stations = _read_csv(current_dir / "stations.csv", STATION_NUMERIC)
-    latest = _read_csv(current_dir / "costco-gas-latest.csv", LATEST_NUMERIC)
+    latest = _read_csv(current_dir / "club-gas-latest.csv", LATEST_NUMERIC)
 
     _write_json(out_dir / "latest.json", _latest_records(latest, stations))
     _write_json(out_dir / "stations.json", _station_records(stations))
 
-    deduped = dedupe_daily(pl.read_parquet(current_dir / "costco-gas-all.parquet"), cfg)
+    deduped = dedupe_daily(pl.read_parquet(current_dir / "club-gas-all.parquet"), cfg)
     write_parquet(summary_daily(deduped), out_dir / "summary_daily.parquet", sort_by=SUMMARY_SORT)
     write_parquet(
         history(deduped),
@@ -187,7 +187,7 @@ def _latest_records(latest: pl.DataFrame, stations: pl.DataFrame) -> list[dict]:
         grade = row.get("grade")
         if grade in CORE_GRADES:
             if (key, grade) in seen:
-                raise ValueError(f"costco-gas-latest.csv has more than one {grade!r} row for {key}")
+                raise ValueError(f"club-gas-latest.csv has more than one {grade!r} row for {key}")
             seen.add((key, grade))
             record["grades"][grade] = price
         else:
@@ -336,7 +336,7 @@ def history(deduped: pl.DataFrame) -> pl.DataFrame:
     return with_change_flags(deduped).select(HISTORY_COLUMNS)
 
 
-DEFAULT_RELEASE_BASE_URL = "https://github.com/coatless-datasets/costco-gas-prices/releases"
+DEFAULT_RELEASE_BASE_URL = "https://github.com/coatless-datasets/club-gas-prices/releases"
 DEFAULT_NOTICE = (
     "Unofficial. Not affiliated with, endorsed by, or connected to Costco Wholesale "
     "Corporation. Prices are collected from Costco's public websites and may differ "
@@ -349,10 +349,10 @@ DEFAULT_MAX_ZOOM = 19
 # The dashboard's freshness notice reads this instead of hardcoding 12 hours.
 STALE_AFTER_HOURS = 12
 CURRENT_ASSETS = {
-    "all_parquet": "costco-gas-all.parquet",
-    "all_csv_gz": "costco-gas-all.csv.gz",
-    "all_captures_parquet": "costco-gas-all-captures.parquet",
-    "latest_csv": "costco-gas-latest.csv",
+    "all_parquet": "club-gas-all.parquet",
+    "all_csv_gz": "club-gas-all.csv.gz",
+    "all_captures_parquet": "club-gas-all-captures.parquet",
+    "latest_csv": "club-gas-latest.csv",
     "stations_csv": "stations.csv",
     "fx_csv": "fx.csv",
 }

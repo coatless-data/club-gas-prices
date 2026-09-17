@@ -1,4 +1,4 @@
-"""Tests for costco_gas.publish (spec 8.4 recovery, 8.5 publish)."""
+"""Tests for club_gas.publish (spec 8.4 recovery, 8.5 publish)."""
 
 from __future__ import annotations
 
@@ -14,11 +14,11 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-from costco_gas import publish as publish_module
-from costco_gas import rollup, schema, sitedata
-from costco_gas.config import load_config
-from costco_gas.publish import publish, upsert_stations
-from costco_gas.store import LocalReleaseStore, StorageError, sha256_file
+from club_gas import publish as publish_module
+from club_gas import rollup, schema, sitedata
+from club_gas.config import load_config
+from club_gas.publish import publish, upsert_stations
+from club_gas.store import LocalReleaseStore, StorageError, sha256_file
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -134,7 +134,7 @@ def station_row(station, captured_at, grades, status="active"):
 def make_capture_dir(
     root: Path, capture_id: str, captured_at: datetime, *, prices, tw_status="ok"
 ) -> Path:
-    """Write a capture directory shaped like `costco-gas capture --out` does."""
+    """Write a capture directory shaped like `club-gas capture --out` does."""
     directory = root / capture_id
     directory.mkdir(parents=True, exist_ok=True)
     rows = pl.DataFrame(
@@ -220,16 +220,16 @@ def test_first_publish_creates_current_and_the_month_release(tmp_path: Path, cfg
     assert result.capture_id == "2026-09-15T1817Z"
     month = {a.name for a in store.list_assets("data-2026-09")}
     assert month == {
-        "costco-gas-2026-09-15.csv.gz",
+        "club-gas-2026-09-15.csv.gz",
         "capture-2026-09-15T1817Z.tar.gz",
         "manifest-2026-09.json",
     }
     current = {a.name for a in store.list_assets("current")}
     assert current == {
-        "costco-gas-all.parquet",
-        "costco-gas-all.csv.gz",
-        "costco-gas-all-captures.parquet",
-        "costco-gas-latest.csv",
+        "club-gas-all.parquet",
+        "club-gas-all.csv.gz",
+        "club-gas-all-captures.parquet",
+        "club-gas-latest.csv",
         "stations.csv",
         "fx.csv",
         "manifest.json",
@@ -238,7 +238,7 @@ def test_first_publish_creates_current_and_the_month_release(tmp_path: Path, cfg
     assert store.get_release("data-2026-09").prerelease is True
     assert store.get_release("current").prerelease is False
 
-    daily = store.download("data-2026-09", "costco-gas-2026-09-15.csv.gz", tmp_path / "d.csv.gz")
+    daily = store.download("data-2026-09", "club-gas-2026-09-15.csv.gz", tmp_path / "d.csv.gz")
     assert schema.read_rows_csv_gz(daily).height == 5
 
     manifest = json.loads(
@@ -250,7 +250,7 @@ def test_first_publish_creates_current_and_the_month_release(tmp_path: Path, cfg
     assert [row["currency"] for row in entry["fx"]] == ["TWD"]
 
     latest = pl.read_csv(
-        store.download("current", "costco-gas-latest.csv", tmp_path / "l.csv"),
+        store.download("current", "club-gas-latest.csv", tmp_path / "l.csv"),
         schema=schema.ROW_SCHEMA,
     )
     assert latest.height == 5
@@ -301,7 +301,7 @@ def test_a_second_capture_the_same_day_keeps_the_first(tmp_path: Path, cfg):
     publish(store, second, cfg, now=NOW)
 
     daily = schema.read_rows_csv_gz(
-        store.download("data-2026-09", "costco-gas-2026-09-15.csv.gz", tmp_path / "d.csv.gz")
+        store.download("data-2026-09", "club-gas-2026-09-15.csv.gz", tmp_path / "d.csv.gz")
     )
     assert sorted(daily["capture_id"].unique().to_list()) == [
         "2026-09-15T0017Z",
@@ -316,7 +316,7 @@ def test_a_second_capture_the_same_day_keeps_the_first(tmp_path: Path, cfg):
 
     # latest: Chungli 95 moves to the newer capture, the other rows are untouched.
     latest = pl.read_csv(
-        store.download("current", "costco-gas-latest.csv", tmp_path / "l.csv"),
+        store.download("current", "club-gas-latest.csv", tmp_path / "l.csv"),
         schema=schema.ROW_SCHEMA,
     )
     chungli = latest.filter(pl.col("station_key") == "TW-Chungli")
@@ -327,7 +327,7 @@ def test_a_second_capture_the_same_day_keeps_the_first(tmp_path: Path, cfg):
     assert xin["capture_id"].unique().to_list() == ["2026-09-15T0017Z"]
 
     daily_all = pl.read_parquet(
-        store.download("current", "costco-gas-all.parquet", tmp_path / "all.parquet")
+        store.download("current", "club-gas-all.parquet", tmp_path / "all.parquet")
     )
     regular = daily_all.filter(
         (pl.col("station_key") == "TW-Chungli") & (pl.col("grade_raw") == "95")
@@ -413,19 +413,19 @@ def test_two_crashes_rebuild_the_manifest_and_reconcile_the_orphan(tmp_path: Pat
     }
 
     day15 = schema.read_rows_csv_gz(
-        store.download("data-2026-09", "costco-gas-2026-09-15.csv.gz", tmp_path / "d15.csv.gz")
+        store.download("data-2026-09", "club-gas-2026-09-15.csv.gz", tmp_path / "d15.csv.gz")
     )
     assert sorted(day15["capture_id"].unique().to_list()) == [
         "2026-09-15T0017Z",
         "2026-09-15T1217Z",
     ]
     day16 = schema.read_rows_csv_gz(
-        store.download("data-2026-09", "costco-gas-2026-09-16.csv.gz", tmp_path / "d16.csv.gz")
+        store.download("data-2026-09", "club-gas-2026-09-16.csv.gz", tmp_path / "d16.csv.gz")
     )
     assert day16["capture_id"].unique().to_list() == ["2026-09-16T0017Z"]
 
     captures_all = pl.read_parquet(
-        store.download("current", "costco-gas-all-captures.parquet", tmp_path / "ac.parquet")
+        store.download("current", "club-gas-all-captures.parquet", tmp_path / "ac.parquet")
     )
     assert sorted(captures_all["capture_id"].unique().to_list()) == [
         "2026-09-15T0017Z",
@@ -460,14 +460,14 @@ def test_a_missing_daily_file_that_the_manifest_records_raises(tmp_path: Path, c
     publish(store, a_dir, cfg, now=NOW)
 
     daily = next(
-        a for a in store.list_assets("data-2026-09") if a.name == "costco-gas-2026-09-15.csv.gz"
+        a for a in store.list_assets("data-2026-09") if a.name == "club-gas-2026-09-15.csv.gz"
     )
     store.delete("data-2026-09", daily.id)
 
     b_dir = make_capture_dir(
         captures, "2026-09-15T1817Z", DAY1, prices=[("Chungli", "95", "regular", 30.2)]
     )
-    with pytest.raises(StorageError, match=re.escape("costco-gas-2026-09-15.csv.gz is missing")):
+    with pytest.raises(StorageError, match=re.escape("club-gas-2026-09-15.csv.gz is missing")):
         publish(store, b_dir, cfg, now=NOW)
 
 
@@ -519,7 +519,7 @@ def test_an_incomplete_orphan_bundle_is_deleted(tmp_path: Path, cfg):
         a.name for a in inner.list_assets("data-2026-09")
     }
     day15 = schema.read_rows_csv_gz(
-        inner.download("data-2026-09", "costco-gas-2026-09-15.csv.gz", tmp_path / "d15.csv.gz")
+        inner.download("data-2026-09", "club-gas-2026-09-15.csv.gz", tmp_path / "d15.csv.gz")
     )
     assert day15["capture_id"].unique().to_list() == ["2026-09-15T0017Z"]
 
@@ -589,7 +589,7 @@ def test_a_late_publish_reopens_a_closed_month(tmp_path: Path, cfg):
 
 
 def test_recovery_promotes_a_verified_next_asset(tmp_path: Path, cfg):
-    from costco_gas.store import recover_temporaries
+    from club_gas.store import recover_temporaries
 
     store = LocalReleaseStore(tmp_path / "releases")
     captures = tmp_path / "captures"
@@ -627,7 +627,7 @@ def test_recovery_promotes_a_verified_next_asset(tmp_path: Path, cfg):
 
 
 def test_recovery_rolls_back_to_old_when_no_next_verifies(tmp_path: Path, cfg):
-    from costco_gas.store import recover_temporaries
+    from club_gas.store import recover_temporaries
 
     store = LocalReleaseStore(tmp_path / "releases")
     captures = tmp_path / "captures"
@@ -716,7 +716,7 @@ def test_a_crash_inside_update_current_leaves_the_capture_reconcilable(tmp_path:
     # have recorded B as done -- that is the commit marker `_reconcile` reads.
     day15 = schema.read_rows_csv_gz(
         inner.download(
-            "data-2026-09", "costco-gas-2026-09-15.csv.gz", tmp_path / "d15-after-crash.csv.gz"
+            "data-2026-09", "club-gas-2026-09-15.csv.gz", tmp_path / "d15-after-crash.csv.gz"
         )
     )
     assert "2026-09-15T1217Z" in day15["capture_id"].unique().to_list()
@@ -735,7 +735,7 @@ def test_a_crash_inside_update_current_leaves_the_capture_reconcilable(tmp_path:
 
     assert "reconciled:2026-09-15T1217Z" in result.warnings
     captures_all = pl.read_parquet(
-        inner.download("current", "costco-gas-all-captures.parquet", tmp_path / "ac.parquet")
+        inner.download("current", "club-gas-all-captures.parquet", tmp_path / "ac.parquet")
     )
     assert sorted(captures_all["capture_id"].unique().to_list()) == [
         "2026-09-15T0017Z",
@@ -840,7 +840,7 @@ def test_current_missing_only_manifest_json_raises(tmp_path: Path, cfg):
 
     # Nothing about `current` was touched by the failed attempt.
     captures_all = pl.read_parquet(
-        store.download("current", "costco-gas-all-captures.parquet", tmp_path / "ac.parquet")
+        store.download("current", "club-gas-all-captures.parquet", tmp_path / "ac.parquet")
     )
     assert captures_all.height == 5
 
@@ -902,16 +902,16 @@ def test_a_row_count_mismatch_against_the_manifest_raises(tmp_path: Path, cfg):
     # Corrupt the daily file directly: drop one of A's rows without touching
     # the manifest, so its recorded row count for A no longer matches.
     daily_asset = next(
-        a for a in store.list_assets("data-2026-09") if a.name == "costco-gas-2026-09-15.csv.gz"
+        a for a in store.list_assets("data-2026-09") if a.name == "club-gas-2026-09-15.csv.gz"
     )
     local = store.download(
-        "data-2026-09", "costco-gas-2026-09-15.csv.gz", tmp_path / "corrupt.csv.gz"
+        "data-2026-09", "club-gas-2026-09-15.csv.gz", tmp_path / "corrupt.csv.gz"
     )
     truncated = schema.read_rows_csv_gz(local).head(4)
     corrupted_path = tmp_path / "truncated.csv.gz"
     schema.write_rows_csv_gz(truncated, corrupted_path)
     store.delete("data-2026-09", daily_asset.id)
-    store.upload_new("data-2026-09", corrupted_path, "costco-gas-2026-09-15.csv.gz")
+    store.upload_new("data-2026-09", corrupted_path, "club-gas-2026-09-15.csv.gz")
 
     b_dir = make_capture_dir(
         captures, "2026-09-15T1817Z", DAY1, prices=[("Chungli", "95", "regular", 30.2)]
@@ -942,10 +942,10 @@ def test_a_months_first_crash_is_not_fabricated_done_by_the_rebuild(tmp_path: Pa
     publish(inner, zero_dir, cfg, now=NOW)
 
     # September's first capture crashes inside `_update_current` -- before
-    # `costco-gas-all-captures.parquet` itself is written, so `current` never
+    # `club-gas-all-captures.parquet` itself is written, so `current` never
     # records this capture at all (unlike a later crash point, which could
     # legitimately already have it there).
-    crashy = CrashOnceStore(inner, "current", "costco-gas-all-captures.parquet")
+    crashy = CrashOnceStore(inner, "current", "club-gas-all-captures.parquet")
     a_dir = make_capture_dir(
         captures, "2026-09-15T0017Z", datetime(2026, 9, 15, 0, 17, tzinfo=UTC), prices=PRICES
     )
@@ -956,7 +956,7 @@ def test_a_months_first_crash_is_not_fabricated_done_by_the_rebuild(tmp_path: Pa
     # even though the daily file and bundle both exist.
     assert not any(a.name == "manifest-2026-09.json" for a in inner.list_assets("data-2026-09"))
     day15 = schema.read_rows_csv_gz(
-        inner.download("data-2026-09", "costco-gas-2026-09-15.csv.gz", tmp_path / "d15.csv.gz")
+        inner.download("data-2026-09", "club-gas-2026-09-15.csv.gz", tmp_path / "d15.csv.gz")
     )
     assert "2026-09-15T0017Z" in day15["capture_id"].unique().to_list()
 
@@ -975,7 +975,7 @@ def test_a_months_first_crash_is_not_fabricated_done_by_the_rebuild(tmp_path: Pa
 
     all_ids = {"2026-08-15T0017Z", "2026-09-15T0017Z", "2026-09-16T0017Z"}
     captures_all = pl.read_parquet(
-        inner.download("current", "costco-gas-all-captures.parquet", tmp_path / "ac.parquet")
+        inner.download("current", "club-gas-all-captures.parquet", tmp_path / "ac.parquet")
     )
     assert set(captures_all["capture_id"].to_list()) == all_ids
     # No duplicate (capture_id, station_key, grade_raw) rows: the crashed
@@ -998,7 +998,7 @@ def test_a_months_first_crash_is_not_fabricated_done_by_the_rebuild(tmp_path: Pa
 
 
 def test_a_crash_after_all_captures_but_before_fx_is_still_reconciled(tmp_path: Path, cfg):
-    """Spec review round 3: costco-gas-all-captures.parquet alone is not proof
+    """Spec review round 3: club-gas-all-captures.parquet alone is not proof
 
     `current` fully reflects a capture -- it is only the third of the seven
     `current` assets `_update_current` writes. A crash after it succeeds but
@@ -1006,7 +1006,7 @@ def test_a_crash_after_all_captures_but_before_fx_is_still_reconciled(tmp_path: 
     "reflected in current", because all-captures.parquet already has the
     capture's rows at that point) must still leave the capture out of the
     rebuilt manifest, so `_reconcile` picks its bundle back up and finishes
-    updating `fx.csv`, `stations.csv` and `costco-gas-latest.csv`.
+    updating `fx.csv`, `stations.csv` and `club-gas-latest.csv`.
     """
     inner = LocalReleaseStore(tmp_path / "releases")
     captures = tmp_path / "captures"
@@ -1018,8 +1018,8 @@ def test_a_crash_after_all_captures_but_before_fx_is_still_reconciled(tmp_path: 
     )
     publish(inner, zero_dir, cfg, now=NOW)
 
-    # September's first capture crashes right at fx.csv: costco-gas-all.parquet,
-    # costco-gas-all.csv.gz, costco-gas-all-captures.parquet, costco-gas-latest.csv
+    # September's first capture crashes right at fx.csv: club-gas-all.parquet,
+    # club-gas-all.csv.gz, club-gas-all-captures.parquet, club-gas-latest.csv
     # and stations.csv all land; fx.csv and manifest.json (and so
     # merged_captures) never do.
     crashy = CrashOnceStore(inner, "current", "fx.csv")
@@ -1035,7 +1035,7 @@ def test_a_crash_after_all_captures_but_before_fx_is_still_reconciled(tmp_path: 
     # not, and no month manifest was ever written.
     assert not any(a.name == "manifest-2026-09.json" for a in inner.list_assets("data-2026-09"))
     captures_all_before = pl.read_parquet(
-        inner.download("current", "costco-gas-all-captures.parquet", tmp_path / "ac-before.parquet")
+        inner.download("current", "club-gas-all-captures.parquet", tmp_path / "ac-before.parquet")
     )
     assert "2026-09-15T0017Z" in captures_all_before["capture_id"].to_list()
     fx_before = pl.read_csv(
@@ -1076,7 +1076,7 @@ def test_a_crash_after_all_captures_but_before_fx_is_still_reconciled(tmp_path: 
     assert "TW-Xinzhuang" in stations["station_key"].to_list()
 
     latest = pl.read_csv(
-        inner.download("current", "costco-gas-latest.csv", tmp_path / "latest-final.csv"),
+        inner.download("current", "club-gas-latest.csv", tmp_path / "latest-final.csv"),
         schema=schema.ROW_SCHEMA,
     )
     # 09-16 only republishes Chungli/95; Xinzhuang's newest rows must still be
@@ -1086,7 +1086,7 @@ def test_a_crash_after_all_captures_but_before_fx_is_still_reconciled(tmp_path: 
     assert xin["capture_id"].unique().to_list() == ["2026-09-15T0017Z"]
 
     captures_all = pl.read_parquet(
-        inner.download("current", "costco-gas-all-captures.parquet", tmp_path / "ac-final.parquet")
+        inner.download("current", "club-gas-all-captures.parquet", tmp_path / "ac-final.parquet")
     )
     assert set(captures_all["capture_id"].to_list()) == all_ids
     key_cols = captures_all.select(["capture_id", "station_key", "grade_raw"])
@@ -1173,7 +1173,7 @@ def test_a_merge_that_would_drop_a_capture_date_refuses_to_write(tmp_path: Path,
     )
     captured = publish_module.load_capture_dir(later)
     empty = pl.DataFrame(schema=schema.ROW_SCHEMA)
-    before = store.download("current", "costco-gas-all-captures.parquet", tmp_path / "before.pq")
+    before = store.download("current", "club-gas-all-captures.parquet", tmp_path / "before.pq")
     digest = sha256_file(before)
 
     with pytest.raises(StorageError, match=r"all-captures would lose capture dates"):
@@ -1181,7 +1181,7 @@ def test_a_merge_that_would_drop_a_capture_date_refuses_to_write(tmp_path: Path,
             store, cfg, captured, empty, tmp_path / "scratch", [], now=NOW
         )
 
-    after = store.download("current", "costco-gas-all-captures.parquet", tmp_path / "after.pq")
+    after = store.download("current", "club-gas-all-captures.parquet", tmp_path / "after.pq")
     assert sha256_file(after) == digest
 
 

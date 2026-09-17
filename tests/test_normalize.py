@@ -10,16 +10,16 @@ from types import SimpleNamespace
 import polars as pl
 import pytest
 
-from costco_gas.config import Bounds
-from costco_gas.fx import FxRates, FxRow
-from costco_gas.normalize import (
+from club_gas.config import Bounds
+from club_gas.fx import FxRates, FxRow
+from club_gas.normalize import (
     LITRES_PER_US_GALLON,
     normalize,
     parse_price,
     round_significant,
 )
-from costco_gas.schema import ROW_SCHEMA, STATION_SCHEMA, round_fx_columns, round_price_columns
-from costco_gas.sources.base import CaptureContext, FetchResult, RawPrice, RawStation
+from club_gas.schema import ROW_SCHEMA, STATION_SCHEMA, round_fx_columns, round_price_columns
+from club_gas.sources.base import CaptureContext, FetchResult, RawPrice, RawStation
 
 FIXTURES = Path(__file__).parent / "fixtures"
 

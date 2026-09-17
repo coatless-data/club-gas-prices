@@ -23,7 +23,7 @@ on:
 run-name: ${{ inputs.dry_run && 'Capture (dry run)' || 'Capture' }}
 
 concurrency:
-  group: costco-gas-data
+  group: club-gas-data
   cancel-in-progress: false
 
 permissions:
@@ -43,7 +43,7 @@ jobs:
       # the basemap block it writes into meta.json depends on this. Unset falls
       # back to OpenStreetMap tiles rather than failing.
       CARTO_BASEMAP_KEY: ${{ vars.CARTO_BASEMAP_KEY }}
-      COSTCO_GAS_WRITER: "1"
+      CLUB_GAS_WRITER: "1"
       COUNTRIES: ${{ inputs.countries || 'all' }}
       FORCE_FALLBACK: ${{ inputs.force_fallback || '' }}
     steps:
@@ -77,7 +77,7 @@ jobs:
       - name: Capture
         id: capture
         timeout-minutes: 15
-        run: uv run costco-gas capture --out out --countries "$COUNTRIES" --force-fallback "$FORCE_FALLBACK"
+        run: uv run club-gas capture --out out --countries "$COUNTRIES" --force-fallback "$FORCE_FALLBACK"
 
       - name: Upload the capture artifact
         if: ${{ always() }}
@@ -93,21 +93,21 @@ jobs:
         id: publish
         if: ${{ inputs.dry_run != true && steps.capture.outputs.all_failed != 'true' }}
         timeout-minutes: 10
-        run: uv run costco-gas publish out/capture
+        run: uv run club-gas publish out/capture
 
       - name: Close periods
         id: close
         if: ${{ steps.publish.outcome == 'success' }}
         continue-on-error: true
         timeout-minutes: 10
-        run: uv run costco-gas close-periods
+        run: uv run club-gas close-periods
 
       - name: Alerts
         if: ${{ !cancelled() && inputs.dry_run != true && steps.capture.outcome == 'success' }}
         continue-on-error: true
         timeout-minutes: 5
         run: |
-          uv run costco-gas alerts out/capture/status.json \
+          uv run club-gas alerts out/capture/status.json \
             --publish-outcome "${{ steps.publish.outcome }}" \
             --close-outcome "${{ steps.close.outcome }}"
 

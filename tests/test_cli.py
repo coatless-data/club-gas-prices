@@ -1,4 +1,4 @@
-"""Tests for the costco-gas command line."""
+"""Tests for the club-gas command line."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from typing import ClassVar
 
 import pytest
 
-from costco_gas import cli
+from club_gas import cli
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -51,10 +51,10 @@ def test_open_configured_store_defaults_to_the_project_repo(monkeypatch):
         captured["spec"] = spec
 
     monkeypatch.setattr(cli, "open_store", fake_open_store)
-    monkeypatch.delenv("COSTCO_GAS_STORE", raising=False)
+    monkeypatch.delenv("CLUB_GAS_STORE", raising=False)
     cli.open_configured_store()
-    assert captured["spec"] == "github:coatless-datasets/costco-gas-prices"
-    monkeypatch.setenv("COSTCO_GAS_STORE", "local:./releases")
+    assert captured["spec"] == "github:coatless-datasets/club-gas-prices"
+    monkeypatch.setenv("CLUB_GAS_STORE", "local:./releases")
     cli.open_configured_store()
     assert captured["spec"] == "local:./releases"
 
@@ -62,7 +62,7 @@ def test_open_configured_store_defaults_to_the_project_repo(monkeypatch):
 def test_capture_subcommand_calls_run_capture_and_prints_json(tmp_path, monkeypatch, capsys):
     shutil.copytree(REPO_ROOT / "config", tmp_path / "config")
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("COSTCO_GAS_STORE", f"local:{tmp_path / 'releases'}")
+    monkeypatch.setenv("CLUB_GAS_STORE", f"local:{tmp_path / 'releases'}")
 
     seen = {}
 
@@ -87,7 +87,7 @@ def test_capture_subcommand_calls_run_capture_and_prints_json(tmp_path, monkeypa
 def test_publish_subcommand_calls_publish(tmp_path, monkeypatch, capsys):
     shutil.copytree(REPO_ROOT / "config", tmp_path / "config")
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("COSTCO_GAS_STORE", f"local:{tmp_path / 'releases'}")
+    monkeypatch.setenv("CLUB_GAS_STORE", f"local:{tmp_path / 'releases'}")
 
     seen = {}
 

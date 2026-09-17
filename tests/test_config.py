@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from costco_gas.config import ConfigError, load_config
+from club_gas.config import ConfigError, load_config
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -38,9 +38,9 @@ def test_http_policy(cfg):
     # appended (research responses/id_price_ua_token.meta.json).
     assert http.costco_user_agent.startswith("Mozilla/5.0 ")
     assert http.costco_user_agent.endswith("Safari/537.36")
-    assert "costco-gas-prices" not in http.costco_user_agent
-    assert http.project_user_agent.startswith("costco-gas-prices/")
-    assert http.x_project == "https://github.com/coatless-datasets/costco-gas-prices"
+    assert "club-gas-prices" not in http.costco_user_agent
+    assert http.project_user_agent.startswith("club-gas-prices/")
+    assert http.x_project == "https://github.com/coatless-datasets/club-gas-prices"
     assert "costco.com" in http.costco_host_suffixes
     assert "costco.co.jp" in http.costco_host_suffixes
 

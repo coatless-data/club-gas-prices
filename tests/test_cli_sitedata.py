@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from costco_gas import cli
+from club_gas import cli
 
 
 def test_site_data_subcommand_passes_the_directories(tmp_path, monkeypatch):

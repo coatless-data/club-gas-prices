@@ -10,8 +10,8 @@ from urllib.parse import urlencode
 
 import polars as pl
 
-from costco_gas.http import BudgetExceeded
-from costco_gas.sources.base import (
+from club_gas.http import BudgetExceeded
+from club_gas.sources.base import (
     CaptureContext,
     Error,
     FetchResult,

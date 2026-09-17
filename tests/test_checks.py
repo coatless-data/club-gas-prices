@@ -8,16 +8,16 @@ from types import SimpleNamespace
 import polars as pl
 import pytest
 
-from costco_gas.checks import (
+from club_gas.checks import (
     all_failed,
     build_status,
     evaluate_country,
     price_fingerprint,
 )
-from costco_gas.fx import FxRates, FxRow
-from costco_gas.normalize import Drop, NormalizedCountry
-from costco_gas.schema import ROW_SCHEMA, STATION_SCHEMA
-from costco_gas.sources.base import (
+from club_gas.fx import FxRates, FxRow
+from club_gas.normalize import Drop, NormalizedCountry
+from club_gas.schema import ROW_SCHEMA, STATION_SCHEMA
+from club_gas.sources.base import (
     CaptureContext,
     Error,
     FetchResult,
