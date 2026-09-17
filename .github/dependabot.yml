@@ -42,13 +42,6 @@ updates:
       python:
         patterns:
           - "*"
-        exclude-patterns:
-          # playwright is the only gate on the Pages deploy, and no pull
-          # request check runs the smoke test -- test.yml ignores tests/smoke
-          # and never installs this group. So it never rides along inside
-          # somebody else's PR: it gets its own, and whoever merges it runs
-          # `uv sync --locked --group smoke` and the smoke test locally first.
-          - "playwright"
         update-types:
           - "minor"
           - "patch"

@@ -5,6 +5,8 @@ the United Kingdom, Australia, Japan and Taiwan, collected four times a day from
 Costco's own public websites, stored by day, and published as GitHub Releases.
 
 **Dashboard:** <https://dashboard.thecoatlessprofessor.com/costco-gas-prices/>
+ · built from this repository's releases by
+[coatless-dashboard/costco-gas-prices](https://github.com/coatless-dashboard/costco-gas-prices)
 
 > [!IMPORTANT]
 > Unofficial. Not affiliated with, endorsed by, or connected to Costco Wholesale
@@ -12,6 +14,14 @@ Costco's own public websites, stored by day, and published as GitHub Releases.
 > the price at the pump.
 
 ## Using the dashboard
+
+The site lives in its own repository and holds no collection code. It reads five
+files this repository publishes into the `current` release under a `site-` prefix,
+each checksummed in `manifest.json`: `site-meta.json`, `site-latest.json`,
+`site-stations.json`, `site-summary-daily.parquet` and `site-history.parquet`.
+`publish` builds them from the same frames it writes the dataset from, inside the
+same transaction, so the site can never show one capture's map over another
+capture's history.
 
 | Page | What it shows |
 |---|---|
@@ -167,7 +177,7 @@ so the two dates differ for part of each day. Charts use `capture_date`.
 
 ```
 .
-├── pyproject.toml            # uv project; console script `costco-gas`; dependency group `smoke`
+├── pyproject.toml            # uv project; console script `costco-gas`
 ├── uv.lock
 ├── .python-version           # 3.13
 ├── src/costco_gas/
@@ -187,7 +197,7 @@ so the two dates differ for part of each day. Charts use `capture_date`.
 │   ├── issues.py              # open/refresh/close issue helper
 │   ├── alerts.py              # capture-related issues
 │   ├── discover.py            # monthly US id sweep
-│   └── sitedata.py            # site/data/*.json and *.parquet
+│   └── sitedata.py            # the dashboard's five files, uploaded to `current`
 ├── config/
 │   ├── http.toml              # UA, deadlines, budgets, retries, pacing
 │   ├── countries.toml         # URLs, params, units, region→timezone tables, bounds, floors
@@ -196,11 +206,10 @@ so the two dates differ for part of each day. Charts use `capture_date`.
 │   ├── station_links.csv       # old_station_key,new_station_key,effective_date,note
 │   └── site.toml               # basemap providers, notice text
 ├── status/latest.json         # committed after every non-dry capture
-├── site/                      # index.qmd, custom.scss, dark.scss, data/ (gitignored)
-├── tests/                     # unit tests, fixtures/, smoke/
+├── tests/                     # unit tests, fixtures/
 └── .github/
     ├── dependabot.yml
-    └── workflows/              # test.yml, capture.yml, render.yml, discover.yml, rebuild.yml
+    └── workflows/              # test.yml, capture.yml, discover.yml, rebuild.yml
 ```
 
 ## Running it
@@ -221,13 +230,15 @@ Publishing to the GitHub store from a local machine is unsupported: release writ
 require both `GITHUB_TOKEN` and `COSTCO_GAS_WRITER=1`, which only `capture.yml` and
 `rebuild.yml` set.
 
-Preview the dashboard:
+Check what the dashboard would receive, without publishing:
 
 ```bash
 gh release download current -R coatless-datasets/costco-gas-prices -D state/current
 uv run costco-gas site-data --current state/current --out site/data
-quarto preview site/index.qmd
 ```
+
+To render them, clone the dashboard and point it at that directory; its README has
+the steps.
 
 Run the checks:
 

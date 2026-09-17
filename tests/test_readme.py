@@ -140,7 +140,6 @@ def test_running_it_matches_the_supported_commands():
     assert "uv run costco-gas capture --out out" in text
     assert "COSTCO_GAS_STORE=local:./releases uv run costco-gas publish out/capture" in text
     assert "uv run costco-gas site-data --current state/current --out site/data" in text
-    assert "quarto preview site/index.qmd" in text
     assert "Publishing to the GitHub store from a local machine is unsupported" in flowed()
 
 

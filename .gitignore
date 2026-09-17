@@ -12,12 +12,8 @@ dist/
 # Kept locally, never published.
 docs/
 
-# Quarto build output and generated site data
-site/_site/
-site/.quarto/
+# `costco-gas site-data` output, checked locally against the dashboard.
 site/data/
-_site/
-.quarto/
 
 # Local capture output and downloaded release state
 out/
