@@ -536,7 +536,7 @@ def _rebuild_current_impl(store, cfg, *, now: datetime) -> None:
     `current` while silently dropping that asset: `DAILY_ASSET` never matches a
     `.next-`/`.old-` name (spec review round 4, Finding 3). Recovery is
     idempotent, so calling it again here when `close_periods` already did costs
-    only an extra listing, never a behaviour change.
+    only an extra listing, never a behavior change.
     """
     _recover_all(store)
     token = _token(now)

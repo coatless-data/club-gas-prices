@@ -264,7 +264,7 @@ def _as_float(value: object) -> float | None:
 def _is_reportable(prices: dict, low: float, high: float) -> bool:
     regular = _as_float(prices.get("regular"))
     if regular is None:
-        # Premium-only rows are the unattended business-centre placeholders.
+        # Premium-only rows are the unattended business-center placeholders.
         return False
     if not (low <= regular <= high):
         # Below the floor is a per-litre listing (Puerto Rico #335 at 1.097) or

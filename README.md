@@ -15,7 +15,7 @@ Costco's own public websites, stored by day, and published as GitHub Releases.
 
 | Page | What it shows |
 |---|---|
-| Map | Every station with coordinates, coloured by rank within its country or on an absolute USD scale. The popup gives the published price, the local price, the USD price, the exchange rate used and the age of the reading. |
+| Map | Every station with coordinates, colored by rank within its country or on an absolute USD scale. The popup gives the published price, the local price, the USD price, the exchange rate used and the age of the reading. |
 | Compare | One row per country for the selected grade: median, p25–p75 and the number of stations, in USD or in local currency. |
 | Trends | Daily medians over time for every country, and regional series for one country at a time. |
 | Station | One station's price history per grade, against its regional median and the five nearest active stations. Deep-linkable as `?station=<station_key>#station`. |
@@ -268,5 +268,5 @@ Without a key it falls back to OpenStreetMap tiles: © OpenStreetMap contributor
 
 ## License
 
-The code is MIT licensed. The data files carry no licence claim and include the notice
+The code is MIT licensed. The data files carry no license claim and include the notice
 above; they are derived from Costco's public websites.
