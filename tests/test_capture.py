@@ -114,8 +114,20 @@ def test_minimal_run_writes_status_and_exit_outputs(workspace: Path):
     assert result.capture_id == CAPTURE_ID
     assert result.out == workspace / "out" / "capture"
     assert status["capture_id"] == CAPTURE_ID
+    assert set(status["feeds"]) == {
+        "US-COSTCO",
+        "CA-COSTCO",
+        "MX-COSTCO",
+        "GB-COSTCO",
+        "AU-COSTCO",
+        "JP-COSTCO",
+        "TW-COSTCO",
+        "US-SAMS",
+    }
+    assert {block["status"] for block in status["feeds"].values()} == {"skipped"}
+    # The country roll-up is derived, and reads as badly as its worst feed.
     assert set(status["countries"]) == {"US", "CA", "MX", "GB", "AU", "JP", "TW"}
-    assert {block["status"] for block in status["countries"].values()} == {"skipped"}
+    assert status["countries"]["US"]["feeds"] == ["US-COSTCO", "US-SAMS"]
     # No country succeeded, so the workflow gate must fail the run.
     assert result.all_failed is True
     # The current release is empty, so both previous frames are missing.
@@ -172,13 +184,13 @@ def test_taiwan_capture_writes_per_country_and_capture_outputs(workspace: Path):
     )
 
     status = result.status
-    assert status["countries"]["TW"]["status"] == "ok"
-    assert status["countries"]["TW"]["stations"] == 3
-    assert status["countries"]["TW"]["rows"] == 7
-    assert status["countries"]["US"]["status"] == "skipped"
+    assert status["feeds"]["TW-COSTCO"]["status"] == "ok"
+    assert status["feeds"]["TW-COSTCO"]["stations"] == 3
+    assert status["feeds"]["TW-COSTCO"]["rows"] == 7
+    assert status["feeds"]["US-COSTCO"]["status"] == "skipped"
     assert result.all_failed is False
 
-    country_dir = workspace / "out" / "countries" / "TW"
+    country_dir = workspace / "out" / "feeds" / "TW-COSTCO"
     assert (country_dir / "rows.csv.gz").exists()
     assert (country_dir / "stations.csv").exists()
     assert (country_dir / "drops.csv").exists()
@@ -246,7 +258,7 @@ def test_bundle_holds_the_spec_8_2_contents(workspace: Path):
         "config/http.toml",
     ):
         assert required in names, required
-    assert any(n.startswith("responses/TW/") for n in names)
+    assert any(n.startswith("responses/TW-COSTCO/") for n in names)
     assert capture_json["capture_id"] == CAPTURE_ID
     assert capture_json["capture_date"] == "2026-09-15"
     assert set(capture_json["config_sha256"]) >= {"countries.toml", "grades.csv"}
@@ -267,7 +279,7 @@ def test_a_blocked_country_fails_alone_and_sets_all_failed(workspace: Path):
         client=client,
     )
 
-    assert result.status["countries"]["TW"]["status"] == "failed"
+    assert result.status["feeds"]["TW-COSTCO"]["status"] == "failed"
     assert result.all_failed is True
     # status.json is still written, so the command still exits 0 (spec 5.3 step 6).
     assert (workspace / "out" / "capture" / "status.json").exists()
@@ -346,7 +358,7 @@ def test_ecom_api_is_not_fetched_when_neither_us_nor_ca_is_selected(workspace: P
 # status.json was already durable, so a metadata glitch that `fetch_us`'s own
 # (guarded) call to the same function would otherwise degrade gracefully
 # instead crashed the whole capture uncaught. The fix computes the frame once,
-# inside `run_country`'s guarded US path, and carries it forward; `_us_id_set`
+# inside `run_feed`'s guarded US path, and carries it forward; `_us_id_set`
 # only ever reads it back. The two tests below cover, respectively, that the
 # frame is carried rather than recomputed, and that a bundle-stage failure
 # (of any kind) is recorded as a warning instead of propagating.
@@ -369,7 +381,7 @@ def test_us_id_set_is_read_from_collected_and_never_recomputed(monkeypatch):
     assert us_failed.height == 0
     assert us_failed.columns == list(capture_module.US_ID_SET_SCHEMA)
 
-    # US present with a frame already computed by run_country: read back
+    # US present with a frame already computed by run_feed: read back
     # exactly, with no second call to polled_id_frame (the monkeypatch above
     # would have raised had one happened).
     frame = pl.DataFrame(
@@ -404,7 +416,7 @@ def test_a_bundle_failure_is_recorded_as_a_warning_and_never_fatal(workspace: Pa
     )
 
     # The country itself is unaffected; only the bundle step blew up.
-    assert result.status["countries"]["TW"]["status"] == "ok"
+    assert result.status["feeds"]["TW-COSTCO"]["status"] == "ok"
     assert "bundle_failed" in {w["code"] for w in result.status["warnings"]}
     detail = next(w["detail"] for w in result.status["warnings"] if w["code"] == "bundle_failed")
     assert "disk exploded" in detail
@@ -474,12 +486,12 @@ def test_three_countries_run_concurrently_without_cross_talk(workspace: Path):
         "MX": (4, 8, mx_body),
     }
     for cc, (n_stations, n_rows, body) in expected.items():
-        block = result.status["countries"][cc]
+        block = result.status["feeds"][f"{cc}-COSTCO"]
         assert block["status"] in ("ok", "degraded"), (cc, block["status"])
         assert block["stations"] == n_stations
         assert block["rows"] == n_rows
 
-        country_dir = workspace / "out" / "countries" / cc
+        country_dir = workspace / "out" / "feeds" / f"{cc}-COSTCO"
         response_bodies = list((country_dir / "responses").glob("*.body"))
         assert len(response_bodies) == 1, (cc, response_bodies)
         # Each directory holds exactly its own country's raw response: a race
@@ -498,7 +510,7 @@ def test_three_countries_run_concurrently_without_cross_talk(workspace: Path):
     assert result.all_failed is False
 
 
-# Finding 3 (Important): the exception-isolation branch in `run_country` (the
+# Finding 3 (Important): the exception-isolation branch in `run_feed` (the
 # `except Exception` that writes traceback.txt) was never exercised by a test
 # -- the existing TW-COSTCO-403 test returns a graceful FetchResult, it never raises.
 # This test makes one country's `fetch` genuinely raise and checks that only
@@ -513,7 +525,7 @@ def test_a_raising_source_fails_only_that_country_and_records_its_traceback(
     def boom(client, ctx):
         raise RuntimeError("boom: JP fetch exploded")
 
-    monkeypatch.setattr(capture_module.SOURCES["JP"], "fetch", boom)
+    monkeypatch.setattr(capture_module.SOURCES["JP-COSTCO"], "fetch", boom)
 
     cfg = load_config(workspace)
     store = LocalReleaseStore(workspace / "releases")
@@ -529,12 +541,12 @@ def test_a_raising_source_fails_only_that_country_and_records_its_traceback(
         client=client,
     )
 
-    jp_block = result.status["countries"]["JP"]
+    jp_block = result.status["feeds"]["JP-COSTCO"]
     assert jp_block["status"] == "failed"
     assert any(e["code"] == "exception" for e in jp_block["errors"])
     assert "boom: JP fetch exploded" in jp_block["errors"][-1]["detail"]
 
-    jp_dir = workspace / "out" / "countries" / "JP"
+    jp_dir = workspace / "out" / "feeds" / "JP-COSTCO"
     traceback_text = (jp_dir / "traceback.txt").read_text(encoding="utf-8")
     assert "RuntimeError" in traceback_text
     assert "boom: JP fetch exploded" in traceback_text
@@ -544,8 +556,8 @@ def test_a_raising_source_fails_only_that_country_and_records_its_traceback(
     assert (jp_dir / "drops.csv").exists()
 
     # TW is unaffected by JP's crash.
-    assert result.status["countries"]["TW"]["status"] == "ok"
-    tw_dir = workspace / "out" / "countries" / "TW"
+    assert result.status["feeds"]["TW-COSTCO"]["status"] == "ok"
+    tw_dir = workspace / "out" / "feeds" / "TW-COSTCO"
     assert (tw_dir / "rows.csv.gz").exists()
     rows = pl.read_csv(workspace / "out" / "capture" / "rows.csv.gz")
     assert set(rows["country"].unique().to_list()) == {"TW"}
@@ -624,7 +636,7 @@ def run_ca_and_us(workspace: Path, store: LocalReleaseStore, out: str) -> dict:
 def test_an_unreadable_current_degrades_ca_through_its_own_country_block(workspace: Path):
     """Spec 5.3 step 1 and 6.5: `previous_state_unavailable` makes US and CA degraded.
 
-    `checks.evaluate_country` only ever inspects a country's own `warning_codes`,
+    `checks.evaluate_feed` only ever inspects a country's own `warning_codes`,
     so recording this on the capture-level list alone left US and CA reporting
     `ok` while running without their `seen` ids and, for CA, without the cached
     metadata its fallback needs.
@@ -635,10 +647,10 @@ def test_an_unreadable_current_degrades_ca_through_its_own_country_block(workspa
     assert "previous_state_unavailable" in {w["code"] for w in missing["warnings"]}
     for code in ("US", "CA"):
         assert "previous_state_unavailable" in {
-            w["code"] for w in missing["countries"][code]["warnings"]
+            w["code"] for w in missing["feeds"][f"{code}-COSTCO"]["warnings"]
         }
-    assert missing["countries"]["CA"]["status"] == "degraded"
-    assert missing["countries"]["CA"]["rows"] > 0
+    assert missing["feeds"]["CA-COSTCO"]["status"] == "degraded"
+    assert missing["feeds"]["CA-COSTCO"]["rows"] > 0
 
     store = LocalReleaseStore(workspace / "releases-seeded")
     seed_current_state(store, workspace)
@@ -647,11 +659,11 @@ def test_an_unreadable_current_degrades_ca_through_its_own_country_block(workspa
     assert "previous_state_unavailable" not in {w["code"] for w in present["warnings"]}
     for code in ("US", "CA"):
         assert "previous_state_unavailable" not in {
-            w["code"] for w in present["countries"][code]["warnings"]
+            w["code"] for w in present["feeds"][f"{code}-COSTCO"]["warnings"]
         }
     # Same responses, same floor: the only thing that changed is the previous state.
-    assert present["countries"]["CA"]["status"] == "ok"
-    assert present["countries"]["CA"]["rows"] == missing["countries"]["CA"]["rows"]
+    assert present["feeds"]["CA-COSTCO"]["status"] == "ok"
+    assert present["feeds"]["CA-COSTCO"]["rows"] == missing["feeds"]["CA-COSTCO"]["rows"]
 
 
 def set_budgets(workspace: Path, **values: float) -> None:
@@ -697,4 +709,4 @@ def test_capture_takes_its_deadlines_from_the_budgets_table(workspace: Path):
     keys = [entry["key"] for entry in client.log]
     assert not [key for key in keys if key.startswith("fx/") or key == "shared/ecom-api"]
     # US still ran on the default country budget, which the table left alone.
-    assert [key for key in keys if key.startswith("US/")]
+    assert [key for key in keys if key.startswith("US-COSTCO/")]

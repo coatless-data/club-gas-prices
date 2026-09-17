@@ -35,7 +35,7 @@ def dedupe_daily(rows: pl.DataFrame, cfg) -> pl.DataFrame:
     """
     rows = rows.filter(pl.col("grade") != "other")
     priorities = _priority_frame(rows, cfg)
-    rows = rows.join(priorities, on=["country", "grade_raw"], how="left").with_columns(
+    rows = rows.join(priorities, on=["country", "brand", "grade_raw"], how="left").with_columns(
         pl.col("_priority").fill_null(0)
     )
     return (
@@ -49,19 +49,25 @@ def dedupe_daily(rows: pl.DataFrame, cfg) -> pl.DataFrame:
 
 
 def _priority_frame(rows: pl.DataFrame, cfg) -> pl.DataFrame:
-    pairs = rows.select("country", "grade_raw").unique().rows()
+    pairs = rows.select("country", "brand", "grade_raw").unique().rows()
     table = getattr(cfg, "grades", None)
     priorities = []
-    for country, grade_raw in pairs:
-        entry = table.map(country, grade_raw) if table is not None else None
+    for country, brand, grade_raw in pairs:
+        entry = table.map(country, brand, grade_raw) if table is not None else None
         priorities.append(int(getattr(entry, "priority", 0) or 0))
     return pl.DataFrame(
         {
             "country": [pair[0] for pair in pairs],
-            "grade_raw": [pair[1] for pair in pairs],
+            "brand": [pair[1] for pair in pairs],
+            "grade_raw": [pair[2] for pair in pairs],
             "_priority": priorities,
         },
-        schema={"country": pl.String, "grade_raw": pl.String, "_priority": pl.Int64},
+        schema={
+            "country": pl.String,
+            "brand": pl.String,
+            "grade_raw": pl.String,
+            "_priority": pl.Int64,
+        },
     )
 
 

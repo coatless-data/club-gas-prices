@@ -23,7 +23,15 @@ from .fx import FxRates, fetch_rates
 from .http import BudgetExceeded, Client
 from .normalize import normalize
 from .sources import us as us_source
-from .sources.base import SOURCES, CaptureContext, Error, FetchResult, RawResponse, Warning
+from .sources.base import (
+    SOURCES,
+    CaptureContext,
+    Error,
+    FetchResult,
+    RawResponse,
+    Warning,
+    feeds_for,
+)
 from .store import ReleaseStore, sha256_file
 
 # Paths are relative to the repository checkout the CLI runs in (capture.yml
@@ -230,7 +238,8 @@ def run_capture(
             ctx.shared["ecom-api"] = resp
             write_response(out / "shared", resp, "ecom-api")
 
-    blocks, collected = _run_countries(countries, client, ctx, fx, out, now, warnings)
+    feeds = feeds_for(countries)
+    blocks, collected = _run_feeds(feeds, client, ctx, fx, out, now, warnings)
 
     rows = _concat(collected, "rows", schema.ROW_SCHEMA).sort(schema.ROW_SORT)
     stations = _concat(collected, "stations", schema.STATION_SCHEMA).sort(schema.STATION_SORT)
@@ -270,7 +279,7 @@ def run_capture(
         )
 
     all_failed = not any(
-        block.get("status") in ("ok", "degraded") for block in status.get("countries", {}).values()
+        block.get("status") in ("ok", "degraded") for block in status.get("feeds", {}).values()
     )
     github_output("all_failed", "true" if all_failed else "false")
     return CaptureResult(
@@ -286,21 +295,24 @@ def _concat(collected: dict[str, dict], key: str, frame_schema: dict) -> pl.Data
     return pl.concat(frames, how="vertical")
 
 
-def run_country(
-    country: str,
+def run_feed(
+    fid: str,
     client: Client,
     ctx: CaptureContext,
     fx: FxRates,
     out: Path,
     now: datetime,
 ) -> dict:
-    """Fetch, parse, normalize, check and write one country (spec 5.3 step 4).
+    """Fetch, parse, normalize, check and write one feed (spec 5.3 step 4).
+
+    The unit is the feed, not the country: the United States has two chains and
+    each is fetched, bounded and reported on separately.
 
     From the output directory's creation onward, everything is inside one try
     block, so an exception anywhere in this country's pipeline -- including an
     unknown-country lookup or a crash inside fetch/parse -- marks only this
     country failed (spec 10.1) instead of aborting the whole capture. Outputs
-    land in `out/countries/<CC>/` as soon as the country finishes, before the
+    land in `out/feeds/<feed>/` as soon as the feed finishes, before the
     other threads are done.
 
     For US, the polled-id frame for `inputs/us_id_set.csv` is computed here,
@@ -309,14 +321,15 @@ def run_country(
     malformed this call fails exactly where that one would, and is caught by
     the same `except` below. `_write_bundle` must never recompute it.
     """
-    directory = out / "countries" / country
+    country = SOURCES[fid].country
+    directory = out / "feeds" / fid
     responses: list[RawResponse] = []
     result: FetchResult | None = None
     normalized = None
     us_id_set: pl.DataFrame | None = None
     try:
         directory.mkdir(parents=True, exist_ok=True)
-        source = SOURCES[country]
+        source = SOURCES[fid]
         extra: list[Warning] = []
         try:
             with client.budget(f"country-{country}", key="country"):
@@ -324,13 +337,13 @@ def run_country(
         except BudgetExceeded:
             # A source that catches this itself returns its partial responses;
             # catching it here covers the ones that do not.
-            extra.append(Warning(code="deadline_exceeded", detail=country))
+            extra.append(Warning(code="deadline_exceeded", detail=fid))
         for resp in responses:
             write_response(directory / "responses", resp, resp.key.split("/")[-1])
         result = source.parse(responses, ctx)
         result.warnings.extend(extra)
         normalized = normalize(result, fx, ctx)
-        if country == "US":
+        if fid == "US-COSTCO":
             us_id_set = us_source.polled_id_frame(ctx)
     except Exception as exc:  # isolation is the point
         detail = f"{type(exc).__name__}: {exc}"
@@ -350,14 +363,14 @@ def run_country(
         us_id_set = None
 
     if country in PREVIOUS_STATE_COUNTRIES and not ctx.previous_state_complete:
-        # `checks.evaluate_country` only ever inspects this country's own warning
+        # `checks.evaluate_feed` only ever inspects this feed's own warning
         # list, so the capture-level warning `run_capture` records has to be
         # repeated here or spec 6.5's "makes US and CA degraded" never fires.
         # Appended after the try/except so it survives the failure path too,
         # which builds a fresh FetchResult with no warnings.
         result.warnings.append(Warning(code="previous_state_unavailable"))
 
-    block = checks.evaluate_country(country, result, normalized, ctx, now)
+    block = checks.evaluate_feed(fid, result, normalized, ctx, now)
 
     rows = normalized.rows if normalized else pl.DataFrame(schema=schema.ROW_SCHEMA)
     stations = normalized.stations if normalized else pl.DataFrame(schema=schema.STATION_SCHEMA)
@@ -384,8 +397,8 @@ def run_country(
     }
 
 
-def _run_countries(
-    countries: list[str],
+def _run_feeds(
+    feeds: list[str],
     client: Client,
     ctx: CaptureContext,
     fx: FxRates,
@@ -395,20 +408,18 @@ def _run_countries(
 ) -> tuple[dict[str, dict], dict[str, dict]]:
     blocks: dict[str, dict] = {}
     collected: dict[str, dict] = {}
-    if not countries:
+    if not feeds:
         return blocks, collected
     try:
         with (
             client.budget("capture"),
-            ThreadPoolExecutor(max_workers=len(countries)) as pool,
+            ThreadPoolExecutor(max_workers=max(1, len(feeds))) as pool,
         ):
-            futures = {
-                pool.submit(run_country, cc, client, ctx, fx, out, now): cc for cc in countries
-            }
+            futures = {pool.submit(run_feed, fid, client, ctx, fx, out, now): fid for fid in feeds}
             for future in as_completed(futures):
-                country = futures[future]
-                collected[country] = future.result()
-                blocks[country] = collected[country]["block"]
+                fid = futures[future]
+                collected[fid] = future.result()
+                blocks[fid] = collected[fid]["block"]
     except BudgetExceeded:
         if not any(item.code == "deadline_exceeded" for item in warnings):
             warnings.append(Warning(code="deadline_exceeded"))
@@ -479,7 +490,7 @@ def _write_bundle(
     )
     _us_id_set(collected).write_csv(stage / "inputs" / "us_id_set.csv")
 
-    countries_dir = out / "countries"
+    countries_dir = out / "feeds"
     if countries_dir.is_dir():
         for country_dir in sorted(countries_dir.iterdir()):
             responses = country_dir / "responses"

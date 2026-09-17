@@ -172,9 +172,13 @@ def make_capture_dir(
     status = {
         "schema_version": 1,
         "capture_id": capture_id,
-        "countries": {
-            "TW": {"status": tw_status, "stations": len(by_station), "rows": rows.height},
-            "JP": {"status": "failed", "stations": 0, "rows": 0},
+        "feeds": {
+            "TW-COSTCO": {
+                "status": tw_status,
+                "stations": len(by_station),
+                "rows": rows.height,
+            },
+            "JP-COSTCO": {"status": "failed", "stations": 0, "rows": 0},
         },
     }
     (directory / "status.json").write_text(json.dumps(status, indent=2), encoding="utf-8")
@@ -264,9 +268,9 @@ def test_first_publish_creates_current_and_the_month_release(tmp_path: Path, cfg
         store.download("current", "manifest.json", tmp_path / "cm.json").read_text()
     )
     assert current_manifest["status"]["capture_id"] == "2026-09-15T1817Z"
-    assert current_manifest["newest_capture_by_country"]["TW"] == "2026-09-15T1817Z"
+    assert current_manifest["newest_capture_by_feed"]["TW-COSTCO"] == "2026-09-15T1817Z"
     # JP failed, so it must not claim this capture as its newest.
-    assert "JP" not in current_manifest["newest_capture_by_country"]
+    assert "JP" not in current_manifest["newest_capture_by_feed"]
 
 
 def test_republishing_the_same_directory_changes_no_asset_content(tmp_path: Path, cfg):
@@ -356,7 +360,7 @@ def test_an_older_capture_does_not_move_the_stored_status(tmp_path: Path, cfg):
         store.download("current", "manifest.json", tmp_path / "cm.json").read_text()
     )
     assert manifest["status"]["capture_id"] == "2026-09-15T1817Z"
-    assert manifest["newest_capture_by_country"]["TW"] == "2026-09-15T1817Z"
+    assert manifest["newest_capture_by_feed"]["TW-COSTCO"] == "2026-09-15T1817Z"
     stations = pl.read_csv(
         store.download("current", "stations.csv", tmp_path / "s.csv"),
         schema=schema.STATION_SCHEMA,
@@ -447,7 +451,7 @@ def test_two_crashes_rebuild_the_manifest_and_reconcile_the_orphan(tmp_path: Pat
         store.download("current", "manifest.json", tmp_path / "cm.json").read_text()
     )
     assert current_manifest["status"]["capture_id"] == "2026-09-16T0017Z"
-    assert current_manifest["newest_capture_by_country"]["TW"] == "2026-09-16T0017Z"
+    assert current_manifest["newest_capture_by_feed"]["TW-COSTCO"] == "2026-09-16T0017Z"
 
 
 def test_a_missing_daily_file_that_the_manifest_records_raises(tmp_path: Path, cfg):
@@ -1188,7 +1192,7 @@ def test_a_merge_that_would_drop_a_capture_date_refuses_to_write(tmp_path: Path,
 
 
 def test_a_late_capture_leaves_station_metadata_and_status_alone(cfg):
-    """Spec 6.3: a capture older than its country's newest merged capture
+    """Spec 6.3: a capture older than its feed's newest merged capture
     touches only first_seen_utc, last_seen_utc and grades_seen.
 
     Metadata, alt_id and status stay as the newest capture left them. Without
@@ -1203,8 +1207,8 @@ def test_a_late_capture_leaves_station_metadata_and_status_alone(cfg):
     arriving = station_row("Chungli", late_at, {"Diesel"})
     arriving.update(name="Chungli", alt_id="111", city=None, status="active")
     incoming = pl.DataFrame([arriving], schema=schema.STATION_SCHEMA)
-    status = {"countries": {"TW": {"status": "ok"}}}
-    newest = {"TW": "2026-09-15T1817Z"}
+    status = {"feeds": {"TW-COSTCO": {"status": "ok"}}}
+    newest = {"TW-COSTCO": "2026-09-15T1817Z"}
 
     late = upsert_stations(
         previous, incoming, status, cfg.station_links, newest, "2026-09-15T0017Z"
@@ -1241,7 +1245,7 @@ def test_a_station_is_never_dropped_once_recorded(cfg):
     out = upsert_stations(
         previous,
         incoming,
-        {"countries": {"TW": {"status": "ok"}}},
+        {"feeds": {"TW-COSTCO": {"status": "ok"}}},
         cfg.station_links,
         {},
         "2026-09-20T1200Z",
@@ -1266,7 +1270,7 @@ def test_absent_is_missing_in_the_near_term_and_closed_after_the_threshold(cfg):
         return upsert_stations(
             previous,
             pl.DataFrame([], schema=schema.STATION_SCHEMA),
-            {"countries": {"TW": {"status": "ok"}}},
+            {"feeds": {"TW-COSTCO": {"status": "ok"}}},
             cfg.station_links,
             {},
             capture_id,
@@ -1288,7 +1292,7 @@ def test_a_closed_station_that_comes_back_is_active_again(cfg):
     out = upsert_stations(
         pl.DataFrame([stored], schema=schema.STATION_SCHEMA),
         pl.DataFrame([arriving], schema=schema.STATION_SCHEMA),
-        {"countries": {"TW": {"status": "ok"}}},
+        {"feeds": {"TW-COSTCO": {"status": "ok"}}},
         cfg.station_links,
         {},
         "2026-12-01T1200Z",

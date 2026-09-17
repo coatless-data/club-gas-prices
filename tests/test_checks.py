@@ -11,7 +11,7 @@ import pytest
 from club_gas.checks import (
     all_failed,
     build_status,
-    evaluate_country,
+    evaluate_feed,
     price_fingerprint,
 )
 from club_gas.fx import FxRates, FxRow
@@ -151,14 +151,19 @@ def fx_rates(status: str = "ok") -> FxRates:
 
 
 def previous_status(**country_blocks) -> dict:
-    return {"capture_id": "2026-09-15T1217Z", "countries": dict(country_blocks)}
+    """Keyed by feed. The kwargs stay country codes because an identifier
+    cannot contain a hyphen; every one of them is that country's Costco feed."""
+    return {
+        "capture_id": "2026-09-15T1217Z",
+        "feeds": {f"{code}-COSTCO": block for code, block in country_blocks.items()},
+    }
 
 
 # --- ok, degraded, failed, skipped -------------------------------------------
 
 
 def test_a_healthy_country_is_ok():
-    block = evaluate_country("AU", result("AU"), normalized("AU", 14), context(), NOW)
+    block = evaluate_feed("AU-COSTCO", result("AU"), normalized("AU", 14), context(), NOW)
     assert block["status"] == "ok"
     assert block["stations"] == 14
     assert block["rows"] == 14
@@ -172,13 +177,13 @@ def test_a_healthy_country_is_ok():
 
 
 def test_a_station_count_below_the_floor_is_degraded():
-    block = evaluate_country("AU", result("AU"), normalized("AU", 13), context(), NOW)
+    block = evaluate_feed("AU-COSTCO", result("AU"), normalized("AU", 13), context(), NOW)
     assert block["status"] == "degraded"
 
 
 def test_a_fallback_source_is_degraded():
-    block = evaluate_country(
-        "CA",
+    block = evaluate_feed(
+        "CA-COSTCO",
         result("CA", source="costco-ca-gasprices"),
         normalized("CA", 80, source="costco-ca-gasprices"),
         context(),
@@ -192,8 +197,8 @@ def test_a_us_costco_ca_lookup_fallback_source_is_degraded():
     # thing that can make this degraded is the "costco-ca-lookup-us" marker
     # normalize.row_source() sets when the US falls back to the costco.ca
     # warehouse lookup.
-    block = evaluate_country(
-        "US",
+    block = evaluate_feed(
+        "US-COSTCO",
         result("US", source="costco-ca-lookup-us"),
         normalized("US", 600, source="costco-ca-lookup-us"),
         context(),
@@ -206,8 +211,8 @@ def test_a_us_costco_ca_lookup_fallback_source_is_degraded():
     "code", ["metadata_from_cache", "previous_state_unavailable", "unknown_grade"]
 )
 def test_degrading_warnings(code):
-    block = evaluate_country(
-        "AU",
+    block = evaluate_feed(
+        "AU-COSTCO",
         result("AU", warnings=[Warning(code=code, detail="x")]),
         normalized("AU", 14),
         context(),
@@ -218,8 +223,8 @@ def test_degrading_warnings(code):
 
 
 def test_normalize_warnings_are_merged_into_the_block():
-    block = evaluate_country(
-        "AU",
+    block = evaluate_feed(
+        "AU-COSTCO",
         result("AU", warnings=[Warning(code="deadline_exceeded", detail="AU")]),
         normalized("AU", 14, warnings=[Warning(code="no_regular", detail="109")]),
         context(),
@@ -231,18 +236,24 @@ def test_normalize_warnings_are_merged_into_the_block():
 
 def test_more_than_five_percent_out_of_bounds_is_degraded():
     drops = [Drop("90", "out_of_bounds", "regular=1.929 USD/gal")]
-    block = evaluate_country("AU", result("AU"), normalized("AU", 18, drops=drops), context(), NOW)
+    block = evaluate_feed(
+        "AU-COSTCO", result("AU"), normalized("AU", 18, drops=drops), context(), NOW
+    )
     assert block["dropped"] == {"out_of_bounds": 1}
     assert block["status"] == "degraded"  # 1 / 19 = 5.3%
 
     drops = [Drop("90", "out_of_bounds", "regular=1.929 USD/gal")]
-    block = evaluate_country("AU", result("AU"), normalized("AU", 19, drops=drops), context(), NOW)
+    block = evaluate_feed(
+        "AU-COSTCO", result("AU"), normalized("AU", 19, drops=drops), context(), NOW
+    )
     assert block["status"] == "ok"  # 1 / 20 = 5.0%
 
 
 def test_other_drop_reasons_do_not_degrade():
     drops = [Drop("1838", "not_open", ""), Drop("1121", "no_price", "")]
-    block = evaluate_country("AU", result("AU"), normalized("AU", 14, drops=drops), context(), NOW)
+    block = evaluate_feed(
+        "AU-COSTCO", result("AU"), normalized("AU", 14, drops=drops), context(), NOW
+    )
     assert block["status"] == "ok"
     assert block["dropped"] == {"not_open": 1, "no_price": 1}
 
@@ -259,8 +270,8 @@ def test_no_rows_is_failed_and_bumps_the_counter():
         }
     )
     errors = [Error(code="http_error", host="www.costco.com.tw", http_status=403, detail="")]
-    block = evaluate_country(
-        "TW",
+    block = evaluate_feed(
+        "TW-COSTCO",
         result("TW", errors=errors),
         empty_normalized(),
         context(previous),
@@ -291,7 +302,7 @@ def test_recent_errors_keep_only_the_last_three():
             ],
         }
     )
-    block = evaluate_country("TW", result("TW"), empty_normalized(), context(previous), NOW)
+    block = evaluate_feed("TW-COSTCO", result("TW"), empty_normalized(), context(previous), NOW)
     assert len(block["recent_errors"]) == 3
     assert [entry["capture_id"] for entry in block["recent_errors"]] == [
         CAPTURE_ID,
@@ -309,7 +320,7 @@ def test_a_success_resets_the_counter_but_keeps_recent_errors():
             "recent_errors": [{"capture_id": "2026-09-15T1217Z", "run_url": "u1", "errors": []}],
         }
     )
-    block = evaluate_country("AU", result("AU"), normalized("AU", 14), context(previous), NOW)
+    block = evaluate_feed("AU-COSTCO", result("AU"), normalized("AU", 14), context(previous), NOW)
     assert block["status"] == "ok"
     assert block["consecutive_failures"] == 0
     assert block["last_success_capture_id"] == CAPTURE_ID
@@ -328,7 +339,7 @@ def test_a_country_that_was_not_selected_is_skipped_and_changes_nothing():
         "unchanged_since_capture_id": "2026-09-10T1817Z",
         "recent_errors": [{"capture_id": "2026-09-15T1217Z", "run_url": "u1", "errors": []}],
     }
-    block = evaluate_country("JP", None, None, context(previous_status(JP=carried)), NOW)
+    block = evaluate_feed("JP-COSTCO", None, None, context(previous_status(JP=carried)), NOW)
     assert block["status"] == "skipped"
     assert block["consecutive_failures"] == 2
     assert block["last_success_capture_id"] == "2026-09-13T1817Z"
@@ -348,18 +359,20 @@ def test_the_fingerprint_ignores_row_order():
 
 
 def test_an_unchanged_fingerprint_carries_its_capture_id_forward():
-    first = evaluate_country("AU", result("AU"), normalized("AU", 14), context(), NOW)
+    first = evaluate_feed("AU-COSTCO", result("AU"), normalized("AU", 14), context(), NOW)
     ctx = context(previous_status(AU=first), capture_id="2026-09-16T0017Z")
-    block = evaluate_country("AU", result("AU"), normalized("AU", 14), ctx, NOW)
+    block = evaluate_feed("AU-COSTCO", result("AU"), normalized("AU", 14), ctx, NOW)
     assert block["price_fingerprint"] == first["price_fingerprint"]
     assert block["unchanged_since_capture_id"] == CAPTURE_ID
     assert block["last_success_capture_id"] == "2026-09-16T0017Z"
 
 
 def test_a_changed_fingerprint_restarts_the_clock():
-    first = evaluate_country("AU", result("AU"), normalized("AU", 14), context(), NOW)
+    first = evaluate_feed("AU-COSTCO", result("AU"), normalized("AU", 14), context(), NOW)
     ctx = context(previous_status(AU=first), capture_id="2026-09-16T0017Z")
-    block = evaluate_country("AU", result("AU"), normalized("AU", 14, price_raw="2.157"), ctx, NOW)
+    block = evaluate_feed(
+        "AU-COSTCO", result("AU"), normalized("AU", 14, price_raw="2.157"), ctx, NOW
+    )
     assert block["price_fingerprint"] != first["price_fingerprint"]
     assert block["unchanged_since_capture_id"] == "2026-09-16T0017Z"
 
@@ -387,8 +400,8 @@ def test_staleness_uses_each_countrys_stale_after_days(country, n_stations, days
         }
     )
     now = datetime(2026, 9, 1, 18, 17, tzinfo=UTC) + timedelta(days=days, minutes=1)
-    block = evaluate_country(
-        country,
+    block = evaluate_feed(
+        f"{country}-COSTCO",
         result(country),
         normalized(country, n_stations),
         context(previous),
@@ -404,7 +417,7 @@ def test_staleness_uses_each_countrys_stale_after_days(country, n_stations, days
 def test_duration_spans_the_first_request_and_the_last_response():
     responses = [
         RawResponse(
-            key="AU/01-stores",
+            key="AU-COSTCO/01-stores",
             url="https://www.costco.com.au/rest/v2/australia/stores",
             status=200,
             headers={},
@@ -414,7 +427,7 @@ def test_duration_spans_the_first_request_and_the_last_response():
             error=None,
         ),
         RawResponse(
-            key="AU/02-stores",
+            key="AU-COSTCO/02-stores",
             url="https://www.costco.com.au/rest/v2/australia/stores",
             status=200,
             headers={},
@@ -424,8 +437,8 @@ def test_duration_spans_the_first_request_and_the_last_response():
             error=None,
         ),
     ]
-    block = evaluate_country(
-        "AU",
+    block = evaluate_feed(
+        "AU-COSTCO",
         result("AU", responses=responses, requests=2),
         normalized("AU", 14),
         context(),
@@ -458,7 +471,7 @@ def test_build_status_assembles_the_whole_document():
             "countries": {},
         }
     )
-    au = evaluate_country("AU", result("AU"), normalized("AU", 14), ctx, NOW)
+    au = evaluate_feed("AU-COSTCO", result("AU"), normalized("AU", 14), ctx, NOW)
     status = build_status(
         ctx,
         {"AU": au},
@@ -501,8 +514,8 @@ def test_build_status_assembles_the_whole_document():
 
 def test_build_status_fills_the_run_url_into_this_captures_recent_errors():
     ctx = context()
-    tw = evaluate_country(
-        "TW",
+    tw = evaluate_feed(
+        "TW-COSTCO",
         result(
             "TW",
             errors=[
@@ -521,13 +534,13 @@ def test_build_status_fills_the_run_url_into_this_captures_recent_errors():
     assert tw["recent_errors"][0]["run_url"] is None
     status = build_status(
         ctx,
-        {"TW": tw},
+        {"TW-COSTCO": tw},
         FxRates(status="failed", rows=[]),
         {"attempted": False, "http_status": None},
         NOW,
         {"run_id": 9, "run_attempt": 1, "run_url": "https://gh/runs/9"},
     )
-    entry = status["countries"]["TW"]["recent_errors"][0]
+    entry = status["feeds"]["TW-COSTCO"]["recent_errors"][0]
     assert entry["capture_id"] == CAPTURE_ID
     assert entry["run_url"] == "https://gh/runs/9"
     assert status["fx"] == {"status": "failed", "source": None, "rate_date": None}

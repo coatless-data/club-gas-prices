@@ -93,8 +93,10 @@ DEFAULT_TIMEZONES = {
 
 
 class FakeGradeTable:
-    def map(self, country: str, grade_raw: str):
-        found = GRADE_ROWS.get((country, grade_raw))
+    def map(self, country: str, brand: str, grade_raw: str):
+        # The fixture table is Costco-only, so brand narrows nothing yet -- but
+        # the signature has to match, or a Sam's label would silently map.
+        found = GRADE_ROWS.get((country, grade_raw)) if brand == "COSTCO" else None
         if found is None:
             return None
         return SimpleNamespace(

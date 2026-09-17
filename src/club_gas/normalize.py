@@ -136,12 +136,12 @@ def _source_filter(station: RawStation, capture_date: date) -> str | None:
     return None
 
 
-def _priced_before_open(station: RawStation, country: str, country_cfg, grades) -> bool:
+def _priced_before_open(station: RawStation, country: str, brand: str, country_cfg, grades) -> bool:
     """Spec 4.3: a station dropped as not_open/no_hours that still shows an
     in-bounds regular price is worth a warning."""
     unit = _price_unit(station, country_cfg)
     for raw in station.prices:
-        entry = grades.map(country, raw.grade_raw)
+        entry = grades.map(country, brand, raw.grade_raw)
         if entry is None or entry.grade != "regular":
             continue
         value = parse_price(raw.price_raw)
@@ -173,7 +173,7 @@ def normalize(result: FetchResult, fx: FxRates, ctx: CaptureContext) -> Normaliz
         reason = _source_filter(station, ctx.capture_date)
         if reason is not None:
             if reason in ("not_open", "no_hours") and _priced_before_open(
-                station, country, country_cfg, grades
+                station, country, brand, country_cfg, grades
             ):
                 warnings.append(Warning(code="priced_before_open", detail=sid))
             drops.append(Drop(sid, reason, ""))
@@ -189,7 +189,7 @@ def normalize(result: FetchResult, fx: FxRates, ctx: CaptureContext) -> Normaliz
             if value is None:
                 drops.append(Drop(sid, "unparseable_price", f"{raw.grade_raw}={raw.price_raw}"))
                 continue
-            entry = grades.map(country, raw.grade_raw)
+            entry = grades.map(country, brand, raw.grade_raw)
             if entry is None:
                 grade, priority = "other", 0
                 if raw.grade_raw not in unknown_labels:

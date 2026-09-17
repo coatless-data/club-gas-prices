@@ -1,24 +1,30 @@
-country,grade_raw,grade,priority,label,spec,spec_source,spec_source_url
-US,regular,regular,1,Regular,,,
-US,premium,premium,1,Premium,,,
-US,diesel,diesel,1,Diesel,,,
-US,clear,other,1,Clear,,,
-CA,regular,regular,1,Regular,,,
-CA,premium,premium,1,Premium,,,
-CA,diesel,diesel,1,Diesel,,,
-MX,Regular,regular,1,Regular,Octane index ([RON+MON]/2) at least 87,reported,https://api-reportediario.cne.gob.mx/api/EstacionServicio/Petroliferos
-MX,Premium,premium,1,Premium,,,
-GB,5301,regular,1,Unleaded Petrol,E10,reported,https://www.fuel-finder.uk/costco-fuel-prices
-GB,5302,premium,1,Premium Unleaded Petrol,E5 97,reported,https://www.fuel-finder.uk/costco-fuel-prices
-GB,5303,diesel,1,Premium Diesel,B7,reported,https://www.fuel-finder.uk/costco-fuel-prices
-AU,Unleaded 91,regular,2,Unleaded 91,91 RON,source,
-AU,E10,regular,1,E10,10% ethanol blend,source,
-AU,Premium 98,premium,1,Premium 98,98 RON,source,
-AU,Diesel,diesel,1,Diesel,Premium diesel,reported,https://www.fuelcheck.nsw.gov.au/fuel/api/v1/fuel/refData
-JP,Regular,regular,1,Regular,,,
-JP,Premium,premium,1,Premium,,,
-JP,Diesel,diesel,1,Diesel,,,
-JP,Kerosene,other,1,Kerosene,,,
-TW,95,regular,1,95,95 RON,source,
-TW,98,premium,1,98,98 RON,source,
-TW,Diesel,diesel,1,Diesel,,,
+brand,country,grade_raw,grade,priority,label,spec,spec_source,spec_source_url
+COSTCO,US,regular,regular,1,Regular,,,
+COSTCO,US,premium,premium,1,Premium,,,
+COSTCO,US,diesel,diesel,1,Diesel,,,
+COSTCO,US,clear,other,1,Clear,,,
+COSTCO,CA,regular,regular,1,Regular,,,
+COSTCO,CA,premium,premium,1,Premium,,,
+COSTCO,CA,diesel,diesel,1,Diesel,,,
+COSTCO,MX,Regular,regular,1,Regular,Octane index ([RON+MON]/2) at least 87,reported,https://api-reportediario.cne.gob.mx/api/EstacionServicio/Petroliferos
+COSTCO,MX,Premium,premium,1,Premium,,,
+COSTCO,GB,5301,regular,1,Unleaded Petrol,E10,reported,https://www.fuel-finder.uk/costco-fuel-prices
+COSTCO,GB,5302,premium,1,Premium Unleaded Petrol,E5 97,reported,https://www.fuel-finder.uk/costco-fuel-prices
+COSTCO,GB,5303,diesel,1,Premium Diesel,B7,reported,https://www.fuel-finder.uk/costco-fuel-prices
+COSTCO,AU,Unleaded 91,regular,2,Unleaded 91,91 RON,source,
+COSTCO,AU,E10,regular,1,E10,10% ethanol blend,source,
+COSTCO,AU,Premium 98,premium,1,Premium 98,98 RON,source,
+COSTCO,AU,Diesel,diesel,1,Diesel,Premium diesel,reported,https://www.fuelcheck.nsw.gov.au/fuel/api/v1/fuel/refData
+COSTCO,JP,Regular,regular,1,Regular,,,
+COSTCO,JP,Premium,premium,1,Premium,,,
+COSTCO,JP,Diesel,diesel,1,Diesel,,,
+COSTCO,JP,Kerosene,other,1,Kerosene,,,
+COSTCO,TW,95,regular,1,95,95 RON,source,
+COSTCO,TW,98,premium,1,98,98 RON,source,
+COSTCO,TW,Diesel,diesel,1,Diesel,,,
+SAMS,US,UNLEAD,regular,1,Regular,,,
+SAMS,US,PREMIUM,premium,1,Premium,,,
+SAMS,US,DIESEL,diesel,1,Diesel,,,
+SAMS,US,MIDGRAD,other,1,Mid-Grade,,,
+SAMS,US,MID CLR,other,1,Mid-Grade (clear),,,
+SAMS,US,PREM CLR,other,1,Premium (clear),,,

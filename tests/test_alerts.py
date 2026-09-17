@@ -10,6 +10,18 @@ from club_gas.store import open_store
 
 NOW = datetime(2026, 9, 15, 18, 19, 2, tzinfo=UTC)
 COUNTRIES = ("US", "CA", "MX", "GB", "AU", "JP", "TW")
+# Alerts are per feed now: two chains in one country cannot share an issue
+# title, because the title is the issue's identity.
+FEEDS = (
+    "US-COSTCO",
+    "CA-COSTCO",
+    "MX-COSTCO",
+    "GB-COSTCO",
+    "AU-COSTCO",
+    "JP-COSTCO",
+    "TW-COSTCO",
+    "US-SAMS",
+)
 
 
 def _country(status: str = "ok", **overrides) -> dict:
@@ -39,7 +51,7 @@ def _status(tmp_path: Path, **overrides) -> Path:
         "publish": {"outcome": None, "consecutive_failures": 0, "unpublished": []},
         "close": {},
         "warnings": [],
-        "countries": {code: _country() for code in COUNTRIES},
+        "feeds": {fid: _country() for fid in FEEDS},
     }
     document.update(overrides)
     path = tmp_path / "status.json"
@@ -188,8 +200,8 @@ def test_close_outcome_is_recorded(tmp_path, issues):
 
 
 def test_capture_failing_opens_at_three_consecutive_failures(tmp_path, issues):
-    countries = {code: _country() for code in COUNTRIES}
-    countries["JP"] = _country(
+    feeds = {fid: _country() for fid in FEEDS}
+    feeds["JP-COSTCO"] = _country(
         "failed",
         consecutive_failures=3,
         last_success_capture_id="2026-09-14T0617Z",
@@ -210,57 +222,59 @@ def test_capture_failing_opens_at_three_consecutive_failures(tmp_path, issues):
         ],
     )
     result = run_alerts(
-        _status(tmp_path, countries=countries),
+        _status(tmp_path, feeds=feeds),
         publish_outcome="success",
         close_outcome="success",
         store=_store(tmp_path),
         issues=issues,
         now=NOW,
     )
-    assert result["countries"]["JP"]["status"] == "failed"
-    assert "ensure_open: Capture failing: JP" in issues.actions
-    assert not [a for a in issues.actions if a.startswith("ensure_open: Capture failing: US")]
+    assert result["feeds"]["JP-COSTCO"]["status"] == "failed"
+    assert "ensure_open: Capture failing: JP-COSTCO" in issues.actions
+    assert not [
+        a for a in issues.actions if a.startswith("ensure_open: Capture failing: US-COSTCO")
+    ]
 
 
 def test_capture_failing_stays_shut_below_the_threshold(tmp_path, issues):
-    countries = {code: _country() for code in COUNTRIES}
-    countries["TW"] = _country("failed", consecutive_failures=2)
+    feeds = {fid: _country() for fid in FEEDS}
+    feeds["TW-COSTCO"] = _country("failed", consecutive_failures=2)
     run_alerts(
-        _status(tmp_path, countries=countries),
+        _status(tmp_path, feeds=feeds),
         publish_outcome="success",
         close_outcome="success",
         store=_store(tmp_path),
         issues=issues,
         now=NOW,
     )
-    assert "ensure_open: Capture failing: TW" not in issues.actions
+    assert "ensure_open: Capture failing: TW-COSTCO" not in issues.actions
 
 
 @pytest.mark.parametrize("country_status", ["ok", "degraded"])
 def test_capture_failing_closes_on_a_success(tmp_path, country_status):
     issues = Issues(None, None)
-    countries = {code: _country() for code in COUNTRIES}
-    countries["MX"] = _country(country_status)
+    feeds = {fid: _country() for fid in FEEDS}
+    feeds["MX-COSTCO"] = _country(country_status)
     run_alerts(
-        _status(tmp_path, countries=countries),
+        _status(tmp_path, feeds=feeds),
         publish_outcome="success",
         close_outcome="success",
         store=_store(tmp_path),
         issues=issues,
         now=NOW,
     )
-    assert "close: Capture failing: MX" in issues.actions
+    assert "close: Capture failing: MX-COSTCO" in issues.actions
 
 
 def test_a_skipped_country_changes_no_alert(tmp_path, issues):
-    countries = {code: _country() for code in COUNTRIES}
-    countries["GB"] = _country(
+    feeds = {fid: _country() for fid in FEEDS}
+    feeds["GB-COSTCO"] = _country(
         "skipped",
         consecutive_failures=5,
         warnings=[{"code": "unknown_grade", "detail": "5304"}],
     )
     run_alerts(
-        _status(tmp_path, countries=countries),
+        _status(tmp_path, feeds=feeds),
         publish_outcome="success",
         close_outcome="success",
         store=_store(tmp_path),
@@ -307,17 +321,17 @@ def test_ecom_api_not_attempted_touches_nothing(tmp_path, issues):
 
 
 def test_unknown_grade_opens_one_issue_per_label(tmp_path, issues):
-    countries = {code: _country() for code in COUNTRIES}
-    countries["AU"] = _country(
+    feeds = {fid: _country() for fid in FEEDS}
+    feeds["AU-COSTCO"] = _country(
         warnings=[
             {"code": "unknown_grade", "detail": "Premium 95"},
             {"code": "unknown_grade", "detail": "Premium 95"},
             {"code": "timezone_from_region", "detail": "109"},
         ]
     )
-    countries["JP"] = _country(warnings=[{"code": "unknown_grade", "detail": "Kerosene Winter"}])
+    feeds["JP-COSTCO"] = _country(warnings=[{"code": "unknown_grade", "detail": "Kerosene Winter"}])
     run_alerts(
-        _status(tmp_path, countries=countries),
+        _status(tmp_path, feeds=feeds),
         publish_outcome="success",
         close_outcome="success",
         store=_store(tmp_path),
@@ -326,8 +340,8 @@ def test_unknown_grade_opens_one_issue_per_label(tmp_path, issues):
     )
     opened = [a for a in issues.actions if a.startswith("ensure_open: Unknown grade label")]
     assert opened == [
-        "ensure_open: Unknown grade label: AU Premium 95",
-        "ensure_open: Unknown grade label: JP Kerosene Winter",
+        "ensure_open: Unknown grade label: AU-COSTCO Premium 95",
+        "ensure_open: Unknown grade label: JP-COSTCO Kerosene Winter",
     ]
 
 

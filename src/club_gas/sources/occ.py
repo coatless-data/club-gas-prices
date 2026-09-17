@@ -122,8 +122,12 @@ def tw_region(formatted: str | None) -> str | None:
 class OccSource:
     """Source for one OCC country."""
 
-    def __init__(self, country: str) -> None:
+    def __init__(self, country: str, brand: str = "COSTCO") -> None:
         self.country = country
+        self.brand = brand
+        # Every OCC country is Costco today, but the key prefix is the feed so
+        # the bundle layout and the rebuild's grouping do not care.
+        self.feed = f"{country}-{brand}"
 
     def fetch(self, client: Client, ctx: CaptureContext) -> list[RawResponse]:
         cc = ctx.fetch_config.countries[self.country]
@@ -135,7 +139,7 @@ class OccSource:
                 break
             try:
                 response = client.request(
-                    f"{self.country}/{page + 1:02d}-stores",
+                    f"{self.feed}/{page + 1:02d}-stores",
                     url,
                     headers={"Accept": "application/json"},
                     expect_json=True,
@@ -160,7 +164,7 @@ class OccSource:
     def parse(self, responses: list[RawResponse], ctx: CaptureContext) -> FetchResult:
         cc = ctx.interp_config.countries[self.country]
         mine = sorted(
-            (r for r in responses if r.key.startswith(f"{self.country}/")),
+            (r for r in responses if r.key.startswith(f"{self.feed}/")),
             key=lambda r: r.key,
         )
         warnings: list[Warning] = []

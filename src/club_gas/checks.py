@@ -11,7 +11,7 @@ import polars as pl
 
 from club_gas.fx import FxRates
 from club_gas.normalize import NormalizedCountry
-from club_gas.sources.base import CaptureContext, FetchResult
+from club_gas.sources.base import SOURCES, CaptureContext, FetchResult
 
 SCHEMA_VERSION = 1
 CAPTURE_ID_FORMAT = "%Y-%m-%dT%H%MZ"
@@ -67,9 +67,9 @@ def _iso(value) -> str | None:
     return value.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _previous_block(ctx: CaptureContext, country: str) -> dict:
+def _previous_block(ctx: CaptureContext, fid: str) -> dict:
     previous = ctx.previous_status or {}
-    return (previous.get("countries") or {}).get(country) or {}
+    return (previous.get("feeds") or {}).get(fid) or {}
 
 
 def _carried(previous: dict) -> dict:
@@ -104,20 +104,25 @@ def _is_stale(unchanged_since: str | None, now: datetime, stale_after_days: int)
     return now - since > timedelta(days=stale_after_days)
 
 
-def evaluate_country(
-    country: str,
+def evaluate_feed(
+    fid: str,
     result: FetchResult | None,
     normalized: NormalizedCountry | None,
     ctx: CaptureContext,
     now: datetime,
 ) -> dict:
-    """The spec 6.5 per-country block.
+    """The spec 6.5 per-feed block.
 
-    `result is None` means the country was not selected by --countries, which is
-    `skipped`. A country whose fetch raised is passed a FetchResult carrying the
+    `result is None` means the feed was not selected by --countries, which is
+    `skipped`. A feed whose fetch raised is passed a FetchResult carrying the
     error and no stations, which makes it `failed`.
+
+    The unit is the feed, not the country: two chains in one country have their
+    own floors, their own fingerprints and their own failure streaks, and a
+    block saying only "US degraded" would not say which chain to go and look at.
     """
-    previous = _previous_block(ctx, country)
+    country = SOURCES[fid].country if fid in SOURCES else fid
+    previous = _previous_block(ctx, fid)
 
     if result is None:
         block = {
@@ -200,6 +205,43 @@ def evaluate_country(
     return block
 
 
+# Worst-first, so a country reads as badly as its unhappiest feed.
+_STATUS_RANK = {"failed": 0, "degraded": 1, "ok": 2, "skipped": 3}
+
+
+def _country_rollup(feeds: dict[str, dict]) -> dict:
+    """One block per country, derived from its feeds.
+
+    The dashboard's freshness notice and the alert bodies are country-shaped,
+    and a reader asking "is Mexico current?" does not care that the United
+    States happens to have two chains. The per-feed blocks stay authoritative.
+    """
+    out: dict[str, dict] = {}
+    for fid, block in feeds.items():
+        country = SOURCES[fid].country if fid in SOURCES else fid
+        roll = out.setdefault(
+            country,
+            {
+                "status": "skipped",
+                "rows": 0,
+                "stations": 0,
+                "feeds": [],
+                "last_success_capture_id": None,
+            },
+        )
+        roll["feeds"].append(fid)
+        roll["rows"] += int(block.get("rows") or 0)
+        roll["stations"] += int(block.get("stations") or 0)
+        if _STATUS_RANK.get(block.get("status"), 3) < _STATUS_RANK.get(roll["status"], 3):
+            roll["status"] = block.get("status")
+        newest = block.get("last_success_capture_id")
+        if newest and (roll["last_success_capture_id"] or "") < newest:
+            roll["last_success_capture_id"] = newest
+    for roll in out.values():
+        roll["feeds"].sort()
+    return out
+
+
 def build_status(
     ctx: CaptureContext,
     countries: dict[str, dict],
@@ -214,9 +256,9 @@ def build_status(
     previous_publish = previous.get("publish") or {}
 
     blocks = copy.deepcopy(dict(countries))
-    for code in ctx.interp_config.countries:
-        if code not in blocks:
-            blocks[code] = evaluate_country(code, None, None, ctx, now)
+    for fid in SOURCES:
+        if fid not in blocks:
+            blocks[fid] = evaluate_feed(fid, None, None, ctx, now)
 
     run_url = run.get("run_url")
     for block in blocks.values():
@@ -247,5 +289,6 @@ def build_status(
         },
         "close": {"outcome": None},
         "warnings": [_as_dict(item) for item in run.get("warnings") or []],
-        "countries": blocks,
+        "feeds": blocks,
+        "countries": _country_rollup(blocks),
     }

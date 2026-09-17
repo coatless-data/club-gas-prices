@@ -102,7 +102,7 @@ def capture_status(capture_id: str) -> dict:
     return {
         "schema_version": 1,
         "capture_id": capture_id,
-        "countries": {"AU": {"status": "ok"}},
+        "feeds": {"AU-COSTCO": {"status": "ok"}},
         "fx": {"status": "ok", "source": "frankfurter-v2", "rate_date": "2026-09-14"},
     }
 
@@ -116,14 +116,14 @@ def make_bundle(
     root = dest / f"build-{capture_id}"
     if root.exists():
         shutil.rmtree(root)
-    (root / "responses" / "AU").mkdir(parents=True)
+    (root / "responses" / "AU-COSTCO").mkdir(parents=True)
     (root / "inputs").mkdir(parents=True)
     shutil.copytree(config_dir, root / "config")
-    (root / "responses" / "AU" / "01-stores.body").write_bytes(au_body(price_e10))
-    (root / "responses" / "AU" / "01-stores.meta.json").write_text(
+    (root / "responses" / "AU-COSTCO" / "01-stores.body").write_bytes(au_body(price_e10))
+    (root / "responses" / "AU-COSTCO" / "01-stores.meta.json").write_text(
         json.dumps(
             {
-                "key": "AU/01-stores",
+                "key": "AU-COSTCO/01-stores",
                 "url": AU_URL,
                 "status": 200,
                 "headers": {"Content-Type": "application/json"},
@@ -230,6 +230,8 @@ def restore_config(checkout: Path) -> None:
 def drop_au_e10(checkout: Path) -> None:
     path = checkout / "config" / "grades.csv"
     kept = [
-        line for line in path.read_text("utf-8").splitlines(True) if not line.startswith("AU,E10,")
+        line
+        for line in path.read_text("utf-8").splitlines(True)
+        if not line.startswith("COSTCO,AU,E10,")
     ]
     path.write_text("".join(kept), "utf-8")

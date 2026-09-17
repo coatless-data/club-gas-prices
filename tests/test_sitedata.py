@@ -34,8 +34,8 @@ NOTICES = {
 class StubGrades:
     """The GradeTable surface sitedata uses: map() and rows()."""
 
-    def map(self, country, grade_raw):
-        found = GRADE_TABLE.get((country, grade_raw))
+    def map(self, country, brand, grade_raw):
+        found = GRADE_TABLE.get((country, grade_raw)) if brand == "COSTCO" else None
         if found is None:
             return None
         return SimpleNamespace(grade=found[0], priority=found[1], label=grade_raw)

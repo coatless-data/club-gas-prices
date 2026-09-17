@@ -37,9 +37,12 @@ DEFAULT_LOOKUP_PARAMS = {
     "countryCode": "US",
 }
 
-KEY_PRICE = "US/02-gasprices-{n:03d}"
-KEY_LOOKUP = "US/03-lookup-us"
-KEY_TOPUP = "US/04-gasprices-fb-{n:03d}"
+# The response key's prefix is the feed id, which is also the bundle directory
+# the rebuild groups on. It is not the country: the US has two chains.
+FEED = "US-COSTCO"
+KEY_PRICE = f"{FEED}/02-gasprices-{{n:03d}}"
+KEY_LOOKUP = f"{FEED}/03-lookup-us"
+KEY_TOPUP = f"{FEED}/04-gasprices-fb-{{n:03d}}"
 
 NON_GRADE_KEYS = costco_lookup.NON_GRADE_KEYS
 
