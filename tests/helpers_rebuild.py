@@ -54,8 +54,9 @@ def previous_stations(capture_id: str) -> pl.DataFrame:
     return pl.DataFrame(
         [
             {
-                "station_key": "AU-109",
+                "station_key": "AU-COSTCO-109",
                 "country": "AU",
+                "brand": "COSTCO",
                 "source_station_id": "109",
                 "alt_id": None,
                 "name": "Marsden Park",

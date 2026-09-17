@@ -354,7 +354,7 @@ def test_polled_id_set_records_three_origins():
     previous = stations_frame(
         [
             {
-                "station_key": "US-120",
+                "station_key": "US-COSTCO-120",
                 "country": "US",
                 "source_station_id": "120",
                 "last_seen_utc": "2026-09-14T18:17:00Z",
@@ -362,14 +362,14 @@ def test_polled_id_set_records_three_origins():
                 "timezone": "Pacific/Honolulu",
             },
             {
-                "station_key": "US-9999",
+                "station_key": "US-COSTCO-9999",
                 "country": "US",
                 "source_station_id": "9999",
                 "last_seen_utc": "2026-01-01T18:17:00Z",
                 "region": "TX",
             },
             {
-                "station_key": "US-1364",
+                "station_key": "US-COSTCO-1364",
                 "country": "US",
                 "source_station_id": "1364",
                 "last_seen_utc": "2026-09-14T18:17:00Z",
@@ -393,7 +393,7 @@ def test_polled_id_set_uses_the_cache_when_step_one_fails():
     previous = stations_frame(
         [
             {
-                "station_key": "US-1364",
+                "station_key": "US-COSTCO-1364",
                 "country": "US",
                 "source_station_id": "1364",
                 "region": "FL",
@@ -457,7 +457,7 @@ def happy_ctx() -> CaptureContext:
     previous = stations_frame(
         [
             {
-                "station_key": "US-120",
+                "station_key": "US-COSTCO-120",
                 "country": "US",
                 "source_station_id": "120",
                 "name": "Hawaii Kai",
@@ -554,7 +554,7 @@ def test_station_keys_are_unique():
 def test_step_one_failure_uses_cached_metadata():
     rows = [
         {
-            "station_key": f"US-{i}",
+            "station_key": f"US-COSTCO-{i}",
             "country": "US",
             "source_station_id": str(i),
             "name": f"Store {i}",
@@ -627,7 +627,7 @@ def test_fallback_when_more_than_half_the_batches_fail():
     previous = stations_frame(
         [
             {
-                "station_key": "US-120",
+                "station_key": "US-COSTCO-120",
                 "country": "US",
                 "source_station_id": "120",
                 "region": "HI",
@@ -657,14 +657,14 @@ def test_fallback_when_costco_com_is_abandoned_partway_through_step_two():
     previous = stations_frame(
         [
             {
-                "station_key": "US-120",
+                "station_key": "US-COSTCO-120",
                 "country": "US",
                 "source_station_id": "120",
                 "region": "HI",
                 "last_seen_utc": "2026-09-14T18:17:00Z",
             },
             {
-                "station_key": "US-1120",
+                "station_key": "US-COSTCO-1120",
                 "country": "US",
                 "source_station_id": "1120",
                 "region": "DC",

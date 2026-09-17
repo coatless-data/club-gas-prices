@@ -68,7 +68,7 @@ def test_rebuild_applies_the_checkouts_grades_to_stored_responses(tmp_path, monk
     rows = _daily(store, "data-2026-09", "2026-09-01", tmp_path, "before.csv.gz")
     assert rows.height == 3
     e10 = rows.filter(pl.col("grade_raw") == "E10").row(0, named=True)
-    assert e10["station_key"] == "AU-109"
+    assert e10["station_key"] == "AU-COSTCO-109"
     assert e10["price"] == 2.127
     assert e10["grade"] == "other"
 
@@ -284,7 +284,7 @@ def test_rebuild_of_an_open_month_then_refreshes_current(tmp_path, monkeypatch):
     rebuild_current(store, cfg, now=NOW)
 
     stations = pl.read_csv(store.download("current", "stations.csv", tmp_path / "stations.csv"))
-    assert "AU-109" in stations["station_key"].to_list()
+    assert "AU-COSTCO-109" in stations["station_key"].to_list()
     captures = pl.read_parquet(
         store.download("current", "club-gas-all-captures.parquet", tmp_path / "all.parquet")
     )
@@ -445,7 +445,7 @@ def test_rebuild_reads_a_bundle_written_by_the_real_capture_path(
     assert rows.height == 3
     assert rows["capture_id"].unique().to_list() == [CAPTURE_ID]
     e10 = rows.filter(pl.col("grade_raw") == "E10").row(0, named=True)
-    assert e10["station_key"] == "AU-109"
+    assert e10["station_key"] == "AU-COSTCO-109"
     assert e10["price"] == 2.127
     assert e10["currency"] == "AUD"
 

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import re
 import tomllib
+from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
@@ -234,10 +235,25 @@ class GradeTable:
 
 @dataclass(frozen=True)
 class SiteConfig:
-    notice: str
+    notice_prefix: str
+    # brand -> the affiliation clause for that chain.
+    notices: dict[str, str]
     release_base_url: str
     basemap_key_env: str
     basemaps: dict[str, dict[str, object]]
+
+    def notice(self, brands: Iterable[str] | None = None) -> list[str]:
+        """The prefix, then one clause per brand, in a stable order.
+
+        `brands` None means every configured brand, which is what a release body
+        wants: the dataset spans every feed. A page showing one chain passes just
+        that one, so the reader is not disclaimed at about a chain they cannot see.
+        """
+        wanted = sorted(self.notices) if brands is None else sorted(set(brands))
+        return [self.notice_prefix, *(self.notices[b] for b in wanted if b in self.notices)]
+
+    def notice_text(self, brands: Iterable[str] | None = None) -> str:
+        return " ".join(self.notice(brands))
 
 
 @dataclass(frozen=True, eq=False)
@@ -505,7 +521,8 @@ def _load_site(path: Path) -> SiteConfig:
         raise ConfigError(f"{path}: no [site] table")
     try:
         return SiteConfig(
-            notice=str(site["notice"]),
+            notice_prefix=str(site["notice_prefix"]),
+            notices={str(k): str(v) for k, v in (site.get("notices") or {}).items()},
             release_base_url=str(site["release_base_url"]),
             basemap_key_env=str(site["basemap_key_env"]),
             basemaps={str(k): dict(v) for k, v in site.get("basemaps", {}).items()},

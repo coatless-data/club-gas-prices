@@ -475,7 +475,7 @@ def test_grade_conflict_keeps_the_higher_priority_label():
     assert got == {"Unleaded 91": "regular", "E10": "other"}
     conflicts = [w for w in out.warnings if w.code == "grade_conflict"]
     assert len(conflicts) == 1
-    assert conflicts[0].detail == "AU-109:regular:E10"
+    assert conflicts[0].detail == "AU-COSTCO-109:regular:E10"
 
 
 def test_grade_conflict_resolves_before_the_loser_could_be_saved_by_bounds():
@@ -504,7 +504,7 @@ def test_grade_conflict_resolves_before_the_loser_could_be_saved_by_bounds():
     assert got == {"E10": "other"}
     assert reasons(out.drops) == ["out_of_bounds"]
     assert codes(out.warnings) == ["grade_conflict", "no_regular"]
-    assert out.warnings[0].detail == "AU-109:regular:E10"
+    assert out.warnings[0].detail == "AU-COSTCO-109:regular:E10"
     assert out.warnings[1].detail == "109"
 
 
@@ -566,7 +566,7 @@ def test_extras_skip_not_open_and_no_hours():
     )
     out = normalize(result, fx_rates(), context())
     assert out.drops == []
-    assert out.rows["station_key"].to_list() == ["US-1680"]
+    assert out.rows["station_key"].to_list() == ["US-COSTCO-1680"]
 
 
 def test_no_gas_service_drops_a_seen_id_that_lost_its_pumps():
@@ -580,7 +580,7 @@ def test_no_gas_service_drops_a_seen_id_that_lost_its_pumps():
     )
     out = normalize(result, fx_rates(), context())
     assert reasons(out.drops) == ["no_gas_service"]
-    assert out.rows["station_key"].to_list() == ["US-1364"]
+    assert out.rows["station_key"].to_list() == ["US-COSTCO-1364"]
 
 
 def test_no_price_and_no_timezone_drop_their_stations():
@@ -686,7 +686,7 @@ def test_no_regular_drops_only_an_absent_seen_us_id():
     out = normalize(result, fx_rates(), context())
     assert reasons(out.drops) == ["no_regular"]
     assert out.drops[0].source_station_id == "1601"
-    assert out.rows["station_key"].to_list() == ["US-1602"]
+    assert out.rows["station_key"].to_list() == ["US-COSTCO-1602"]
     assert codes(out.warnings) == ["no_regular"]
     assert out.warnings[0].detail == "1602"
 
@@ -756,7 +756,7 @@ def test_rows_and_stations_match_the_declared_schemas():
     assert out.stations.columns == list(STATION_SCHEMA)
     assert dict(out.stations.schema) == STATION_SCHEMA
     st = out.stations.row(0, named=True)
-    assert st["station_key"] == "JP-Tomiya"
+    assert st["station_key"] == "JP-COSTCO-Tomiya"
     assert st["alt_id"] == "costcoJapanTomiyaWarehouse"
     assert st["name_local"] == "富谷"
     assert st["grades_seen"] == "Diesel|Regular"
@@ -772,3 +772,37 @@ def test_an_empty_country_still_returns_typed_frames():
     assert dict(out.rows.schema) == ROW_SCHEMA
     assert out.stations.height == 0
     assert out.drops == []
+
+
+def test_brand_is_both_a_column_and_the_key_prefix():
+    """Two chains number their sites independently, so a bare number collides.
+
+    Brand sits in the key so it is unique across chains, and in a column so
+    nothing downstream has to parse the key back apart to group by chain.
+    """
+    result = fetch_result("US", "costco-us-gasprices", [station("1364", [("regular", "3.999")])])
+    out = normalize(result, fx_rates(), context())
+
+    row = out.rows.row(0, named=True)
+    assert row["brand"] == "COSTCO"
+    assert row["station_key"] == "US-COSTCO-1364"
+    country, brand, sid = row["station_key"].split("-", 2)
+    assert (country, brand, sid) == (row["country"], row["brand"], row["source_station_id"])
+
+    meta = out.stations.row(0, named=True)
+    assert meta["brand"] == "COSTCO"
+    assert meta["station_key"] == "US-COSTCO-1364"
+
+
+def test_a_second_brand_does_not_collide_on_the_same_number():
+    """The whole reason brand is in the key: Costco 1364 and another chain's 1364."""
+    costco = fetch_result("US", "costco-us-gasprices", [station("1364", [("regular", "3.999")])])
+    other = fetch_result("US", "other-us-feed", [station("1364", [("regular", "3.699")])])
+    other.brand = "SAMS"
+
+    a = normalize(costco, fx_rates(), context()).rows.row(0, named=True)
+    b = normalize(other, fx_rates(), context()).rows.row(0, named=True)
+
+    assert a["source_station_id"] == b["source_station_id"] == "1364"
+    assert a["station_key"] != b["station_key"]
+    assert (a["station_key"], b["station_key"]) == ("US-COSTCO-1364", "US-SAMS-1364")

@@ -65,6 +65,7 @@ def price_row(
         "captured_at_utc": at,
         "local_date": at.date(),
         "country": country,
+        "brand": "COSTCO",
         "station_key": station_key,
         "source_station_id": station_key.split("-", 1)[1],
         "source": source,
@@ -115,7 +116,15 @@ def sha256_file(path: Path) -> str:
 
 @dataclass
 class StubSite:
-    notice: str = NOTICE
+    notice_prefix: str = NOTICE
+    notices: dict = field(default_factory=dict)
+
+    def notice(self, brands=None) -> list[str]:
+        wanted = sorted(self.notices) if brands is None else sorted(set(brands))
+        return [self.notice_prefix, *(self.notices[b] for b in wanted if b in self.notices)]
+
+    def notice_text(self, brands=None) -> str:
+        return " ".join(self.notice(brands))
 
 
 @dataclass(frozen=True)

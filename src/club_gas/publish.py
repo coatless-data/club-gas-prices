@@ -58,11 +58,6 @@ CURRENT_INPUT_ASSETS = (
     "manifest.json",
 )
 ROW_KEY = ["capture_id", "station_key", "grade_raw"]
-NOTICE = (
-    "Unofficial. Not affiliated with, endorsed by, or connected to Costco Wholesale "
-    "Corporation. Prices are collected from Costco's public websites and may differ "
-    "from the price at the pump."
-)
 
 
 @dataclass
@@ -243,20 +238,22 @@ def _write_csv_gz(frame: pl.DataFrame, path: Path) -> None:
         gz.write(frame.write_csv().encode("utf-8"))
 
 
-def _month_body(month: str) -> str:
-    return f"Costco gas prices captured during {month}.\n\n{NOTICE}\n"
+def _month_body(month: str, cfg: Config) -> str:
+    return f"Warehouse-club gas prices captured during {month}.\n\n{cfg.site.notice_text()}\n"
 
 
-def ensure_current(store: ReleaseStore) -> None:
-    store.ensure_release("current", "Current", f"All-time files.\n\n{NOTICE}\n", False, "true")
+def ensure_current(store: ReleaseStore, cfg: Config) -> None:
+    store.ensure_release(
+        "current", "Current", f"All-time files.\n\n{cfg.site.notice_text()}\n", False, "true"
+    )
 
 
-def ensure_releases(store: ReleaseStore, month: str) -> None:
+def ensure_releases(store: ReleaseStore, month: str, cfg: Config) -> None:
     """Spec 8.5 step 1, including reopening a month closed by an earlier run."""
-    ensure_current(store)
+    ensure_current(store, cfg)
     tag = f"data-{month}"
     existing = store.get_release(tag)
-    store.ensure_release(tag, f"Data {month}", _month_body(month), True, "false")
+    store.ensure_release(tag, f"Data {month}", _month_body(month, cfg), True, "false")
     if existing is not None and not existing.prerelease:
         store.update_release(tag, prerelease=True)
 
@@ -545,7 +542,7 @@ def _update_current(
     *,
     now: datetime,
 ) -> None:
-    ensure_current(store)
+    ensure_current(store, cfg)
     local: dict[str, Path] = {}
     missing: list[str] = []
     for name in CURRENT_INPUT_ASSETS:
@@ -782,7 +779,7 @@ def publish(store: ReleaseStore, capture_dir: Path, cfg: Config, *, now: datetim
         # Spec 8.4 recovery, implemented once in store.py.
         for tag in recovery_tags(store):
             recover_temporaries(store, tag)
-        ensure_releases(store, month)
+        ensure_releases(store, month, cfg)
         _reconcile(
             store, cfg, scratch, captured.capture_id, warnings, assets_written, issues, now=now
         )

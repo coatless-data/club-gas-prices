@@ -45,28 +45,28 @@ def test_daily_grain_keeps_the_last_capture_of_the_day():
         [
             price_row(
                 capture_id="2026-09-15T0017Z",
-                station_key="US-1364",
+                station_key="US-COSTCO-1364",
                 grade_raw="regular",
                 grade="regular",
                 price=3.899,
             ),
             price_row(
                 capture_id="2026-09-15T1817Z",
-                station_key="US-1364",
+                station_key="US-COSTCO-1364",
                 grade_raw="regular",
                 grade="regular",
                 price=3.999,
             ),
             price_row(
                 capture_id="2026-09-15T1817Z",
-                station_key="US-1364",
+                station_key="US-COSTCO-1364",
                 grade_raw="premium",
                 grade="premium",
                 price=4.629,
             ),
             price_row(
                 capture_id="2026-09-16T0017Z",
-                station_key="US-1364",
+                station_key="US-COSTCO-1364",
                 grade_raw="regular",
                 grade="regular",
                 price=4.099,
@@ -99,14 +99,14 @@ def _us_rows(capture_id: str, price: float = 3.999) -> pl.DataFrame:
         [
             price_row(
                 capture_id=capture_id,
-                station_key="US-1364",
+                station_key="US-COSTCO-1364",
                 grade_raw="regular",
                 grade="regular",
                 price=price,
             ),
             price_row(
                 capture_id=capture_id,
-                station_key="US-1364",
+                station_key="US-COSTCO-1364",
                 grade_raw="premium",
                 grade="premium",
                 price=price + 0.63,
@@ -485,8 +485,8 @@ def test_full_rebuild_keeps_alt_id_and_status_and_applies_station_links(tmp_path
     store = open_store(f"local:{tmp_path / 'releases'}")
     links = pl.DataFrame(
         {
-            "old_station_key": ["US-1364"],
-            "new_station_key": ["US-9999"],
+            "old_station_key": ["US-COSTCO-1364"],
+            "new_station_key": ["US-COSTCO-9999"],
             "effective_date": ["2026-09-01"],
             "note": ["relocated"],
         }
@@ -496,8 +496,9 @@ def test_full_rebuild_keeps_alt_id_and_status_and_applies_station_links(tmp_path
     existing = stations_frame(
         [
             {
-                "station_key": "US-1364",
+                "station_key": "US-COSTCO-1364",
                 "country": "US",
+                "brand": "COSTCO",
                 "source_station_id": "1364",
                 "alt_id": "Mansfield",
                 "name": "Mansfield",
@@ -525,13 +526,13 @@ def test_full_rebuild_keeps_alt_id_and_status_and_applies_station_links(tmp_path
     rebuild_current(store, cfg, now=datetime(2026, 9, 1, 3, 17, tzinfo=UTC))
 
     out = pl.read_csv(store.download("current", "stations.csv", tmp_path / "out-stations.csv"))
-    row = out.filter(pl.col("station_key") == "US-1364").row(0, named=True)
+    row = out.filter(pl.col("station_key") == "US-COSTCO-1364").row(0, named=True)
     assert row["alt_id"] == "Mansfield"
     assert row["status"] == "missing"
     assert row["grades_seen"] == "premium|regular"
     assert row["first_seen_utc"].startswith("2026-08-30")
     assert row["last_seen_utc"].startswith("2026-08-31")
-    assert row["superseded_by"] == "US-9999"
+    assert row["superseded_by"] == "US-COSTCO-9999"
 
 
 def test_full_rebuild_recomputes_merged_captures_to_match_the_rebuilt_captures_file(

@@ -92,8 +92,8 @@ def _bundle_bytes(capture_id: str) -> bytes:
         ).encode(),
         "inputs/stations_used.csv": (
             b"station_key,country,source_station_id,name\n"
-            b"US-1364,US,1364,Bradenton\n"
-            b"CA-1324,CA,1324,St Johns\n"
+            b"US-COSTCO-1364,US,1364,Bradenton\n"
+            b"CA-COSTCO-1324,CA,1324,St Johns\n"
             b"JP-Tomiya,JP,Tomiya,Tomiya\n"
         ),
         "responses/shared/ecom-api.body": json.dumps(ECOM_BODY).encode(),

@@ -100,6 +100,7 @@ GRADE_FIELDS = (
 STATION_CORE = (
     "station_key",
     "country",
+    "brand",
     "name",
     "name_local",
     "address",
@@ -155,7 +156,8 @@ def build_site_data(current_dir: Path, out_dir: Path, cfg, *, now: datetime) -> 
         row_group_size=HISTORY_ROW_GROUP_SIZE,
     )
 
-    _write_json(out_dir / "meta.json", _meta(current_dir, cfg, now=now))
+    brands = sorted({b for b in stations["brand"].drop_nulls().unique().to_list() if b})
+    _write_json(out_dir / "meta.json", _meta(current_dir, cfg, now=now, brands=brands))
 
 
 def _read_csv(path: Path, numeric: tuple[str, ...]) -> pl.DataFrame:
@@ -209,6 +211,7 @@ def _write_json(path: Path, payload: object) -> None:
 SUMMARY_COLUMNS = [
     "capture_date",
     "country",
+    "brand",
     "level",
     "region",
     "grade",
@@ -221,11 +224,15 @@ SUMMARY_COLUMNS = [
     "p25_usd_per_litre",
     "p75_usd_per_litre",
 ]
-SUMMARY_KEY = ["capture_date", "country", "level", "region", "grade"]
-SUMMARY_SORT = ["country", "level", "region", "grade", "capture_date"]
+# Brand is part of the KEY, not just a column. The site never pools two chains
+# into one figure, so there is no (country, grade) row spanning both -- there is
+# one row per brand and the page draws two series.
+SUMMARY_KEY = ["capture_date", "country", "brand", "level", "region", "grade"]
+SUMMARY_SORT = ["country", "brand", "level", "region", "grade", "capture_date"]
 HISTORY_COLUMNS = [
     "capture_date",
     "station_key",
+    "brand",
     "grade",
     "price_local_per_litre",
     "price_usd_per_litre",
@@ -250,11 +257,11 @@ HISTORY_ROW_GROUP_SIZE = 20000
 
 
 def summary_daily(deduped: pl.DataFrame) -> pl.DataFrame:
-    country = _aggregate(deduped, ["capture_date", "country", "grade"], "country")
+    country = _aggregate(deduped, ["capture_date", "country", "brand", "grade"], "country")
     # Region rows use only the stations that have a region; the UK has none.
     regional = _aggregate(
         deduped.filter(pl.col("region").is_not_null()),
-        ["capture_date", "country", "region", "grade"],
+        ["capture_date", "country", "brand", "region", "grade"],
         "region",
     )
     frame = pl.concat([country, regional], how="vertical").sort(SUMMARY_SORT, nulls_last=True)
@@ -337,11 +344,9 @@ def history(deduped: pl.DataFrame) -> pl.DataFrame:
 
 
 DEFAULT_RELEASE_BASE_URL = "https://github.com/coatless-datasets/club-gas-prices/releases"
-DEFAULT_NOTICE = (
-    "Unofficial. Not affiliated with, endorsed by, or connected to Costco Wholesale "
-    "Corporation. Prices are collected from Costco's public websites and may differ "
-    "from the price at the pump."
-)
+# A placeholder, not a second verbatim copy of legal text: config/site.toml is
+# the only place the real notice lives.
+DEFAULT_NOTICE = ["Unofficial. Not affiliated with any retailer named here."]
 DEFAULT_BASEMAP_KEY_ENV = "CARTO_BASEMAP_KEY"
 KEYED_PROVIDER = "carto"
 FALLBACK_PROVIDER = "osm"
@@ -368,7 +373,7 @@ GRADE_TABLE_FIELDS = (
 )
 
 
-def _meta(current_dir: Path, cfg, *, now: datetime) -> dict:
+def _meta(current_dir: Path, cfg, *, now: datetime, brands: list[str]) -> dict:
     manifest = _read_json(current_dir / "manifest.json")
     status = _manifest_status(manifest)
     # Sorted, so meta.json is byte-stable for a given capture: publish builds it
@@ -390,7 +395,7 @@ def _meta(current_dir: Path, cfg, *, now: datetime) -> dict:
         "closed_months": manifest.get("closed_months") or [],
         "closed_years": manifest.get("closed_years") or [],
         "grades": _grade_table(cfg),
-        "notice": _site_value(cfg, "notice", DEFAULT_NOTICE),
+        "notice": _notice(cfg, brands),
         "stale_after_hours": STALE_AFTER_HOURS,
         "releases": {
             "current": f"{base}/tag/current",
@@ -399,6 +404,14 @@ def _meta(current_dir: Path, cfg, *, now: datetime) -> dict:
         },
         "basemap": _basemap(cfg),
     }
+
+
+def _notice(cfg, brands: list[str]) -> list[str]:
+    """The affiliation notice for exactly the chains in this capture."""
+    builder = getattr(getattr(cfg, "site", None), "notice", None)
+    if not callable(builder):
+        return list(DEFAULT_NOTICE)
+    return builder(brands or None)
 
 
 def _read_json(path: Path) -> dict:

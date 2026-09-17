@@ -349,7 +349,7 @@ def _previous_rows(ctx: CaptureContext) -> dict[str, dict[str, Any]]:
         warehouse_id = _clean(row.get("source_station_id"))
         if warehouse_id is None:
             key = _clean(row.get("station_key")) or ""
-            warehouse_id = key.split("-", 1)[1] if "-" in key else None
+            warehouse_id = key.rsplit("-", 1)[1] if "-" in key else None
         if warehouse_id is not None:
             rows[warehouse_id] = row
     return rows

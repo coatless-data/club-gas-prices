@@ -155,6 +155,7 @@ def _priced_before_open(station: RawStation, country: str, country_cfg, grades) 
 
 def normalize(result: FetchResult, fx: FxRates, ctx: CaptureContext) -> NormalizedCountry:
     country = result.country
+    brand = result.brand
     interp = ctx.interp_config
     country_cfg = interp.countries[country]
     grades = interp.grades
@@ -167,7 +168,7 @@ def normalize(result: FetchResult, fx: FxRates, ctx: CaptureContext) -> Normaliz
 
     for station in result.stations:
         sid = station.source_station_id
-        station_key = f"{country}-{sid}"
+        station_key = f"{country}-{brand}-{sid}"
 
         reason = _source_filter(station, ctx.capture_date)
         if reason is not None:
@@ -290,6 +291,7 @@ def normalize(result: FetchResult, fx: FxRates, ctx: CaptureContext) -> Normaliz
                     "captured_at_utc": result.captured_at_utc,
                     "local_date": local_date,
                     "country": country,
+                    "brand": brand,
                     "station_key": station_key,
                     "source_station_id": sid,
                     "source": source,
@@ -324,6 +326,7 @@ def normalize(result: FetchResult, fx: FxRates, ctx: CaptureContext) -> Normaliz
             {
                 "station_key": station_key,
                 "country": country,
+                "brand": brand,
                 "source_station_id": sid,
                 "alt_id": station.alt_id,
                 "name": station.name,

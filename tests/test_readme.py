@@ -11,11 +11,19 @@ from pathlib import Path
 
 README = Path(__file__).resolve().parents[1] / "README.md"
 
-NOTICE = (
-    "Unofficial. Not affiliated with, endorsed by, or connected to Costco Wholesale"
-    " Corporation. Prices are collected from Costco's public websites and may differ"
-    " from the price at the pump."
-)
+
+def notice_clauses() -> list[str]:
+    """Built from config/site.toml, so the README cannot become a fourth copy.
+
+    The README flows the clauses into one sentence rather than repeating the
+    exact joined string, so each clause is checked on its own.
+    """
+    import tomllib
+
+    site = tomllib.loads((README.parent / "config" / "site.toml").read_text(encoding="utf-8"))[
+        "site"
+    ]
+    return [site["notice_prefix"], *site["notices"].values()]
 
 
 def readme() -> str:
@@ -32,7 +40,10 @@ def flowed() -> str:
 def test_notice_is_an_important_callout_near_the_top():
     text = readme()
     assert "> [!IMPORTANT]" in text
-    assert NOTICE in flowed()
+    text_flowed = flowed()
+    for clause in notice_clauses():
+        # Trailing punctuation differs where clauses are joined with "nor".
+        assert clause.rstrip(".") in text_flowed, clause
     assert "## Using the dashboard" in text
     assert text.index("> [!IMPORTANT]") < text.index("## Using the dashboard")
 

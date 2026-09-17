@@ -134,7 +134,7 @@ def test_previous_state_is_read_from_current_with_read_resolved(workspace: Path)
     store = LocalReleaseStore(workspace / "releases")
     store.ensure_release("current", "current", "", False, "true")
     stations = workspace / "stations.csv"
-    pl.DataFrame({"station_key": ["TW-Chungli"], "country": ["TW"]}).write_csv(stations)
+    pl.DataFrame({"station_key": ["TW-COSTCO-Chungli"], "country": ["TW"]}).write_csv(stations)
     fx = workspace / "fx.csv"
     pl.DataFrame({"capture_id": ["2026-09-14T1817Z"], "currency": ["TWD"]}).write_csv(fx)
     store.upload_new("current", stations, "stations.csv")
@@ -153,7 +153,7 @@ def test_previous_state_is_read_from_current_with_read_resolved(workspace: Path)
 
     assert "previous_state_unavailable" not in {w["code"] for w in result.status["warnings"]}
     used = workspace / "out" / "state" / "stations.csv"
-    assert pl.read_csv(used)["station_key"].to_list() == ["TW-Chungli"]
+    assert pl.read_csv(used)["station_key"].to_list() == ["TW-COSTCO-Chungli"]
 
 
 def test_taiwan_capture_writes_per_country_and_capture_outputs(workspace: Path):
@@ -190,7 +190,11 @@ def test_taiwan_capture_writes_per_country_and_capture_outputs(workspace: Path):
     assert rows.height == 7
     # Taiwan is keyed on the warehouse number; the branch name rides along as
     # the display name and alt_id.
-    assert sorted(rows["station_key"].unique().to_list()) == ["TW-010", "TW-011", "TW-018"]
+    assert sorted(rows["station_key"].unique().to_list()) == [
+        "TW-COSTCO-010",
+        "TW-COSTCO-011",
+        "TW-COSTCO-018",
+    ]
     assert rows["capture_id"].unique().to_list() == [CAPTURE_ID]
 
     fx_rows = json.loads((workspace / "out" / "capture" / "fx.json").read_text())
@@ -496,7 +500,7 @@ def test_three_countries_run_concurrently_without_cross_talk(workspace: Path):
 
 # Finding 3 (Important): the exception-isolation branch in `run_country` (the
 # `except Exception` that writes traceback.txt) was never exercised by a test
-# -- the existing TW-403 test returns a graceful FetchResult, it never raises.
+# -- the existing TW-COSTCO-403 test returns a graceful FetchResult, it never raises.
 # This test makes one country's `fetch` genuinely raise and checks that only
 # that country is marked failed, with its traceback recorded, while the other
 # country's outputs are unaffected and the capture still returns normally
@@ -597,7 +601,7 @@ def seed_current_state(store: LocalReleaseStore, workspace: Path) -> None:
     """Enough of `current` for `_read_previous_state` to read both frames."""
     store.ensure_release("current", "current", "", False, "true")
     stations = workspace / "seed-stations.csv"
-    pl.DataFrame({"station_key": ["CA-1324"], "country": ["CA"]}).write_csv(stations)
+    pl.DataFrame({"station_key": ["CA-COSTCO-1324"], "country": ["CA"]}).write_csv(stations)
     fx = workspace / "seed-fx.csv"
     pl.DataFrame({"capture_id": ["2026-09-14T1817Z"], "currency": ["CAD"]}).write_csv(fx)
     store.upload_new("current", stations, "stations.csv")

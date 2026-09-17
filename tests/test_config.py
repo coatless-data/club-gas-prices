@@ -265,8 +265,15 @@ def test_station_links_table_starts_empty(cfg):
 
 def test_site_config(cfg):
     site = cfg.site
-    assert site.notice.startswith("Unofficial.")
-    assert "Costco Wholesale Corporation" in site.notice
+    assert site.notice_prefix.startswith("Unofficial.")
+    # One clause per chain, so a reader is disclaimed at about the chains they
+    # can actually see and a third chain is a config line.
+    assert set(site.notices) == {"COSTCO", "SAMS"}
+    assert "Costco Wholesale Corporation" in site.notices["COSTCO"]
+    assert "Sam's Club" in site.notices["SAMS"]
+    assert site.notice(["COSTCO"]) == [site.notice_prefix, site.notices["COSTCO"]]
+    assert site.notice() == [site.notice_prefix, site.notices["COSTCO"], site.notices["SAMS"]]
+    assert site.notice_text(["SAMS"]) == f"{site.notice_prefix} {site.notices['SAMS']}"
     assert site.basemap_key_env == "CARTO_BASEMAP_KEY"
     # sitedata copies one provider table into meta.json and adds "provider",
     # so these key names are exactly what the dashboard's Leaflet layer reads.
