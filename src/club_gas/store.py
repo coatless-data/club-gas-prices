@@ -33,7 +33,7 @@ from typing import Literal, Protocol
 
 import httpx
 
-DEFAULT_STORE = "github:coatless-datasets/club-gas-prices"
+DEFAULT_STORE = "github:coatless-data/club-gas-prices"
 SIDECAR_NAME = "_release.json"
 LATEST_NAME = "_latest.json"
 POLL_SECONDS = 60.0

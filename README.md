@@ -1,8 +1,11 @@
-# Costco Gas Prices
+# Club Gas Prices
 
-Posted fuel prices at every Costco gas station in the United States, Canada, Mexico,
-the United Kingdom, Australia, Japan and Taiwan, collected four times a day from
-Costco's own public websites, stored by day, and published as GitHub Releases.
+Posted fuel prices at warehouse-club gas stations, collected four times a day from each
+chain's own public website, stored by day, and published as GitHub Releases.
+
+Currently collecting every Costco station in the United States, Canada, Mexico, the
+United Kingdom, Australia, Japan and Taiwan. A Sam's Club US feed is implemented and
+turned off; see [Sources](#sources).
 
 **Dashboard:** <https://dashboard.thecoatlessprofessor.com/club-gas-prices/>
  · built from this repository's releases by
@@ -17,28 +20,15 @@ Costco's own public websites, stored by day, and published as GitHub Releases.
 > Not affiliated with, endorsed by, or connected to Sam's West, Inc., Sam's Club, or
 > Walmart Inc.
 
-## Using the dashboard
+## The dashboard
 
-The site lives in its own repository and holds no collection code. It reads five
-files this repository publishes into the `current` release under a `site-` prefix,
-each checksummed in `manifest.json`: `site-meta.json`, `site-latest.json`,
+The site lives in its own repository and holds no collection code. It reads five files
+this repository publishes into the `current` release under a `site-` prefix, each
+checksummed in `manifest.json`: `site-meta.json`, `site-latest.json`,
 `site-stations.json`, `site-summary-daily.parquet` and `site-history.parquet`.
-`publish` builds them from the same frames it writes the dataset from, inside the
-same transaction, so the site can never show one capture's map over another
-capture's history.
-
-| Page | What it shows |
-|---|---|
-| Map | Every station with coordinates, colored by rank within its country or on an absolute USD scale. The popup gives the published price, the local price, the USD price, the exchange rate used and the age of the reading. |
-| Compare | One row per country for the selected grade: median, p25–p75 and the number of stations, in USD or in local currency. |
-| Trends | Daily medians over time for every country, and regional series for one country at a time. |
-| Station | One station's price history per grade, against its regional median and the five nearest active stations. Deep-linkable as `?station=<station_key>#station`. |
-| About | Sources and request URLs, the capture schedule, the grade table, units, the exchange-rate method, known limits and attributions. |
-
-Three controls apply to every page: **Grade** (`regular`, `premium`, `diesel`),
-**Currency** (`USD` or `Local`) and **Volume** (`per US gallon` or `per litre`). USD
-values always use the exchange rate stored with each row, so a chart of the past shows
-the USD prices of the past, not today's conversion.
+`publish` builds them from the same frames it writes the dataset from, inside the same
+transaction, so the site can never show one capture's map over another capture's
+history. What each page does is documented there.
 
 ## Getting the data
 
@@ -53,7 +43,8 @@ current                 rolling, all-time, marked Latest
 ├── club-gas-latest.csv             every row of each station's newest capture
 ├── stations.csv                      one row per station_key ever seen
 ├── fx.csv                            one row per capture and non-USD currency
-└── manifest.json                     newest status.json, closed periods, SHA-256 of the six assets above
+├── site-*.json, site-*.parquet       the five files the dashboard reads
+└── manifest.json                     newest status.json, closed periods, SHA-256 of every asset above
 
 data-YYYY-MM            one release per month, a prerelease while the month is open
 ├── club-gas-YYYY-MM-DD.csv.gz      capture grain, one file per UTC day
@@ -73,13 +64,14 @@ data-YYYY               one release per year, written when the year closes
 Download the whole rolling release with the GitHub CLI:
 
 ```bash
-gh release download current -R coatless-datasets/club-gas-prices -D state/current
+gh release download current -R coatless-data/club-gas-prices -D state/current
 ```
 
 ### The two grains
 
 - **Capture grain** — one row per capture, station and grade. Its key is
-  (`capture_id`, `station_key`, `grade_raw`). Use it to see intraday changes.
+  (`capture_id`, `station_key`, `grade_raw`), and `station_key` carries the chain. Use
+  it to see intraday changes.
 - **Daily grain** — one row per (`capture_date`, `station_key`, `grade_raw`), taken
   from the capture with the greatest `captured_at_utc` that UTC day. It carries every
   capture-grain column plus `n_captures`, `price_min` and `price_max` for that day.
@@ -93,9 +85,10 @@ gh release download current -R coatless-datasets/club-gas-prices -D state/curren
 | `captured_at_utc` | timestamp | When this country's last price response arrived. |
 | `local_date` | date | The date of `captured_at_utc` in `timezone`. |
 | `country` | string | `US`, `CA`, `MX`, `GB`, `AU`, `JP`, `TW`. Puerto Rico is `US` with `region = "PR"`. |
-| `station_key` | string | `{country}-{source_station_id}`, e.g. `US-1364`, `JP-Tomiya`, `AU-109`. |
+| `brand` | string | The chain: `COSTCO` or `SAMS`. |
+| `station_key` | string | `{country}-{brand}-{source_station_id}`, e.g. `US-COSTCO-1364`, `JP-COSTCO-Tomiya`. |
 | `source_station_id` | string | The station's id at its source. |
-| `source` | string | `costco-us-gasprices`, `costco-ca-lookup-us`, `costco-ca-lookup`, `costco-ca-gasprices` or `costco-occ`. |
+| `source` | string | `costco-us-gasprices`, `costco-ca-lookup-us`, `costco-ca-lookup`, `costco-ca-gasprices`, `costco-occ` or `sams-clubfinder`. |
 | `name` | string | English or romanized name. |
 | `name_local` | string, nullable | Native-script name (JP, TW). |
 | `address` | string, nullable | Street address. |
@@ -138,18 +131,18 @@ about 4.15 per gallon, and Puerto Rico retail is priced per litre.
 **Grades.** `grade_raw` is the source's own label and is never interpreted away.
 `grade` is the mapped bucket, by exact label, from `config/grades.csv`:
 
-| Country | Labels | Notes |
+| Feed | Labels | Notes |
 |---|---|---|
-| US | `regular`, `premium`, `diesel`, `clear` | `clear` maps to `other`. The source states no octane or blend. |
-| CA | `regular`, `premium`, `diesel` | The source states no octane. |
-| MX | `Regular`, `Premium` | No diesel sold. Regular is at least 87 ([RON+MON]/2), reported by CNE. |
-| GB | `5301`, `5302`, `5303` | Unleaded, premium unleaded and premium diesel; E10, E5 97 and B7 are reported, not stated. |
-| AU | `Unleaded 91`, `E10`, `Premium 98`, `Diesel` | `E10` and `Unleaded 91` both map to `regular`; `Unleaded 91` wins when a station lists both. Diesel is premium diesel (reported). |
-| JP | `Regular`, `Premium`, `Diesel`, `Kerosene` | Kerosene is heating fuel: it maps to `other` and is excluded from comparisons. |
-| TW | `95`, `98`, `Diesel` | The names are octane numbers. No 92 is sold. |
+| US-COSTCO | `regular`, `premium`, `diesel`, `clear` | `clear` maps to `other`. The source states no octane or blend. |
+| CA-COSTCO | `regular`, `premium`, `diesel` | The source states no octane. |
+| MX-COSTCO | `Regular`, `Premium` | No diesel sold. Regular is at least 87 ([RON+MON]/2), reported by CNE. |
+| GB-COSTCO | `5301`, `5302`, `5303` | Unleaded, premium unleaded and premium diesel; E10, E5 97 and B7 are reported, not stated. |
+| AU-COSTCO | `Unleaded 91`, `E10`, `Premium 98`, `Diesel` | `E10` and `Unleaded 91` both map to `regular`; `Unleaded 91` wins when a station lists both. Diesel is premium diesel (reported). |
+| JP-COSTCO | `Regular`, `Premium`, `Diesel`, `Kerosene` | Kerosene is heating fuel: it maps to `other` and is excluded from comparisons. |
+| TW-COSTCO | `95`, `98`, `Diesel` | The names are octane numbers. No 92 is sold. |
 
 Each row of `config/grades.csv` carries `spec`, `spec_source` and `spec_source_url`.
-`spec_source` is `source` when Costco itself states the specification, and `reported`
+`spec_source` is `source` when the retailer itself states the specification, and `reported`
 when it comes from a third party, in which case the URL is required. The About page
 shows the attribution. Grades are not equivalent across countries; comparing "regular"
 between them compares different fuels.
@@ -189,7 +182,7 @@ so the two dates differ for part of each day. Charts use `capture_date`.
 │   ├── config.py             # load + validate config/*
 │   ├── http.py                # shared Client: headers, deadlines, retries, pacing, block signals
 │   ├── fx.py                 # exchange rates
-│   ├── sources/               # base.py, us.py, ca.py, occ.py
+│   ├── sources/               # base.py (the feed registry), us.py, ca.py, costco_lookup.py, occ.py, sams.py
 │   ├── normalize.py          # filters, grades, units, bounds, FX columns
 │   ├── schema.py              # column specs, dtypes, writers, validators
 │   ├── capture.py             # capture orchestration
@@ -205,7 +198,8 @@ so the two dates differ for part of each day. Charts use `capture_date`.
 ├── config/
 │   ├── http.toml              # UA, deadlines, budgets, retries, pacing
 │   ├── countries.toml         # URLs, params, units, region→timezone tables, bounds, floors
-│   ├── grades.csv              # country,grade_raw,grade,priority,label,spec,spec_source,spec_source_url
+│   ├── feeds.toml             # per-feed overrides, including whether a feed runs at all
+│   ├── grades.csv              # brand,country,grade_raw,grade,priority,label,spec,spec_source,spec_source_url
 │   ├── us_extra_ids.csv        # stations that price live but are missing from ecom-api
 │   ├── station_links.csv       # old_station_key,new_station_key,effective_date,note
 │   └── site.toml               # basemap providers, notice text
@@ -237,7 +231,7 @@ require both `GITHUB_TOKEN` and `CLUB_GAS_WRITER=1`, which only `capture.yml` an
 Check what the dashboard would receive, without publishing:
 
 ```bash
-gh release download current -R coatless-datasets/club-gas-prices -D state/current
+gh release download current -R coatless-data/club-gas-prices -D state/current
 uv run club-gas site-data --current state/current --out site/data
 ```
 
@@ -256,24 +250,28 @@ actionlint
 
 ## Sources
 
-One request per country per capture, except the United States, which needs a metadata
-request and about 60 batched price requests. At most one request per second per host.
+A capture runs one **feed** per chain and country, keyed `<COUNTRY>-<BRAND>`, so a feed
+that fails or is turned off cannot affect any other. One request per feed per capture,
+except the United States, which needs a metadata request and about 60 batched price
+requests. At most one request per second per host.
 
-| Country | Endpoint |
+| Feed | Endpoint |
 |---|---|
-| US | `ecom-api.costco.com/core/warehouse-locator/v1/warehouses.json` for metadata, then `www.costco.com/AjaxGetGasPricesService?warehouseid=<10 ids>` for prices. Falls back to `www.costco.ca/AjaxWarehouseBrowseLookupView?...&countryCode=US`. |
-| CA | `www.costco.ca/AjaxWarehouseBrowseLookupView?hasGas=true&populateWarehouseDetails=true&countryCode=CA`. Falls back to `www.costco.ca/AjaxGetGasPricesService`. |
-| MX | `www.costco.com.mx/rest/v2/mexico/stores?fields=FULL&...` |
-| GB | `www.costco.co.uk/rest/v2/uk/stores?fields=FULL&...` |
-| AU | `www.costco.com.au/rest/v2/australia/stores?fields=FULL&...` |
-| JP | `www.costco.co.jp/rest/v2/japan/stores?fields=FULL&...` |
-| TW | `www.costco.com.tw/rest/v2/taiwan/stores?fields=FULL&...` |
+| US-COSTCO | `ecom-api.costco.com/core/warehouse-locator/v1/warehouses.json` for metadata, then `www.costco.com/AjaxGetGasPricesService?warehouseid=<10 ids>` for prices. Falls back to `www.costco.ca/AjaxWarehouseBrowseLookupView?...&countryCode=US`. |
+| CA-COSTCO | `www.costco.ca/AjaxWarehouseBrowseLookupView?hasGas=true&populateWarehouseDetails=true&countryCode=CA`. Falls back to `www.costco.ca/AjaxGetGasPricesService`. |
+| MX-COSTCO | `www.costco.com.mx/rest/v2/mexico/stores?fields=FULL&...` |
+| GB-COSTCO | `www.costco.co.uk/rest/v2/uk/stores?fields=FULL&...` |
+| AU-COSTCO | `www.costco.com.au/rest/v2/australia/stores?fields=FULL&...` |
+| JP-COSTCO | `www.costco.co.jp/rest/v2/japan/stores?fields=FULL&...` |
+| TW-COSTCO | `www.costco.com.tw/rest/v2/taiwan/stores?fields=FULL&...` |
+| US-SAMS | `www.samsclub.com/api/node/vivaldi/browse/v2/clubfinder/list` for the roster, then the `HyperLocalPagesTempo` GraphQL query per club for prices. **Off** in `config/feeds.toml`: hosted runners are refused by the site's bot protection (HTTP 412), and the roster's own `gasPrices` field is stale by a third or more, so only the per-club query gives a current price. See `docs/samsclub-vivaldi-api.md`. |
 | FX | `api.frankfurter.dev/v2/rates?base=USD&quotes=CAD,MXN,GBP,AUD,JPY,TWD`, then `cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@<date>/v1/currencies/usd.json` |
 
-Costco publishes no timestamp with its prices, prices change during the day, and the
+No source publishes a timestamp with its prices, prices change during the day, and the
 storefront responses declare CDN caching of up to 90 minutes. Four captures a day and
 `captured_at_utc` on every row are how that uncertainty is exposed rather than hidden.
-Costco prices are not national averages.
+These are one chain's posted prices, not national averages, and grades are not
+equivalent across chains or countries.
 
 **Basemap.** The map uses CARTO raster basemaps when a `CARTO_BASEMAP_KEY` repository
 variable is set: © OpenStreetMap contributors, © CARTO
@@ -284,4 +282,4 @@ Without a key it falls back to OpenStreetMap tiles: © OpenStreetMap contributor
 ## License
 
 The code is MIT licensed. The data files carry no license claim and include the notice
-above; they are derived from Costco's public websites.
+above; they are derived from the retailers' public websites.

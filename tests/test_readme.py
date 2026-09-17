@@ -44,15 +44,15 @@ def test_notice_is_an_important_callout_near_the_top():
     for clause in notice_clauses():
         # Trailing punctuation differs where clauses are joined with "nor".
         assert clause.rstrip(".") in text_flowed, clause
-    assert "## Using the dashboard" in text
-    assert text.index("> [!IMPORTANT]") < text.index("## Using the dashboard")
+    assert "## The dashboard" in text
+    assert text.index("> [!IMPORTANT]") < text.index("## The dashboard")
 
 
 def test_required_sections_are_present_in_order():
     text = readme()
     headings = [
-        "# Costco Gas Prices",
-        "## Using the dashboard",
+        "# Club Gas Prices",
+        "## The dashboard",
         "## Getting the data",
         "## Data conventions",
         "## Repository layout",
@@ -66,11 +66,16 @@ def test_required_sections_are_present_in_order():
     assert positions == sorted(positions)
 
 
-def test_page_table_lists_every_dashboard_page():
+def test_the_dashboard_section_names_the_five_files_it_reads():
     text = flowed()
-    for page in ("| Map |", "| Compare |", "| Trends |", "| Station |", "| About |"):
-        assert page in text, page
-    assert "?station=<station_key>#station" in text
+    for asset in (
+        "site-meta.json",
+        "site-latest.json",
+        "site-stations.json",
+        "site-summary-daily.parquet",
+        "site-history.parquet",
+    ):
+        assert asset in text, asset
 
 
 def test_release_layout_names_every_asset_at_both_grains():
@@ -106,6 +111,7 @@ def test_schema_table_lists_every_row_column():
         "`captured_at_utc`",
         "`local_date`",
         "`country`",
+        "`brand`",
         "`station_key`",
         "`source_station_id`",
         "`source`",
@@ -134,12 +140,33 @@ def test_schema_table_lists_every_row_column():
         assert column in text, column
 
 
+def test_station_key_documents_the_chain_segment():
+    """It read `{country}-{source_station_id}` for a while after it stopped being
+    that, which is the kind of drift only an assertion catches."""
+    assert "{country}-{brand}-{source_station_id}" in readme()
+
+
+def test_sources_table_is_keyed_by_feed():
+    text = readme()
+    for feed in (
+        "US-COSTCO",
+        "CA-COSTCO",
+        "MX-COSTCO",
+        "GB-COSTCO",
+        "AU-COSTCO",
+        "JP-COSTCO",
+        "TW-COSTCO",
+        "US-SAMS",
+    ):
+        assert f"| {feed} |" in text, feed
+
+
 def test_data_conventions_cover_the_five_required_topics():
     text = flowed()
     assert "**Units.**" in text
     assert "3.785411784" in text
     assert "**Grades.**" in text
-    assert "`spec_source` is `source` when Costco itself states the specification" in text
+    assert "`spec_source` is `source` when the retailer itself states the specification" in text
     assert "**Exchange rates.**" in text
     assert "carried-forward:<original source>" in text
     assert "**Placeholders and pre-opening prices.**" in text

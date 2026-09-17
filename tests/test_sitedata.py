@@ -63,7 +63,7 @@ def _cfg() -> SimpleNamespace:
         grades=StubGrades(),
         site=SimpleNamespace(
             notice=lambda brands=None: [NOTICE, *(NOTICES[b] for b in sorted(brands or NOTICES))],
-            release_base_url="https://github.com/coatless-datasets/club-gas-prices/releases",
+            release_base_url="https://github.com/coatless-data/club-gas-prices/releases",
             basemap_key_env="CARTO_BASEMAP_KEY",
             basemaps={
                 "carto": {
@@ -775,7 +775,7 @@ def test_meta_json_carries_status_grades_and_releases(current_dir, tmp_path, mon
         "Unleaded 91",
         "E10",
     }
-    base = "https://github.com/coatless-datasets/club-gas-prices/releases"
+    base = "https://github.com/coatless-data/club-gas-prices/releases"
     assert meta["releases"]["all"] == base
     assert meta["releases"]["current"] == f"{base}/tag/current"
     assert meta["releases"]["latest_csv"] == f"{base}/download/current/club-gas-latest.csv"

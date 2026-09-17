@@ -53,7 +53,7 @@ def test_open_configured_store_defaults_to_the_project_repo(monkeypatch):
     monkeypatch.setattr(cli, "open_store", fake_open_store)
     monkeypatch.delenv("CLUB_GAS_STORE", raising=False)
     cli.open_configured_store()
-    assert captured["spec"] == "github:coatless-datasets/club-gas-prices"
+    assert captured["spec"] == "github:coatless-data/club-gas-prices"
     monkeypatch.setenv("CLUB_GAS_STORE", "local:./releases")
     cli.open_configured_store()
     assert captured["spec"] == "local:./releases"
