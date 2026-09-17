@@ -12,6 +12,18 @@
 country = "US"
 brand = "SAMS"
 
+# OFF, because the site says no from a hosted runner.
+#
+# A dry capture on 2026-09-17 answered HTTP 412 with a PerimeterX challenge body
+# -- {"redirectUrl":"/are-you-human?...","appId":"PXsLC3j22K"} -- where the same
+# request from a residential IP answered 200 forty-one times in a row without a
+# single throttle. So it is the runner's address that is refused, not the rate.
+#
+# The source, its tests and its fixtures stay: nothing about them is wrong, and
+# the only missing piece is a request origin the site will serve. Turning this
+# back on is one line, and needs a route the operator is entitled to use.
+enabled = false
+
 # The roster: every US club in one request, with coordinates and the grades each
 # sells. Its own `gasPrices` array is NOT read -- measured on 2026-09-17 it ran
 # 31-43% below what a member pays -- so this is the roster only.
