@@ -176,10 +176,27 @@ def _read_rows_dir(directory: Path) -> pl.DataFrame:
     return schema.read_rows_csv_gz(directory / "rows.csv.gz")
 
 
+def _read_capture_meta(directory: Path) -> dict:
+    """`capture.json` from the capture dir, or from the bundle sitting beside it.
+
+    Captures written before capture.py stamped the file into both places have it
+    only inside `bundle.tar.gz`. The bundle is part of every capture dir and
+    always carries the file, so the dir stays self-describing either way.
+    """
+    loose = directory / "capture.json"
+    if loose.exists():
+        return json.loads(loose.read_text(encoding="utf-8"))
+    with tarfile.open(directory / "bundle.tar.gz", "r:gz") as tar:
+        member = tar.extractfile("capture.json")
+        if member is None:
+            raise FileNotFoundError(f"capture.json is in neither {directory} nor its bundle")
+        return json.loads(member.read().decode("utf-8"))
+
+
 def load_capture_dir(directory: Path) -> CaptureInput:
     directory = Path(directory)
     status = json.loads((directory / "status.json").read_text(encoding="utf-8"))
-    meta = json.loads((directory / "capture.json").read_text(encoding="utf-8"))
+    meta = _read_capture_meta(directory)
     return CaptureInput(
         capture_id=status["capture_id"],
         capture_date=meta["capture_date"],

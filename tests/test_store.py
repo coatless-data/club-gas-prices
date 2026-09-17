@@ -118,7 +118,8 @@ def test_ensure_release_refuses_an_immutable_release(tmp_path: Path):
 
 def _seed(tmp_path: Path) -> tuple[store.LocalReleaseStore, Path]:
     root = tmp_path / "releases"
-    s = store.LocalReleaseStore(root)
+    # No real waiting: download retries a stale read on a backoff.
+    s = store.LocalReleaseStore(root, sleep=lambda _seconds: None)
     s.ensure_release("data-2026-09", "September 2026", "b", True, "false")
     return s, root
 
@@ -227,6 +228,57 @@ def test_download_detects_a_corrupted_asset(tmp_path: Path):
 
     with pytest.raises(store.StorageError, match="digest mismatch"):
         s.download("data-2026-09", "rows.csv", tmp_path / "d.csv")
+
+
+def test_download_retries_a_stale_read_and_returns_the_settled_bytes(tmp_path: Path):
+    """An asset is replaced by name, and its two halves settle apart.
+
+    For a few seconds the public download can still serve the bytes that were
+    replaced while the listing already describes the new ones -- so publish
+    rewriting a manifest and close-periods reading it moments later failed on a
+    real run. The bytes must still verify; asking only once is what was wrong.
+    """
+    s, _ = _seed(tmp_path)
+    src = tmp_path / "rows.csv"
+    src.write_bytes(b"rows-v2-longer\n")
+    s.upload_new("data-2026-09", src, "rows.csv")
+
+    calls = {"n": 0}
+    real_fetch = s._fetch_asset
+
+    def fetch(tag, asset, dest):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            # The listing already describes v2; the download still hands back v1.
+            Path(dest).write_bytes(b"rows-v1\n")
+            return Path(dest)
+        return real_fetch(tag, asset, dest)
+
+    s._fetch_asset = fetch
+    out = s.download("data-2026-09", "rows.csv", tmp_path / "d.csv")
+
+    assert out.read_bytes() == b"rows-v2-longer\n"
+    assert calls["n"] == 2
+
+
+def test_download_gives_up_when_the_bytes_never_settle(tmp_path: Path):
+    """Retrying must not soften the guarantee: wrong bytes are never returned."""
+    s, _ = _seed(tmp_path)
+    src = tmp_path / "rows.csv"
+    src.write_bytes(b"rows-v2-longer\n")
+    s.upload_new("data-2026-09", src, "rows.csv")
+
+    calls = {"n": 0}
+
+    def fetch(tag, asset, dest):
+        calls["n"] += 1
+        Path(dest).write_bytes(b"rows-v1\n")
+        return Path(dest)
+
+    s._fetch_asset = fetch
+    with pytest.raises(store.StorageError, match="size mismatch"):
+        s.download("data-2026-09", "rows.csv", tmp_path / "d.csv")
+    assert calls["n"] == len(store.STALE_READ_RETRY_DELAYS) + 1
 
 
 def test_rename_can_clear_the_label_and_delete_removes_the_asset(tmp_path: Path):
@@ -680,6 +732,7 @@ class FakeGitHub:
         self.latest_tag: str | None = None
         self.calls: list[dict] = []
         self.fail_promote: dict[str, int] = {}
+        self.stale_downloads: dict[str, bytes] = {}
         self.rate_limit_queue: list[dict] = []
         self.null_digest = False
         self._next_release = 1
@@ -809,6 +862,11 @@ class FakeGitHub:
         path = request.url.path
         if request.url.host == "downloads.invalid":
             asset_id = int(path.rsplit("/", 1)[-1])
+            name = self.assets[asset_id]["name"]
+            # GitHub serves this by NAME: after a replace it can still answer
+            # with the bytes of the asset that held the name before.
+            if name in self.stale_downloads:
+                return httpx.Response(200, content=self.stale_downloads[name])
             return httpx.Response(200, content=self.assets[asset_id]["body"])
         if request.method in ("POST", "PATCH", "DELETE") and self.rate_limit_queue:
             headers = self.rate_limit_queue.pop(0)
@@ -877,6 +935,9 @@ class FakeGitHub:
             return httpx.Response(201, json=self._asset_json(asset))
 
         match = re.fullmatch(rf"{re.escape(self.base)}/releases/assets/(\d+)", path)
+        if match and request.method == "GET":
+            # Addressed by id: always this upload's own bytes.
+            return httpx.Response(200, content=self.assets[int(match.group(1))]["body"])
         if match and request.method == "PATCH":
             asset = self.assets[int(match.group(1))]
             payload = json.loads(request.content)
@@ -1328,3 +1389,33 @@ def test_x_ratelimit_reset_is_honoured(writer_env):
 
     assert clock.slept == [45.0]
     assert fake.asset_names("current") == []
+
+
+def test_download_falls_back_to_the_asset_id_when_the_public_copy_is_stale(tmp_path: Path):
+    """The public download is addressed by name, and a replace reuses the name.
+
+    `replace_atomic` renames a temporary asset onto the name the old one held,
+    so for a while afterwards that URL can still answer with the bytes it
+    replaced -- which is how a real `close-periods` read a month manifest that
+    the run before it had already rewritten, and kept reading it. Retrying the
+    same URL cannot converge; an asset id belongs to one upload.
+    """
+    fake = FakeGitHub()
+    fake.add_release("data-2026-09", prerelease=True)
+    fake.add_asset("data-2026-09", "manifest-2026-09.json", b'{"v": 2, "settled": true}')
+    fake.stale_downloads["manifest-2026-09.json"] = b'{"v": 1}'
+    s = store.GitHubReleaseStore(
+        "acme", "gas", transport=fake.transport(), sleep=lambda _seconds: None
+    )
+
+    out = s.download("data-2026-09", "manifest-2026-09.json", tmp_path / "m.json")
+
+    assert out.read_bytes() == b'{"v": 2, "settled": true}'
+    # Exactly one public attempt, then the API by id: the public URL never
+    # settles here, so a retry of it would have looped to the end and failed.
+    fetches = [
+        httpx.URL(c["url"]).host
+        for c in fake.calls
+        if re.search(r"(downloads\.invalid/assets|/releases/assets)/\d+$", c["url"])
+    ]
+    assert fetches == ["downloads.invalid", "api.github.com"]

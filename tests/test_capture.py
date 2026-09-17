@@ -754,3 +754,33 @@ def test_the_capture_directory_is_one_publish_can_read(workspace: Path):
     loaded = load_capture_dir(directory)
     assert loaded.capture_id == result.capture_id
     assert loaded.rows.height > 0
+
+
+def test_a_capture_directory_without_the_loose_capture_json_still_loads(workspace: Path):
+    """Rebuild replays artifacts, including ones older than the fix above.
+
+    Those captures stamped `capture.json` into the bundle only, so the recovery
+    path -- the one the "Publish failing" issue tells an operator to run -- died
+    on the very artifacts it exists to rescue. The bundle travels with the
+    directory and always holds the file.
+    """
+    from club_gas.publish import load_capture_dir
+
+    cfg = load_config(workspace)
+    store = LocalReleaseStore(workspace / "releases")
+    result = run_capture(
+        cfg,
+        store,
+        workspace / "out",
+        countries=["TW"],
+        force_fallback=set(),
+        now=NOW,
+        client=Client(cfg.http, transport=make_transport()),
+    )
+    directory = Path(result.out)
+    (directory / "capture.json").unlink()
+
+    loaded = load_capture_dir(directory)
+    assert loaded.capture_id == result.capture_id
+    assert loaded.capture_date == "2026-09-15"
+    assert loaded.rows.height > 0

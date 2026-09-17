@@ -38,6 +38,12 @@ SIDECAR_NAME = "_release.json"
 LATEST_NAME = "_latest.json"
 POLL_SECONDS = 60.0
 RENAME_RETRY_DELAYS = (5.0, 10.0, 20.0, 40.0, 80.0)
+# A release asset is replaced by name, so after a replace the public download
+# can still answer with the bytes it replaced while the listing already
+# describes the new ones. Verification stays strict -- wrong bytes are never
+# accepted -- and the retries ask by asset id instead, which cannot be stale.
+# The delays are for an upload still settling, not for a cache to expire.
+STALE_READ_RETRY_DELAYS = (2.0, 5.0, 10.0, 20.0)
 
 
 class AssetNotFound(Exception):
@@ -175,6 +181,13 @@ class _BaseStore:
         # pragma: no cover - interface
         raise NotImplementedError
 
+    def _fetch_asset_by_id(self, tag: str, asset: Asset, dest: Path) -> Path:
+        """The same bytes, asked for by the asset's identity rather than its name.
+
+        A store whose two are the same thing needs no override.
+        """
+        return self._fetch_asset(tag, asset, dest)
+
     def _asset_by_name(self, tag: str, name: str) -> Asset | None:
         for asset in self.list_assets(tag):
             if asset.name == name:
@@ -203,25 +216,34 @@ class _BaseStore:
         propagates here unchanged, so a wrong store spec or a dead token can
         never present as "never published" and silently reset history.
         """
-        assets = self.list_assets(tag)
-        match = next((a for a in assets if a.name == name), None)
-        if match is None:
-            temps = self._temps_for(assets, name)
-            if temps:
-                raise StorageError(
-                    f"{tag}:{name} is missing while {len(temps)} temporary assets "
-                    f"exist; run recovery before reading it"
+        for attempt in range(len(STALE_READ_RETRY_DELAYS) + 1):
+            # Re-listed every attempt: either side of the pair can be the stale
+            # one, so refreshing only the bytes would still not converge.
+            assets = self.list_assets(tag)
+            match = next((a for a in assets if a.name == name), None)
+            if match is None:
+                temps = self._temps_for(assets, name)
+                if temps:
+                    raise StorageError(
+                        f"{tag}:{name} is missing while {len(temps)} temporary assets "
+                        f"exist; run recovery before reading it"
+                    )
+                raise AssetNotFound(f"{tag}:{name}")
+            fetch = self._fetch_asset if attempt == 0 else self._fetch_asset_by_id
+            path = fetch(tag, match, Path(dest))
+            size = path.stat().st_size
+            if size != match.size:
+                mismatch = StorageError(f"size mismatch for {tag}:{name}: {size} != {match.size}")
+            elif match.digest is not None and (got := sha256_label(path)) != match.digest:
+                mismatch = StorageError(
+                    f"digest mismatch for {tag}:{name}: {got} != {match.digest}"
                 )
-            raise AssetNotFound(f"{tag}:{name}")
-        path = self._fetch_asset(tag, match, Path(dest))
-        size = path.stat().st_size
-        if size != match.size:
-            raise StorageError(f"size mismatch for {tag}:{name}: {size} != {match.size}")
-        if match.digest is not None:
-            got = sha256_label(path)
-            if got != match.digest:
-                raise StorageError(f"digest mismatch for {tag}:{name}: {got} != {match.digest}")
-        return path
+            else:
+                return path
+            if attempt == len(STALE_READ_RETRY_DELAYS):
+                raise mismatch
+            self._sleep(STALE_READ_RETRY_DELAYS[attempt])
+        raise AssertionError("unreachable")
 
     def _verify_asset(
         self, tag: str, asset: Asset, expected_label: str, expected_size: int | None
@@ -661,7 +683,9 @@ class GitHubReleaseStore(_BaseStore):
     """Releases in a GitHub repository, through the REST API.
 
     Reads need no token and pull asset bytes from `browser_download_url`, which
-    does not count against the API rate limit. Writes require both
+    does not count against the API rate limit; only a read whose bytes fail
+    verification falls back to the API, which addresses the asset by id and so
+    costs quota. Writes require both
     `GITHUB_TOKEN` and `CLUB_GAS_WRITER=1`; the second is set only by the two
     workflows allowed to write, so an accidental local publish cannot corrupt
     the published data.
@@ -989,6 +1013,27 @@ class GitHubReleaseStore(_BaseStore):
 
     def delete(self, tag: str, asset_id: int) -> None:
         self._request("DELETE", f"{self._base}/releases/assets/{asset_id}", ok=(204,))
+
+    def _fetch_asset_by_id(self, tag: str, asset: Asset, dest: Path) -> Path:
+        """Read the asset through the API, which addresses it by id.
+
+        `replace_atomic` puts an asset in place by renaming it onto the name the
+        old one held, and `browser_download_url` is that name -- so the public
+        copy can keep answering with the bytes that were replaced, for longer
+        than any backoff is worth spending. An id belongs to one upload and
+        cannot be stale. This costs API quota, which is why it is the second
+        thing tried and not the first.
+        """
+        dest = Path(dest)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        response = self._request(
+            "GET",
+            f"{self._base}/releases/assets/{asset.id}",
+            ok=(200,),
+            extra_headers={"Accept": "application/octet-stream"},
+        )
+        dest.write_bytes(response.content)
+        return dest
 
     def _fetch_asset(self, tag: str, asset: Asset, dest: Path) -> Path:
         if not asset.download_url:

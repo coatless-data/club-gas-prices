@@ -10,7 +10,7 @@ import pytest
 
 from club_gas import rollup
 from club_gas.rollup import close_periods, daily_grain, rebuild_current
-from club_gas.store import next_name, open_store, sha256_label
+from club_gas.store import next_name, open_store, sha256_file, sha256_label
 from helpers_rollup import (
     RecordingIssues,
     RecordingStore,
@@ -29,6 +29,16 @@ CURRENT_DATA_ASSET_NAMES = {
     "club-gas-latest.csv",
     "stations.csv",
     "fx.csv",
+}
+# The dashboard downloads these five from `current` and verifies each against
+# manifest.json, so a rebuild that leaves them out of the manifest -- or leaves
+# them describing the pre-rebuild dataset -- takes the site down.
+CURRENT_ASSET_NAMES = CURRENT_DATA_ASSET_NAMES | {
+    "site-meta.json",
+    "site-latest.json",
+    "site-stations.json",
+    "site-summary-daily.parquet",
+    "site-history.parquet",
 }
 CURRENT_MANIFEST_KEYS = {
     "schema_version",
@@ -433,7 +443,7 @@ def test_full_rebuild_reads_closed_month_files_and_closed_month_manifest_fx(tmp_
     assert manifest["status"]["capture_id"] == "2026-09-15T1817Z"
     assert manifest["closed_months"] == ["2026-08"]
     assert manifest["newest_capture_by_feed"] == {"US-COSTCO": "2026-09-15T1817Z"}
-    assert set(manifest["assets"]) == CURRENT_DATA_ASSET_NAMES
+    assert set(manifest["assets"]) == CURRENT_ASSET_NAMES
 
 
 def test_full_rebuild_manifest_equals_the_incremental_one(tmp_path):
@@ -478,7 +488,36 @@ def test_full_rebuild_manifest_equals_the_incremental_one(tmp_path):
     assert manifest["status"]["capture_id"] == "2026-08-31T1817Z"
     assert manifest["closed_months"] == []
     assert manifest["closed_years"] == []
-    assert set(manifest["assets"]) == CURRENT_DATA_ASSET_NAMES
+    assert set(manifest["assets"]) == CURRENT_ASSET_NAMES
+
+
+def test_full_rebuild_refreshes_the_site_files_it_lists(tmp_path):
+    """A rebuild that only relists stale site files would be worse than useless.
+
+    The manifest is what the dashboard verifies its download against, so a
+    site file carried over from before the rebuild passes the checksum and
+    renders the OLD dataset -- one capture's map over another's history, the
+    exact thing publishing them inside the transaction exists to prevent.
+    """
+    store = open_store(f"local:{tmp_path / 'releases'}")
+    cfg = stub_config(tmp_path)
+    store.ensure_release("current", "Current", "", False, "true")
+    stale = tmp_path / "stale-site.json"
+    stale.write_text('{"stale": true}', "utf-8")
+    store.upload_new("current", stale, "site-latest.json")
+    _seed_august(store, tmp_path)
+
+    rebuild_current(store, cfg, now=datetime(2026, 9, 1, 3, 17, tzinfo=UTC))
+
+    manifest = json.loads(
+        store.download("current", "manifest.json", tmp_path / "out.json").read_text()
+    )
+    got = store.download("current", "site-latest.json", tmp_path / "site-latest.json")
+    assert json.loads(got.read_text()) != {"stale": True}
+    # download() verifies bytes against the listing; the manifest is the
+    # separate claim the dashboard checks, so assert that one explicitly.
+    assert manifest["assets"]["site-latest.json"]["size"] == got.stat().st_size
+    assert manifest["assets"]["site-latest.json"]["sha256"] == sha256_file(got)
 
 
 def test_full_rebuild_keeps_alt_id_and_status_and_applies_station_links(tmp_path):

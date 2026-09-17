@@ -617,11 +617,13 @@ def _rebuild_current_impl(store, cfg, *, now: datetime) -> None:
             {code: c.closed_after_days for code, c in cfg.countries.items()},
         )
         assets: dict[str, dict] = {}
+        outputs: dict[str, Path] = {}
 
         def put(name: str, writer) -> None:
             path = work / name
             writer(path)
             store.replace_atomic("current", path, name, token)
+            outputs[name] = path
             assets[name] = {"sha256": sha256_file(path), "size": path.stat().st_size}
 
         put(
@@ -683,6 +685,21 @@ def _rebuild_current_impl(store, cfg, *, now: datetime) -> None:
             "assets": assets,
             "merged_captures": merged_captures,
         }
+        # The dashboard's five files are part of `current` too, and a rebuild
+        # that wrote only the six above left them describing the dataset as it
+        # was BEFORE the rebuild -- and absent from the manifest that the site
+        # verifies its download against, so the site could not render at all.
+        # Built here exactly as publish._write_current builds them: same inputs,
+        # same moment in the manifest's life, so the two writers cannot drift.
+        for name, site_path in publish._build_site_assets(
+            cfg, work, outputs, manifest, now=now
+        ).items():
+            store.replace_atomic("current", site_path, name, token)
+            assets[name] = {
+                "sha256": sha256_file(site_path),
+                "size": site_path.stat().st_size,
+            }
+
         path = work / "manifest.json"
         path.write_text(json.dumps(manifest, indent=1, sort_keys=True, default=str), "utf-8")
         store.replace_atomic("current", path, "manifest.json", token)
