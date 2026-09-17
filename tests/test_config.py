@@ -551,3 +551,21 @@ def test_every_extra_id_row_names_a_brand(cfg):
     """
     brands = set(cfg.us_extra_ids["brand"].to_list())
     assert brands == {"COSTCO"}, brands
+
+
+def test_a_feed_can_be_turned_off(cfg):
+    """A feed the operator has no working route to is off, not broken.
+
+    Sam's Club answers HTTP 412 with a PerimeterX challenge from a GitHub
+    runner while serving the same request from a residential IP, so leaving it
+    on would fail every capture and open an issue four times a day for a
+    condition no retry fixes.
+    """
+    assert cfg.feeds["US-SAMS"].enabled is False
+
+
+def test_a_feed_is_on_unless_it_says_otherwise(config_copy: Path):
+    path = config_copy / "config" / "feeds.toml"
+    text = path.read_text(encoding="utf-8")
+    path.write_text(text.replace("enabled = false", ""), encoding="utf-8")
+    assert load_config(config_copy).feeds["US-SAMS"].enabled is True

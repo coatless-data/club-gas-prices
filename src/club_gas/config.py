@@ -273,6 +273,9 @@ class FeedConfig:
     brand: str
     url: str
     floor: int
+    # A feed the operator has no working route to is off, not broken: it is
+    # `skipped` in the status, opens no issue, and does not sink the capture.
+    enabled: bool = True
     price_url: str | None = None
     origin_postcode: str | None = None
     params: dict[str, str] = field(default_factory=dict)
@@ -578,6 +581,7 @@ def _load_feeds(path: Path) -> dict[str, FeedConfig]:
                 brand=str(spec["brand"]),
                 url=str(spec["url"]),
                 floor=int(spec["floor"]),
+                enabled=bool(spec.get("enabled", True)),
                 price_url=(str(spec["price_url"]) if spec.get("price_url") else None),
                 origin_postcode=(
                     str(spec["origin_postcode"]) if spec.get("origin_postcode") else None

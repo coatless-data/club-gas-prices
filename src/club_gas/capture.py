@@ -238,7 +238,10 @@ def run_capture(
             ctx.shared["ecom-api"] = resp
             write_response(out / "shared", resp, "ecom-api")
 
-    feeds = feeds_for(countries)
+    # A feed the operator has no working route to is left out of the run, so it
+    # reads `skipped` rather than failing every capture and opening an issue.
+    configured = getattr(cfg, "feeds", {}) or {}
+    feeds = [fid for fid in feeds_for(countries) if getattr(configured.get(fid), "enabled", True)]
     blocks, collected = _run_feeds(feeds, client, ctx, fx, out, now, warnings)
 
     rows = _concat(collected, "rows", schema.ROW_SCHEMA).sort(schema.ROW_SORT)

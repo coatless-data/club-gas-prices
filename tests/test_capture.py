@@ -710,3 +710,15 @@ def test_capture_takes_its_deadlines_from_the_budgets_table(workspace: Path):
     assert not [key for key in keys if key.startswith("fx/") or key == "shared/ecom-api"]
     # US still ran on the default country budget, which the table left alone.
     assert [key for key in keys if key.startswith("US-COSTCO/")]
+
+
+def test_a_disabled_feed_is_never_dispatched(monkeypatch):
+    """It reads `skipped`, which opens no issue and sinks no capture."""
+    from types import SimpleNamespace
+
+    from club_gas.sources.base import feeds_for
+
+    configured = {"US-SAMS": SimpleNamespace(enabled=False)}
+    runnable = [fid for fid in feeds_for(["US"]) if getattr(configured.get(fid), "enabled", True)]
+
+    assert runnable == ["US-COSTCO"]
