@@ -155,7 +155,7 @@ def test_rebuild_conventions_and_settings():
     # is declared by exactly the two workflows that write releases.
     writers = {
         name
-        for name in ("capture.yml", "render.yml", "discover.yml", "rebuild.yml")
+        for name in ("capture.yml", "discover.yml", "rebuild.yml")
         if 'COSTCO_GAS_WRITER: "1"' in read(name)
     }
     assert writers == {"capture.yml", "rebuild.yml"}
@@ -217,12 +217,12 @@ def test_every_workflow_runs_on_the_same_image():
     """One runner label across the fleet, whatever it is.
 
     The workflows hand work to each other -- Capture uploads an artifact Rebuild
-    reads, and both trigger Render -- so a split fleet means "passes in test,
-    fails in deploy" with no reason to suspect the OS. This asserts they agree,
-    not which one they agree on.
+    reads -- so a split fleet means "passes in test, fails in production" with no
+    reason to suspect the OS. This asserts they agree, not which one they agree
+    on.
     """
     labels = {}
-    for name in ("test.yml", "capture.yml", "discover.yml", "rebuild.yml", "render.yml"):
+    for name in ("test.yml", "capture.yml", "discover.yml", "rebuild.yml"):
         found = re.findall(r"^\s*runs-on:\s*(\S+)", read(name), re.M)
         assert len(found) == 1, (name, found)
         labels[name] = found[0]
