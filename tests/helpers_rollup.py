@@ -118,13 +118,26 @@ class StubSite:
     notice: str = NOTICE
 
 
+@dataclass(frozen=True)
+class StubCountry:
+    """Only what rollup asks a country for."""
+
+    closed_after_days: int = 45
+
+
 @dataclass
 class StubConfig:
-    """rollup reads only `.root`, `.station_links` and `.site.notice`."""
+    """rollup reads `.root`, `.station_links`, `.site.notice` and, per country,
+    `.closed_after_days`."""
 
     root: Path
     station_links: pl.DataFrame
     site: StubSite = field(default_factory=StubSite)
+    countries: dict = field(
+        default_factory=lambda: {
+            code: StubCountry() for code in ("US", "CA", "MX", "GB", "AU", "JP", "TW")
+        }
+    )
 
 
 def stub_config(tmp_path: Path, links: pl.DataFrame | None = None) -> StubConfig:

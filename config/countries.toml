@@ -4,7 +4,8 @@
 # fallback_url, fallback_params, ecom_url, ecom_params, ecom_client_identifier)
 # are FETCH config: what to request. They come from the capture bundle when
 # history is rebuilt.
-# price_unit, unit_overrides, bounds, floor, stale_after_days and timezones are
+# price_unit, unit_overrides, bounds, floor, stale_after_days, closed_after_days
+# and timezones are
 # INTERPRETATION config: how to read a stored response. They always come from
 # the live checkout, so fixing a bound or a timezone fixes history too.
 #
@@ -24,6 +25,10 @@ url = "https://www.costco.com/AjaxGetGasPricesService"
 price_unit = "USD/gal"
 floor = 585
 stale_after_days = 3
+# A station absent from its country's feed for longer than this is called
+# closed rather than missing. Long enough that a feed outage, a partial
+# failure or a delisting over a refurbishment does not read as a closure.
+closed_after_days = 45
 # AjaxGetGasPricesService processes only the first 10 ids of a request.
 batch_size = 10
 seen_within_days = 30
@@ -127,6 +132,10 @@ url = "https://www.costco.ca/AjaxWarehouseBrowseLookupView"
 price_unit = "CAD/L"
 floor = 78
 stale_after_days = 3
+# A station absent from its country's feed for longer than this is called
+# closed rather than missing. Long enough that a feed outage, a partial
+# failure or a delisting over a refurbishment does not read as a closure.
+closed_after_days = 45
 batch_size = 10
 seen_within_days = 30
 fallback_url = "https://www.costco.ca/AjaxGetGasPricesService"
@@ -163,6 +172,10 @@ url = "https://www.costco.com.mx/rest/v2/mexico/stores"
 price_unit = "MXN/L"
 floor = 18
 stale_after_days = 3
+# A station absent from its country's feed for longer than this is called
+# closed rather than missing. Long enough that a feed outage, a partial
+# failure or a delisting over a refurbishment does not read as a closure.
+closed_after_days = 45
 
 [countries.MX.params]
 fields = "FULL"
@@ -193,6 +206,10 @@ url = "https://www.costco.co.uk/rest/v2/uk/stores"
 price_unit = "GBp/L"
 floor = 21
 stale_after_days = 3
+# A station absent from its country's feed for longer than this is called
+# closed rather than missing. Long enough that a feed outage, a partial
+# failure or a delisting over a refurbishment does not read as a closure.
+closed_after_days = 45
 
 [countries.GB.params]
 fields = "FULL"
@@ -215,6 +232,10 @@ url = "https://www.costco.com.au/rest/v2/australia/stores"
 price_unit = "AUD/L"
 floor = 14
 stale_after_days = 3
+# A station absent from its country's feed for longer than this is called
+# closed rather than missing. Long enough that a feed outage, a partial
+# failure or a delisting over a refurbishment does not read as a closure.
+closed_after_days = 45
 
 # lang, curr and pageSize=100 are unverified for this host: the research
 # verified pageSize=50 with neither lang nor curr, and Japan returns HTTP 400
@@ -248,6 +269,10 @@ url = "https://www.costco.co.jp/rest/v2/japan/stores"
 price_unit = "JPY/L"
 floor = 26
 stale_after_days = 10
+# A station absent from its country's feed for longer than this is called
+# closed rather than missing. Long enough that a feed outage, a partial
+# failure or a delisting over a refurbishment does not read as a closure.
+closed_after_days = 45
 
 [countries.JP.params]
 fields = "FULL"
@@ -275,6 +300,10 @@ url = "https://www.costco.com.tw/rest/v2/taiwan/stores"
 price_unit = "TWD/L"
 floor = 3
 stale_after_days = 14
+# A station absent from its country's feed for longer than this is called
+# closed rather than missing. Long enough that a feed outage, a partial
+# failure or a delisting over a refurbishment does not read as a closure.
+closed_after_days = 45
 
 [countries.TW.params]
 fields = "FULL"

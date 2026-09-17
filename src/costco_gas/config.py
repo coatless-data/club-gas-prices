@@ -3,6 +3,7 @@
 The config splits into two halves. Fetch config (URLs, query parameters, HTTP
 policy, us_extra_ids.csv) says what to request. Interpretation config (grades,
 units, bounds, region-to-timezone tables, station floors, stale_after_days,
+closed_after_days,
 station_links.csv) says how to read a response that was stored earlier. The
 rebuild command replays months-old responses with today's interpretation
 config, which is why Config exposes fetch_view() and interp_view().
@@ -170,6 +171,7 @@ class CountryConfig:
     bounds: dict[str, Bounds]
     floor: int
     stale_after_days: int
+    closed_after_days: int
     timezones: dict[str, str]
     batch_size: int | None = None
     seen_within_days: int | None = None
@@ -264,6 +266,7 @@ class Config:
                     bounds={},
                     floor=0,
                     stale_after_days=0,
+                    closed_after_days=0,
                     timezones={},
                 )
                 for code, country in self.countries.items()
@@ -443,6 +446,7 @@ def _load_countries(path: Path) -> dict[str, CountryConfig]:
                 bounds=_load_bounds(spec.get("bounds", {}), where),
                 floor=int(spec["floor"]),
                 stale_after_days=int(spec["stale_after_days"]),
+                closed_after_days=int(spec["closed_after_days"]),
                 timezones={str(k): str(v) for k, v in spec.get("timezones", {}).items()},
                 batch_size=_optional_int(spec.get("batch_size")),
                 seen_within_days=_optional_int(spec.get("seen_within_days")),
