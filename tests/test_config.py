@@ -40,7 +40,7 @@ def test_http_policy(cfg):
     assert http.costco_user_agent.endswith("Safari/537.36")
     assert "costco-gas-prices" not in http.costco_user_agent
     assert http.project_user_agent.startswith("costco-gas-prices/")
-    assert http.x_project == "https://github.com/coatless-dashboard/costco-gas-prices"
+    assert http.x_project == "https://github.com/coatless-datasets/costco-gas-prices"
     assert "costco.com" in http.costco_host_suffixes
     assert "costco.co.jp" in http.costco_host_suffixes
 

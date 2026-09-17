@@ -22,6 +22,7 @@ import gzip
 import json
 import os
 import re
+import shutil
 import tarfile
 import tempfile
 from dataclasses import dataclass, field
@@ -30,7 +31,7 @@ from pathlib import Path
 
 import polars as pl
 
-from . import rollup, schema
+from . import rollup, schema, sitedata
 from .config import Config
 from .issues import Issues
 from .store import (
@@ -462,6 +463,8 @@ def merge_capture(
     scratch: Path,
     warnings: list[str],
     assets_written: list[str],
+    *,
+    now: datetime,
 ) -> None:
     """Spec 8.5 steps 3 to 5 for one capture."""
     month = captured.capture_date[:7]
@@ -509,7 +512,7 @@ def merge_capture(
     # `current` is updated BEFORE the month manifest records this capture: see the
     # module docstring for why that order, not the daily-file-then-manifest order
     # spec 8.5 lists, is the one that keeps a crash recoverable.
-    _update_current(store, cfg, captured, merged, scratch, assets_written)
+    _update_current(store, cfg, captured, merged, scratch, assets_written, now=now)
 
     entry = manifest["captures"].setdefault(captured.capture_id, {})
     entry["status"] = captured.status
@@ -539,6 +542,8 @@ def _update_current(
     merged_daily: pl.DataFrame,
     scratch: Path,
     assets_written: list[str],
+    *,
+    now: datetime,
 ) -> None:
     ensure_current(store)
     local: dict[str, Path] = {}
@@ -698,10 +703,60 @@ def _update_current(
         {*manifest.get("merged_captures", []), captured.capture_id}
     )
 
+    # The dashboard is a separate repository with no Python in it: it downloads
+    # these five files and renders. They are built here, from the same frames the
+    # six assets above were written from, and uploaded inside the same
+    # transaction -- which is what stops the site from ever showing one capture's
+    # map over another capture's history. They are built after `status` and
+    # `merged_captures` are settled because meta.json reads both.
+    for name, path in _build_site_assets(cfg, scratch, outputs, manifest, now=now).items():
+        store.replace_atomic("current", path, name, captured.capture_id)
+        assets_written.append(f"current/{name}")
+        manifest["assets"][name] = {
+            "sha256": sha256_file(path),
+            "size": path.stat().st_size,
+        }
+
     manifest_path = scratch / "out-manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=1, sort_keys=True), encoding="utf-8")
     store.replace_atomic("current", manifest_path, "manifest.json", captured.capture_id)
     assets_written.append("current/manifest.json")
+
+
+def _build_site_assets(
+    cfg: Config,
+    scratch: Path,
+    outputs: dict[str, Path],
+    manifest: dict,
+    *,
+    now: datetime,
+) -> dict[str, Path]:
+    """Build the dashboard's files from the `current` assets about to be uploaded.
+
+    `build_site_data` reads a directory laid out like a downloaded `current`, so
+    the freshly written assets are linked into one under their canonical names,
+    together with the manifest as it will be written a moment later.
+    """
+    staged = scratch / "site-input"
+    staged.mkdir(parents=True, exist_ok=True)
+    for name, path in outputs.items():
+        target = staged / name
+        target.unlink(missing_ok=True)
+        try:
+            os.link(path, target)
+        except OSError:
+            shutil.copyfile(path, target)
+    (staged / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    out_dir = scratch / "site-data"
+    sitedata.build_site_data(staged, out_dir, cfg, now=now)
+    built = {}
+    for name, asset in sitedata.SITE_ASSETS.items():
+        path = out_dir / name
+        if not path.exists():
+            raise StorageError(f"site data is missing {name}")
+        built[asset] = path
+    return built
 
 
 def _dedupe(values: list[str]) -> list[str]:
@@ -728,7 +783,9 @@ def publish(store: ReleaseStore, capture_dir: Path, cfg: Config, *, now: datetim
         for tag in recovery_tags(store):
             recover_temporaries(store, tag)
         ensure_releases(store, month)
-        _reconcile(store, cfg, scratch, captured.capture_id, warnings, assets_written, issues)
+        _reconcile(
+            store, cfg, scratch, captured.capture_id, warnings, assets_written, issues, now=now
+        )
         upload_bundle(
             store,
             f"data-{month}",
@@ -738,7 +795,7 @@ def publish(store: ReleaseStore, capture_dir: Path, cfg: Config, *, now: datetim
             scratch,
         )
         assets_written.append(f"data-{month}/capture-{captured.capture_id}.tar.gz")
-        merge_capture(store, cfg, captured, scratch, warnings, assets_written)
+        merge_capture(store, cfg, captured, scratch, warnings, assets_written, now=now)
 
     return PublishResult(
         capture_id=captured.capture_id,
@@ -755,6 +812,8 @@ def _reconcile(
     warnings: list[str],
     assets_written: list[str],
     issues: Issues,
+    *,
+    now: datetime,
 ) -> None:
     """Spec 8.5 step 0: bundles uploaded by a crashed publish are merged or removed."""
     for release in store.list_releases():
@@ -796,5 +855,5 @@ def _reconcile(
                     ["capture-failure"],
                 )
                 continue
-            merge_capture(store, cfg, orphan, scratch, warnings, assets_written)
+            merge_capture(store, cfg, orphan, scratch, warnings, assets_written, now=now)
             warnings.append(f"reconciled:{capture_id}")

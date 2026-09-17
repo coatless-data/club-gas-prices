@@ -41,7 +41,7 @@ CURRENT_DATA_ASSETS = (
     "stations.csv",
     "fx.csv",
 )
-SCHEMA_URL = "https://github.com/coatless-dashboard/costco-gas-prices#getting-the-data"
+SCHEMA_URL = "https://github.com/coatless-datasets/costco-gas-prices#getting-the-data"
 
 
 @dataclass

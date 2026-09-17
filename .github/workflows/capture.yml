@@ -39,6 +39,10 @@ jobs:
       GITHUB_TOKEN: ${{ github.token }}
       GH_TOKEN: ${{ github.token }}
       CONTACT_EMAIL: ${{ vars.CONTACT_EMAIL }}
+      # `publish` builds the dashboard's files into the `current` release, and
+      # the basemap block it writes into meta.json depends on this. Unset falls
+      # back to OpenStreetMap tiles rather than failing.
+      CARTO_BASEMAP_KEY: ${{ vars.CARTO_BASEMAP_KEY }}
       COSTCO_GAS_WRITER: "1"
       COUNTRIES: ${{ inputs.countries || 'all' }}
       FORCE_FALLBACK: ${{ inputs.force_fallback || '' }}

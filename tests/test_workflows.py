@@ -10,12 +10,7 @@ them. A YAML parser normalizes quoting and would hide all three.
 
 from __future__ import annotations
 
-import hashlib
-import json
 import re
-import subprocess
-import sys
-import textwrap
 from pathlib import Path
 
 WORKFLOWS = Path(__file__).resolve().parents[1] / ".github" / "workflows"
@@ -130,127 +125,6 @@ def test_capture_uploads_the_artifact_on_every_run():
     assert "retention-days: 30" in text
 
 
-def test_render_conventions():
-    assert_conventions("render.yml")
-    text = read("render.yml")
-    assert "concurrency:\n  group: render\n  cancel-in-progress: true\n" in text
-    assert "permissions:\n  contents: read\n  pages: write\n  id-token: write\n" in text
-    # Render only reads releases, so it must never claim the writer flag.
-    assert "COSTCO_GAS_WRITER" not in text
-
-
-def test_render_triggers_and_job_condition():
-    text = read("render.yml")
-    assert text.startswith("name: Render\n")
-    assert "workflows: [Capture, Rebuild]" in text
-    assert (
-        "if: ${{ github.event_name != 'workflow_run'"
-        " || (github.event.workflow_run.conclusion == 'success'"
-        " && !contains(github.event.workflow_run.display_title, 'dry run')) }}" in text
-    )
-    for path in (
-        "      - site/**",
-        "      - src/costco_gas/sitedata.py",
-        "      - config/grades.csv",
-        "      - config/site.toml",
-        "      - pyproject.toml",
-        "      - uv.lock",
-        "      - .github/workflows/render.yml",
-    ):
-        assert path in text, path
-    assert "status/**" not in text
-    assert "    timeout-minutes: 30\n" in text
-    assert "CARTO_BASEMAP_KEY: ${{ vars.CARTO_BASEMAP_KEY }}" in text
-    assert "version: 1.10.18" in text
-
-
-def test_render_never_reads_temporary_asset_names():
-    # `.next-*` and `.old-*` are mid-write names that only read_resolved may
-    # read, so Render asks for the five assets by their exact names.
-    text = read("render.yml")
-    for name in (
-        "manifest.json",
-        "costco-gas-all.parquet",
-        "costco-gas-latest.csv",
-        "stations.csv",
-        "fx.csv",
-    ):
-        assert f"--pattern {name}" in text, name
-    assert ".next-" not in text
-    assert ".old-" not in text
-
-
-def test_render_stages_no_source_files_and_smoke_tests():
-    text = read("render.yml")
-    assert "uv run costco-gas site-data --current state/current --out site/data" in text
-    assert "quarto render site" in text
-    assert "find _site \\( -name '*.qmd' -o -name '*.scss' \\) -print" in text
-    assert "uv sync --locked --group smoke" in text
-    assert "uv run python tests/smoke/smoke_site.py _site" in text
-    assert "uses: actions/upload-pages-artifact@v5" in text
-    assert "uses: actions/deploy-pages@v5" in text
-
-
-def extract_verify_script(text: str) -> str:
-    """The python program render.yml writes into $RUNNER_TEMP with a heredoc."""
-    match = re.search(r"<<'PY'\n(.*?)\n\s*PY\n", text, re.DOTALL)
-    assert match is not None, "render.yml has no embedded PY heredoc"
-    return textwrap.dedent(match.group(1)) + "\n"
-
-
-def write_current(directory: Path) -> None:
-    payload = {
-        "costco-gas-all.parquet": b"PAR1-stand-in-for-a-parquet-file",
-        "costco-gas-latest.csv": b"station_key,price\nUS-1364,3.999\n",
-        "stations.csv": b"station_key\nUS-1364\n",
-        "fx.csv": b"capture_id,currency\n2026-09-15T1817Z,CAD\n",
-    }
-    assets = {}
-    for name, body in payload.items():
-        (directory / name).write_bytes(body)
-        assets[name] = {"sha256": hashlib.sha256(body).hexdigest(), "size": len(body)}
-    (directory / "manifest.json").write_text(json.dumps({"assets": assets}), encoding="utf-8")
-
-
-def run_verify(tmp_path: Path) -> subprocess.CompletedProcess[str]:
-    script = tmp_path / "verify_current.py"
-    script.write_text(extract_verify_script(read("render.yml")), encoding="utf-8")
-    return subprocess.run(
-        [sys.executable, str(script), str(tmp_path / "current")],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-
-
-def test_render_verify_script_accepts_a_consistent_release(tmp_path):
-    (tmp_path / "current").mkdir()
-    write_current(tmp_path / "current")
-    done = run_verify(tmp_path)
-    assert done.returncode == 0, done.stderr
-    assert "verified 4 assets" in done.stdout
-
-
-def test_render_verify_script_rejects_a_torn_release(tmp_path):
-    # A release read while replace_atomic is renaming assets can mix versions,
-    # which is what the 5 retries in the workflow are there to ride out.
-    (tmp_path / "current").mkdir()
-    write_current(tmp_path / "current")
-    (tmp_path / "current" / "fx.csv").write_bytes(b"capture_id,currency\n2026-09-15T1817Z,MXN\n")
-    done = run_verify(tmp_path)
-    assert done.returncode != 0
-    assert "fx.csv" in done.stderr
-
-
-def test_render_verify_script_rejects_a_missing_asset(tmp_path):
-    (tmp_path / "current").mkdir()
-    write_current(tmp_path / "current")
-    (tmp_path / "current" / "stations.csv").unlink()
-    done = run_verify(tmp_path)
-    assert done.returncode != 0
-    assert "stations.csv is missing" in done.stderr
-
-
 def test_discover_conventions_and_settings():
     assert_conventions("discover.yml")
     text = read("discover.yml")
@@ -353,18 +227,3 @@ def test_every_workflow_runs_on_the_same_image():
         assert len(found) == 1, (name, found)
         labels[name] = found[0]
     assert len(set(labels.values())) == 1, labels
-
-
-def test_render_only_deploys_from_the_default_branch():
-    """The push trigger lists pyproject.toml and uv.lock.
-
-    Every Dependabot pull request touches one of those. Without a branch filter
-    each one starts a job that requests `pages: write` and calls deploy-pages,
-    holding a token that has neither.
-    """
-    text = read("render.yml")
-    assert "  push:\n" in text
-    push = text.split("  push:\n", 1)[1].split("\n  workflow_dispatch:", 1)[0]
-    assert "branches: [main]" in push
-    assert "      - pyproject.toml\n" in push
-    assert "      - uv.lock\n" in push

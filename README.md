@@ -59,7 +59,7 @@ data-YYYY               one release per year, written when the year closes
 Download the whole rolling release with the GitHub CLI:
 
 ```bash
-gh release download current -R coatless-dashboard/costco-gas-prices -D state/current
+gh release download current -R coatless-datasets/costco-gas-prices -D state/current
 ```
 
 ### The two grains
@@ -224,7 +224,7 @@ require both `GITHUB_TOKEN` and `COSTCO_GAS_WRITER=1`, which only `capture.yml` 
 Preview the dashboard:
 
 ```bash
-gh release download current -R coatless-dashboard/costco-gas-prices -D state/current
+gh release download current -R coatless-datasets/costco-gas-prices -D state/current
 uv run costco-gas site-data --current state/current --out site/data
 quarto preview site/index.qmd
 ```

@@ -1,6 +1,6 @@
 [site]
 notice = "Unofficial. Not affiliated with, endorsed by, or connected to Costco Wholesale Corporation. Prices are collected from Costco's public websites and may differ from the price at the pump."
-release_base_url = "https://github.com/coatless-dashboard/costco-gas-prices/releases"
+release_base_url = "https://github.com/coatless-datasets/costco-gas-prices/releases"
 # The dashboard uses carto when this repository variable is set, otherwise osm.
 basemap_key_env = "CARTO_BASEMAP_KEY"
 
