@@ -602,7 +602,7 @@ def test_stations_json_holds_every_search_field(current_dir, tmp_path):
         "first_seen_utc": "2026-09-01T18:18:00Z",
         "last_seen_utc": "2026-09-15T18:18:00Z",
         "superseded_by": "GB-COSTCO-Reading2",
-        "alt_id": 5241,
+        "alt_id": "5241",
         "source_station_id": "Reading",
     }
 
@@ -851,3 +851,40 @@ def test_change_flags_ignore_rounding_dust():
         }
     )
     assert sitedata.with_change_flags(frame)["changed"].to_list() == [None, False]
+
+
+def test_a_non_numeric_station_id_survives_a_long_numeric_prefix(tmp_path: Path):
+    """`stations.csv` is sorted by country, so inference sees only numbers.
+
+    Australia and Canada supply ~95 numeric warehouse numbers before the first
+    British station, whose id is `Aberdeen`. Inferring the dtype from that
+    sample makes `source_station_id` an integer and the read dies on the first
+    British row -- which is exactly what the first real publish did.
+    """
+    from club_gas import sitedata
+    from club_gas.schema import STATION_SCHEMA
+
+    rows = [
+        {
+            "station_key": f"AU-COSTCO-{i}",
+            "country": "AU",
+            "brand": "COSTCO",
+            "source_station_id": str(i),
+        }
+        for i in range(100, 200)
+    ]
+    rows.append(
+        {
+            "station_key": "GB-COSTCO-Aberdeen",
+            "country": "GB",
+            "brand": "COSTCO",
+            "source_station_id": "Aberdeen",
+        }
+    )
+    pl.DataFrame(rows).write_csv(tmp_path / "stations.csv")
+
+    back = sitedata._read_csv(tmp_path / "stations.csv", sitedata.STATION_NUMERIC, STATION_SCHEMA)
+
+    assert back.height == 101
+    assert back["source_station_id"].dtype == pl.String
+    assert "Aberdeen" in back["source_station_id"].to_list()

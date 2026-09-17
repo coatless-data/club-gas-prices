@@ -19,7 +19,7 @@ from pathlib import Path
 
 import polars as pl
 
-from .schema import write_parquet
+from .schema import ROW_SCHEMA, STATION_SCHEMA, write_parquet
 
 DEDUPE_KEY = ["capture_date", "station_key", "grade"]
 
@@ -147,8 +147,8 @@ def build_site_data(current_dir: Path, out_dir: Path, cfg, *, now: datetime) -> 
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    stations = _read_csv(current_dir / "stations.csv", STATION_NUMERIC)
-    latest = _read_csv(current_dir / "club-gas-latest.csv", LATEST_NUMERIC)
+    stations = _read_csv(current_dir / "stations.csv", STATION_NUMERIC, STATION_SCHEMA)
+    latest = _read_csv(current_dir / "club-gas-latest.csv", LATEST_NUMERIC, ROW_SCHEMA)
 
     _write_json(out_dir / "latest.json", _latest_records(latest, stations))
     _write_json(out_dir / "stations.json", _station_records(stations))
@@ -166,8 +166,18 @@ def build_site_data(current_dir: Path, out_dir: Path, cfg, *, now: datetime) -> 
     _write_json(out_dir / "meta.json", _meta(current_dir, cfg, now=now, brands=brands))
 
 
-def _read_csv(path: Path, numeric: tuple[str, ...]) -> pl.DataFrame:
-    frame = pl.read_csv(path, try_parse_dates=True)
+def _read_csv(path: Path, numeric: tuple[str, ...], spec: dict) -> pl.DataFrame:
+    """Read a `current` asset under its declared schema, never by inference.
+
+    Inference reads only the first rows: `stations.csv` is sorted by country, so
+    the sample is Australian and Canadian warehouse numbers and polars decides
+    `source_station_id` is an integer -- then fails on the first British station,
+    whose id is `Aberdeen`. The schema is written down; use it.
+    """
+    # schema_overrides, not schema: it pins the dtype of every column that is
+    # there without demanding the file carry all of them, so a narrower asset
+    # still reads.
+    frame = pl.read_csv(path, schema_overrides=dict(spec), try_parse_dates=True)
     return frame.with_columns(
         [pl.col(name).cast(pl.Float64, strict=False) for name in numeric if name in frame.columns]
     )
