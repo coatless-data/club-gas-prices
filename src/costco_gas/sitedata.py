@@ -97,13 +97,27 @@ GRADE_FIELDS = (
     "fx_rate_date",
     "fx_source",
 )
-STATION_CORE = ("station_key", "country", "name", "name_local", "city", "region", "lat", "lon")
+STATION_CORE = (
+    "station_key",
+    "country",
+    "name",
+    "name_local",
+    "address",
+    "city",
+    "region",
+    "postcode",
+    "lat",
+    "lon",
+)
 STATION_JSON_FIELDS = (
     *STATION_CORE,
     "status",
     "first_seen_utc",
     "last_seen_utc",
     "superseded_by",
+    # The warehouse's own page, where the source publishes one.
+    "alt_id",
+    "source_station_id",
 )
 CORE_GRADES = ("regular", "premium", "diesel")
 
@@ -203,9 +217,22 @@ HISTORY_COLUMNS = [
     "price_local_per_litre",
     "price_usd_per_litre",
     "currency",
+    # The denominator: how many readings that day stand behind the price.
+    # Without it "this station changes 1.4 times a day" cannot be told apart
+    # from "we happened to look 1.4 times a day".
     "n_captures",
+    # Did this day's price differ from the previous day this station and grade
+    # were seen? Null on the first day of a series, where there is nothing to
+    # differ from.
+    "changed",
+    # Did the price move at all WITHIN the day? A price that rises and falls
+    # back between captures leaves no day-over-day trace.
+    "moved_intraday",
 ]
 HISTORY_SORT = ["station_key", "grade", "capture_date"]
+# Prices are published to four decimals per litre; anything smaller than half
+# of the last place is a rounding artifact, not a price move.
+INTRADAY_EPSILON = 5e-5
 HISTORY_ROW_GROUP_SIZE = 20000
 
 
@@ -260,8 +287,40 @@ def _check_unique(frame: pl.DataFrame) -> None:
         )
 
 
+def with_change_flags(deduped: pl.DataFrame) -> pl.DataFrame:
+    """Mark where a price moved, day over day and within a day.
+
+    Day-over-day compares consecutive days a station and grade were actually
+    seen, so a gap in collection reads as "no change observed" rather than as a
+    change. Intraday comes from the daily grain's own min and max, which is the
+    only trace a price that moved and moved back leaves behind.
+    """
+    if deduped.height == 0:
+        return deduped.with_columns(
+            pl.lit(None, dtype=pl.Boolean).alias("changed"),
+            pl.lit(None, dtype=pl.Boolean).alias("moved_intraday"),
+        )
+    previous = (
+        pl.col("price_local_per_litre")
+        .shift(1)
+        .over(["station_key", "grade"], order_by="capture_date")
+    )
+    moved = (
+        (pl.col("price_max") - pl.col("price_min")).abs() > INTRADAY_EPSILON
+        if {"price_min", "price_max"} <= set(deduped.columns)
+        else pl.lit(None, dtype=pl.Boolean)
+    )
+    return deduped.with_columns(
+        pl.when(previous.is_null() | pl.col("price_local_per_litre").is_null())
+        .then(pl.lit(None, dtype=pl.Boolean))
+        .otherwise((pl.col("price_local_per_litre") - previous).abs() > INTRADAY_EPSILON)
+        .alias("changed"),
+        moved.alias("moved_intraday"),
+    )
+
+
 def history(deduped: pl.DataFrame) -> pl.DataFrame:
-    return deduped.select(HISTORY_COLUMNS)
+    return with_change_flags(deduped).select(HISTORY_COLUMNS)
 
 
 DEFAULT_RELEASE_BASE_URL = "https://github.com/coatless-dashboard/costco-gas-prices/releases"
