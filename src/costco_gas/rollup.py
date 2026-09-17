@@ -523,9 +523,7 @@ def _restate_absent(
     if stations.is_empty() or captures.is_empty():
         return stations
     newest_at = captures["captured_at_utc"].max()
-    listed = set(
-        captures.filter(pl.col("captured_at_utc") == newest_at)["station_key"].to_list()
-    )
+    listed = set(captures.filter(pl.col("captured_at_utc") == newest_at)["station_key"].to_list())
     rows = []
     for record in stations.to_dicts():
         if record["station_key"] not in listed and record["status"] != "active":
