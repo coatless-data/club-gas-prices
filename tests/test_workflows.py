@@ -74,7 +74,9 @@ def test_capture_triggers_and_job_settings():
     assert text.startswith("name: Capture\n")
     assert '- cron: "17 */6 * * *"' in text
     assert "run-name: ${{ inputs.dry_run && 'Capture (dry run)' || 'Capture' }}" in text
-    assert "    timeout-minutes: 45\n" in text
+    # The steps can sum to 65 minutes on a month boundary, when close-periods
+    # does a full current rebuild.
+    assert "    timeout-minutes: 75\n" in text
     assert '      CLUB_GAS_WRITER: "1"\n' in text
     assert "      COUNTRIES: ${{ inputs.countries || 'all' }}\n" in text
     assert "      FORCE_FALLBACK: ${{ inputs.force_fallback || '' }}\n" in text
@@ -113,7 +115,10 @@ def test_capture_step_commands_conditions_and_timeouts():
     for fragment in expected:
         assert fragment in text, fragment
     assert text.count("timeout-minutes: 15") == 1
-    assert text.count("timeout-minutes: 10") == 2
+    assert text.count("timeout-minutes: 10") == 1
+    # close-periods gets 30: it does the same full rebuild Rebuild budgets 60
+    # for, and a killed step leaves the month open for the next capture to retry.
+    assert text.count("timeout-minutes: 30") == 1
 
 
 def test_capture_uploads_the_artifact_on_every_run():

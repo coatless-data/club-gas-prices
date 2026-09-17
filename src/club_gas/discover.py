@@ -214,8 +214,18 @@ def _ecom_ids(body: bytes) -> tuple[set[int], set[int]]:
     return us, ca
 
 
+def _costco_rows(frame: pl.DataFrame | None) -> pl.DataFrame | None:
+    if frame is None or frame.is_empty() or "brand" not in frame.columns:
+        return frame
+    return frame.filter(pl.col("brand").cast(pl.String) == "COSTCO")
+
+
 def candidate_ids(bundle: BundleInputs, cfg) -> list[int]:
-    extras = _ids_from_frame(getattr(cfg, "us_extra_ids", None))
+    # Costco rows only. `highest` drives a range() sweep against Costco's price
+    # endpoint, so one Sam's-shaped row -- four digits in the 4700-8300 band --
+    # would lift it from ~2,100 ids to ~6,800, roughly 470 extra batched
+    # requests a month against the endpoint we are already trying to slim.
+    extras = _ids_from_frame(_costco_rows(getattr(cfg, "us_extra_ids", None)))
     known = (
         bundle.us_ecom_ids
         | bundle.ca_ecom_ids
@@ -326,7 +336,8 @@ def _issue_body(candidates: list[dict], bundle: BundleInputs, now: datetime, url
         lines.append("| " + " | ".join(row) + " |")
     lines += [
         "",
-        "Add the real stations to `config/us_extra_ids.csv` with `name`, `city`, `region`,",
+        "Add the real stations to `config/us_extra_ids.csv` with `brand` (COSTCO -- these"
+        " ids are swept against Costco's endpoint), `name`, `city`, `region`,",
         "`postcode`, `lat`, `lon`, `timezone` and `note`, then close this issue.",
         "Ignore the rows that turn out to be placeholders.",
     ]

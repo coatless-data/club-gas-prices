@@ -34,7 +34,8 @@ jobs:
   capture:
     name: Capture
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # The steps below can sum to 65 minutes on a month boundary.
+    timeout-minutes: 75
     env:
       GITHUB_TOKEN: ${{ github.token }}
       GH_TOKEN: ${{ github.token }}
@@ -99,7 +100,13 @@ jobs:
         id: close
         if: ${{ steps.publish.outcome == 'success' }}
         continue-on-error: true
-        timeout-minutes: 10
+        # On the first capture of each month this does _recover_all, _close_month
+        # and a full current rebuild. Rebuild budgets 60 minutes for the same
+        # work. Ten was enough with no history and will not stay enough -- and
+        # the failure self-perpetuates, because _close_month runs before the
+        # release is marked non-prerelease, so a killed step leaves the month
+        # open and the next capture retries the whole thing.
+        timeout-minutes: 30
         run: uv run club-gas close-periods
 
       - name: Alerts

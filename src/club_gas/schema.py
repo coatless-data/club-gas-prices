@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import gzip
 import io
+from collections.abc import Callable
 from pathlib import Path
 
 import polars as pl
@@ -185,26 +186,6 @@ def validate_fx(df: pl.DataFrame) -> None:
     _check_schema(df, FX_SCHEMA, FX_KEY, tuple(FX_SCHEMA))
 
 
-def _validate_structure(df: pl.DataFrame, schema: dict[str, pl.DataType]) -> None:
-    """Validate columns and dtypes exist, without key or required-column checks."""
-    expected = set(schema)
-    actual = set(df.columns)
-    missing = sorted(expected - actual)
-    if missing:
-        raise SchemaError(f"missing columns: {', '.join(missing)}")
-    unexpected = sorted(actual - expected)
-    if unexpected:
-        raise SchemaError(f"unexpected columns: {', '.join(unexpected)}")
-
-    wrong = [
-        f"{name}: expected {dtype}, got {df.schema[name]}"
-        for name, dtype in schema.items()
-        if df.schema[name] != dtype
-    ]
-    if wrong:
-        raise SchemaError("wrong dtypes: " + "; ".join(wrong))
-
-
 def cast_to_schema(df: pl.DataFrame, schema: dict[str, pl.DataType]) -> pl.DataFrame:
     """Select the schema's columns, in order, casting each to its dtype."""
     missing = [name for name in schema if name not in df.columns]
@@ -299,19 +280,22 @@ def read_rows_csv_gz(path: Path) -> pl.DataFrame:
 
 
 def write_csv(
-    df: pl.DataFrame, path: Path, *, schema: dict[str, pl.DataType], sort_by: list[str]
+    df: pl.DataFrame,
+    path: Path,
+    *,
+    schema: dict[str, pl.DataType],
+    sort_by: list[str],
+    validate: Callable[[pl.DataFrame], None],
 ) -> Path:
-    """Write a plain CSV asset such as stations.csv or fx.csv, validating before writing."""
-    # Validate based on schema type
-    if schema is ROW_SCHEMA:
-        validate_rows(df)
-    elif schema is STATION_SCHEMA:
-        validate_stations(df)
-    elif schema is FX_SCHEMA:
-        validate_fx(df)
-    else:
-        _validate_structure(df, schema)
+    """Write a plain CSV asset such as stations.csv or fx.csv, validating first.
 
+    The caller names its validator. Choosing one by `schema is STATION_SCHEMA`
+    meant a caller passing `dict(STATION_SCHEMA)`, or a merged schema such as
+    `rollup.DAILY_SCHEMA`, silently fell through to a structure-only check and
+    lost duplicate-key detection -- the exact corruption these validators exist
+    to stop. Two of the four branches were unreachable anyway.
+    """
+    validate(df)
     out = _prepare(df, schema, sort_by)
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
