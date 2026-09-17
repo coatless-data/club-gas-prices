@@ -147,7 +147,7 @@ class ReleaseStore(Protocol):
 
 
 class _BaseStore:
-    """Behaviour shared by every store, written against the primitives below."""
+    """Behavior shared by every store, written against the primitives below."""
 
     _sleep: Callable[[float], None]
     _monotonic: Callable[[], float]
