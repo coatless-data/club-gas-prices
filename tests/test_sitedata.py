@@ -555,19 +555,25 @@ def test_stations_json_holds_every_search_field(current_dir, tmp_path):
 
     assert set(records) == {"US-1364", "US-140", "JP-Tomiya", "GB-Reading"}
     reading = records["GB-Reading"]
+    # address and postcode are here for the directions link; alt_id and
+    # source_station_id for the link to the warehouse's own page.
     assert reading == {
         "station_key": "GB-Reading",
         "country": "GB",
         "name": "Reading",
         "name_local": None,
+        "address": "1 Jenner Way",
         "city": "Reading",
         "region": None,
+        "postcode": "RG2 0TF",
         "lat": None,
         "lon": None,
         "status": "missing",
         "first_seen_utc": "2026-09-01T18:18:00Z",
         "last_seen_utc": "2026-09-15T18:18:00Z",
         "superseded_by": "GB-Reading2",
+        "alt_id": 5241,
+        "source_station_id": "Reading",
     }
 
 
@@ -671,6 +677,8 @@ def test_history_columns_and_sort_order(current_dir, tmp_path):
         "price_usd_per_litre",
         "currency",
         "n_captures",
+        "changed",
+        "moved_intraday",
     ]
     order = ["station_key", "grade", "capture_date"]
     assert frame.equals(frame.sort(order))
@@ -772,3 +780,39 @@ def test_meta_json_uses_carto_when_the_key_is_set(current_dir, tmp_path, monkeyp
     assert basemap["subdomains"] == "abcd"
     assert basemap["max_zoom"] == 20
     assert basemap["dark_filter"] is False  # CARTO ships real dark tiles
+
+
+def test_change_flags_compare_consecutive_days_seen(tmp_path):
+    """A gap in collection must read as "no change observed", not as a change,
+    and the first day of a series has nothing to differ from."""
+    frame = pl.DataFrame(
+        {
+            "capture_date": [date(2026, 9, 1), date(2026, 9, 2), date(2026, 9, 5)],
+            "station_key": ["US-1", "US-1", "US-1"],
+            "grade": ["regular", "regular", "regular"],
+            "price_local_per_litre": [1.0, 1.0, 1.25],
+            "price_min": [1.0, 1.0, 1.25],
+            "price_max": [1.0, 1.2, 1.25],
+        }
+    )
+    out = sitedata.with_change_flags(frame)
+    # First day: nothing to compare against. Second: same price. Third: moved,
+    # across a three-day gap, still a single comparison.
+    assert out["changed"].to_list() == [None, False, True]
+    # Day two never changed day over day but did move and move back within the
+    # day -- the only trace of that is min != max.
+    assert out["moved_intraday"].to_list() == [False, True, False]
+
+
+def test_change_flags_ignore_rounding_dust():
+    frame = pl.DataFrame(
+        {
+            "capture_date": [date(2026, 9, 1), date(2026, 9, 2)],
+            "station_key": ["US-1", "US-1"],
+            "grade": ["regular", "regular"],
+            "price_local_per_litre": [1.0, 1.00001],
+            "price_min": [1.0, 1.00001],
+            "price_max": [1.0, 1.00001],
+        }
+    )
+    assert sitedata.with_change_flags(frame)["changed"].to_list() == [None, False]
