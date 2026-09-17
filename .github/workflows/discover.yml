@@ -1,10 +1,8 @@
 name: Discover
 
 on:
-  # The schedule stays commented out until the pre-launch checks pass.
-  # Uncommenting the two lines below runs discovery on the 2nd of each month.
-  # schedule:
-  #   - cron: "41 3 2 * *"
+  schedule:
+    - cron: "41 3 2 * *"
   workflow_dispatch:
 
 concurrency:

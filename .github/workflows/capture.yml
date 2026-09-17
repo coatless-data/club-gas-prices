@@ -1,10 +1,8 @@
 name: Capture
 
 on:
-  # The schedule stays commented out until the pre-launch checks pass.
-  # Uncommenting the two lines below starts the 4-captures-a-day cadence.
-  # schedule:
-  #   - cron: "17 */6 * * *"
+  schedule:
+    - cron: "17 */6 * * *"
   workflow_dispatch:
     inputs:
       dry_run:

@@ -232,3 +232,10 @@ def test_every_workflow_runs_on_the_same_image():
         assert len(found) == 1, (name, found)
         labels[name] = found[0]
     assert len(set(labels.values())) == 1, labels
+
+
+def test_schedules_are_active():
+    # Both crons ship commented out and are uncommented as the last step of the
+    # launch checklist, once the dry runs have shown the runners are not blocked.
+    assert re.search(r'(?m)^  schedule:\n    - cron: "17 \*/6 \* \* \*"$', read("capture.yml"))
+    assert re.search(r'(?m)^  schedule:\n    - cron: "41 3 2 \* \*"$', read("discover.yml"))
