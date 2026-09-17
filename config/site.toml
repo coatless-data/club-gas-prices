@@ -3,7 +3,7 @@
 # third chain is a config line rather than an edit in four files. It is the only
 # copy: publish, rollup and the dashboard all read it from here.
 notice_prefix = "Unofficial. Prices are collected from public websites and may differ from the price at the pump."
-release_base_url = "https://github.com/coatless-datasets/club-gas-prices/releases"
+release_base_url = "https://github.com/coatless-data/club-gas-prices/releases"
 # The dashboard uses carto when this repository variable is set, otherwise osm.
 basemap_key_env = "CARTO_BASEMAP_KEY"
 

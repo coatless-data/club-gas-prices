@@ -349,7 +349,7 @@ def history(deduped: pl.DataFrame) -> pl.DataFrame:
     return with_change_flags(deduped).select(HISTORY_COLUMNS)
 
 
-DEFAULT_RELEASE_BASE_URL = "https://github.com/coatless-datasets/club-gas-prices/releases"
+DEFAULT_RELEASE_BASE_URL = "https://github.com/coatless-data/club-gas-prices/releases"
 # A placeholder, not a second verbatim copy of legal text: config/site.toml is
 # the only place the real notice lives.
 DEFAULT_NOTICE = ["Unofficial. Not affiliated with any retailer named here."]

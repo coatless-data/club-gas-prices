@@ -73,7 +73,7 @@ data-YYYY               one release per year, written when the year closes
 Download the whole rolling release with the GitHub CLI:
 
 ```bash
-gh release download current -R coatless-datasets/club-gas-prices -D state/current
+gh release download current -R coatless-data/club-gas-prices -D state/current
 ```
 
 ### The two grains
@@ -237,7 +237,7 @@ require both `GITHUB_TOKEN` and `CLUB_GAS_WRITER=1`, which only `capture.yml` an
 Check what the dashboard would receive, without publishing:
 
 ```bash
-gh release download current -R coatless-datasets/club-gas-prices -D state/current
+gh release download current -R coatless-data/club-gas-prices -D state/current
 uv run club-gas site-data --current state/current --out site/data
 ```
 

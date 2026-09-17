@@ -1244,9 +1244,9 @@ def test_open_store_builds_both_kinds(tmp_path: Path):
     local.ensure_release("current", "Current data", "b", False, "true")
     assert (tmp_path / "releases" / "current" / "_release.json").exists()
 
-    remote = store.open_store("github:coatless-datasets/club-gas-prices")
+    remote = store.open_store("github:coatless-data/club-gas-prices")
     assert isinstance(remote, store.GitHubReleaseStore)
-    assert store.DEFAULT_STORE == "github:coatless-datasets/club-gas-prices"
+    assert store.DEFAULT_STORE == "github:coatless-data/club-gas-prices"
 
     with pytest.raises(store.StorageError, match="unsupported store spec"):
         store.open_store("s3://bucket/prefix")
