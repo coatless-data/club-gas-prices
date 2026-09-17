@@ -10,6 +10,8 @@ from urllib.parse import urlencode, urlsplit
 
 import polars as pl
 
+from club_gas.sources import costco_lookup
+
 from ..config import CountryConfig
 from ..http import BudgetExceeded, Client
 from .base import (
@@ -35,7 +37,7 @@ DEFAULT_BATCH_SIZE = 10
 DEFAULT_SEEN_WITHIN_DAYS = 30
 
 # Every key of gasPrices except these two is a grade label (§4.3).
-NON_GRADE_KEYS = frozenset({"warehouseid", "oid"})
+NON_GRADE_KEYS = costco_lookup.NON_GRADE_KEYS
 
 MONTHS = {
     name: number
@@ -63,38 +65,13 @@ def batch_url(cc: CountryConfig, ids: list[str]) -> str:
 
 
 def parse_open_date(value: Any) -> date | None:
-    """Parse "Aug 23, 1995".
-
-    ``strptime("%b")`` reads month names from the process locale, so a runner
-    with a non-English LC_TIME would silently fail; this table does not.
-    """
-    if not isinstance(value, str):
-        return None
-    match = OPEN_DATE.match(value)
-    if match is None:
-        return None
-    month = MONTHS.get(match.group(1).lower())
-    if month is None:
-        return None
-    try:
-        return date(int(match.group(3)), month, int(match.group(2)))
-    except ValueError:
-        return None
+    """Parse "Aug 23, 1995", in any casing."""
+    return costco_lookup.open_date(value)
 
 
 def parse_lookup_body(body: bytes) -> list[dict[str, Any]]:
-    """Warehouse objects from the lookup body.
-
-    The body starts with a CRLF and its element 0 is the boolean ``false``;
-    the warehouses are elements 1..n. Raises ValueError when the body is not
-    the expected JSON array, which is one of the fallback triggers. The
-    response's Content-Type is ``text/html`` even when the body is valid JSON,
-    so it can never be used to tell a block from a good answer.
-    """
-    payload = json.loads(body.decode("utf-8", errors="strict"))
-    if not isinstance(payload, list):
-        raise ValueError("lookup body is not a JSON array")
-    return [e for e in payload if isinstance(e, dict) and "stlocID" in e]
+    """Warehouse objects from the lookup body."""
+    return costco_lookup.warehouses(body)
 
 
 def source_filter_reason(station: RawStation, capture_date: date) -> str | None:
@@ -274,11 +251,10 @@ class CaSource:
                     warnings.append(
                         Warning(code="timezone_from_region", detail=station.source_station_id)
                     )
-                reason = source_filter_reason(station, ctx.capture_date)
-                if reason in ("not_open", "no_hours") and _regular_in_bounds(station, cc):
-                    warnings.append(
-                        Warning(code="priced_before_open", detail=station.source_station_id)
-                    )
+                # `priced_before_open` is normalize()'s to emit, not this
+                # module's: it applies the same rule to the same stations, and
+                # checks.evaluate_country concatenates both warning lists, so
+                # emitting here double-counted every affected station.
                 stations.append(station)
 
         return FetchResult(
@@ -485,38 +461,9 @@ def _prices(grades: Any) -> tuple[RawPrice, ...]:
     if not isinstance(grades, dict):
         return ()
     return tuple(
-        RawPrice(grade_raw=key, price_raw=value)
-        for key, value in grades.items()
-        if key not in NON_GRADE_KEYS and isinstance(value, str)
+        RawPrice(grade_raw=label, price_raw=text)
+        for label, text in costco_lookup.prices(grades).items()
     )
-
-
-def _regular_in_bounds(station: RawStation, cc: CountryConfig) -> bool:
-    """True when the station quotes a regular price inside CA's sanity bounds.
-
-    ``cc.bounds`` is keyed by price unit and every value is a ``Bounds``, so the
-    lookup is always ``cc.bounds[cc.price_unit].for_grade(grade_raw)``. CA has no
-    per-grade override, so ``for_grade("regular")`` returns (1.0, 3.5) CAD/L.
-    """
-    if cc.price_unit not in (cc.bounds or {}):
-        return False
-    low, high = cc.bounds[cc.price_unit].for_grade("regular")
-    for price in station.prices:
-        if price.grade_raw.lower() != "regular":
-            continue
-        value = _price_value(price.price_raw)
-        return value is not None and low <= value <= high
-    return False
-
-
-def _price_value(raw: str) -> float | None:
-    text = re.sub(r"[^0-9.]", "", raw or "")
-    if text.startswith("."):
-        text = "0" + text
-    try:
-        return float(text)
-    except ValueError:
-        return None
 
 
 def _clean(value: Any) -> str | None:

@@ -189,7 +189,16 @@ def _rebuild_capture(store, cfg, tag: str, capture_id: str, work: Path) -> pl.Da
     for country in sorted(by_country):
         source = SOURCES.get(country)
         if source is None:
-            continue
+            # Loudly. A rebuild reads bundles written by older code, so a group
+            # name the current SOURCES does not know is exactly what a renamed
+            # dispatch key looks like -- and skipping it would silently drop
+            # every row for that group from a closed month, with the rebuild
+            # reporting success. The bundle is the only copy.
+            raise RuntimeError(
+                f"{capture_id}: bundle has responses under {country!r}, which no source "
+                f"claims (known: {', '.join(sorted(SOURCES))}). Refusing to rebuild a "
+                "partial capture."
+            )
         try:
             result = source.parse(by_country[country], ctx)
             out = normalize(result, fx, ctx)

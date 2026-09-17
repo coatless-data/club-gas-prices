@@ -16,6 +16,7 @@ import tomllib
 from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import polars as pl
 
@@ -35,9 +36,33 @@ DEFAULT_TIMEZONE_KEY = "*"
 
 # Area/Location, or Area/Region/Location for zones such as
 # America/Indiana/Indianapolis.
+# AjaxGetGasPricesService processes only the first 10 ids of a request and
+# discards the rest, so this is a protocol limit rather than a tuning knob.
+MAX_BATCH_SIZE = 10
+
 _IANA_RE = re.compile(r"[A-Za-z]+(?:/[A-Za-z0-9_+-]+){1,2}")
 
+
+def _check_zone(zone: str, where: str) -> None:
+    """Shape, then existence.
+
+    The shape check alone accepts `America/Nope` and `Asia/Toyko`, which then
+    raise inside normalize and drop every station in that region as
+    `no_timezone` -- with no alert unless the country also falls under its
+    floor. A typo belongs at load time.
+    """
+    if not _IANA_RE.fullmatch(zone):
+        raise ConfigError(f"{where}: {zone!r} is not an IANA timezone name")
+    try:
+        ZoneInfo(zone)
+    except (ZoneInfoNotFoundError, ValueError) as exc:
+        raise ConfigError(f"{where}: {zone!r} is not a timezone this system knows ({exc})") from exc
+
+
 US_EXTRA_IDS_SCHEMA: dict[str, pl.DataType] = {
+    # These ids are swept against Costco's price endpoint, so a row for any
+    # other chain would sweep the wrong numbering space. Validated, not assumed.
+    "brand": pl.String,
     "source_station_id": pl.String,
     "name": pl.String,
     "city": pl.String,
@@ -560,13 +585,20 @@ def _validate(cfg: Config) -> None:
             raise ConfigError(f"{code}: floor must be at least 1")
         if country.stale_after_days < 1:
             raise ConfigError(f"{code}: stale_after_days must be at least 1")
+        if country.closed_after_days < 1:
+            # 0 pins every vanished station at `missing` forever, because
+            # publish.station_status and rollup._restate_absent both treat a
+            # falsy value as "never call it closed".
+            raise ConfigError(f"{code}: closed_after_days must be at least 1")
+        if country.batch_size is not None and not 1 <= country.batch_size <= MAX_BATCH_SIZE:
+            raise ConfigError(
+                f"{code}: batch_size must be between 1 and {MAX_BATCH_SIZE}; the price "
+                "service reads only the first ids of a request and discards the rest"
+            )
         if not country.timezones:
             raise ConfigError(f"{code}: timezones table is empty")
         for region, zone in country.timezones.items():
-            if not _IANA_RE.fullmatch(zone):
-                raise ConfigError(
-                    f"{code}: {zone!r} for region {region!r} is not an IANA timezone name"
-                )
+            _check_zone(zone, f"{code}: region {region!r}")
         for region in sorted(country.unit_overrides):
             if region not in country.timezones:
                 raise ConfigError(f"{code}: no timezone for region {region!r}")
@@ -605,10 +637,7 @@ def _validate(cfg: Config) -> None:
                     f"us_extra_ids.csv id {station_id}: no timezone; ecom-api does "
                     "not list these ids, so normalize would drop the station"
                 )
-            if not _IANA_RE.fullmatch(zone):
-                raise ConfigError(
-                    f"us_extra_ids.csv id {station_id}: {zone!r} is not an IANA timezone name"
-                )
+            _check_zone(zone, f"us_extra_ids.csv id {station_id}")
 
     seen: set[str] = set()
     for row in cfg.station_links.iter_rows(named=True):

@@ -1,4 +1,4 @@
-source_station_id,name,city,region,postcode,lat,lon,timezone,note
-1680,Camarillo,Camarillo,CA,93010-9122,34.2164,-119.0376,America/Los_Angeles,Prices live on 2026-09-15; the costco.ca lookup shows openDate Oct 30 2026 and no gas hours
-1765,Chandler Business Center,Chandler,AZ,,33.3062,-111.8413,America/Phoenix,Business Center priced 4.999 regular on 2026-09-15 but absent from ecom-api
-1772,Mission Viejo,Mission Viejo,CA,,33.6103,-117.6890,America/Los_Angeles,Priced 5.849 regular on 2026-09-15; reported as a standalone Mission Viejo CA gas station but unverified - name and coordinates to be confirmed
+brand,source_station_id,name,city,region,postcode,lat,lon,timezone,note
+COSTCO,1680,Camarillo,Camarillo,CA,93010-9122,34.2164,-119.0376,America/Los_Angeles,Prices live on 2026-09-15; the costco.ca lookup shows openDate Oct 30 2026 and no gas hours
+COSTCO,1765,Chandler Business Center,Chandler,AZ,,33.3062,-111.8413,America/Phoenix,Business Center priced 4.999 regular on 2026-09-15 but absent from ecom-api
+COSTCO,1772,Mission Viejo,Mission Viejo,CA,,33.6103,-117.6890,America/Los_Angeles,Priced 5.849 regular on 2026-09-15; reported as a standalone Mission Viejo CA gas station but unverified - name and coordinates to be confirmed

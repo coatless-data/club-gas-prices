@@ -11,6 +11,7 @@ from urllib.parse import urlencode
 import polars as pl
 
 from club_gas.http import BudgetExceeded
+from club_gas.sources import costco_lookup
 from club_gas.sources.base import (
     CaptureContext,
     Error,
@@ -40,21 +41,7 @@ KEY_PRICE = "US/02-gasprices-{n:03d}"
 KEY_LOOKUP = "US/03-lookup-us"
 KEY_TOPUP = "US/04-gasprices-fb-{n:03d}"
 
-NON_GRADE_KEYS = frozenset({"warehouseid", "oid"})
-LOOKUP_MONTHS = {
-    "Jan": 1,
-    "Feb": 2,
-    "Mar": 3,
-    "Apr": 4,
-    "May": 5,
-    "Jun": 6,
-    "Jul": 7,
-    "Aug": 8,
-    "Sep": 9,
-    "Oct": 10,
-    "Nov": 11,
-    "Dec": 12,
-}
+NON_GRADE_KEYS = costco_lookup.NON_GRADE_KEYS
 
 
 # --------------------------------------------------------------------------- helpers
@@ -86,16 +73,7 @@ def _iso_date(value: Any) -> date | None:
 
 def lookup_open_date(value: Any) -> date | None:
     """Parse the costco.ca lookup's ``"Aug 23, 1995"`` opening dates."""
-    text = _clean(value)
-    if text is None:
-        return None
-    parts = text.replace(",", " ").split()
-    if len(parts) != 3 or parts[0][:3] not in LOOKUP_MONTHS:
-        return None
-    try:
-        return date(int(parts[2]), LOOKUP_MONTHS[parts[0][:3]], int(parts[1]))
-    except ValueError:
-        return None
+    return costco_lookup.open_date(value)
 
 
 def _as_date(value: Any) -> date | None:
@@ -229,7 +207,7 @@ def parse_price_batch(response: RawResponse | None) -> dict[str, dict[str, str]]
         parsed[str(warehouse_id)] = {
             str(k): str(v)
             for k, v in grades.items()
-            if str(k).lower() not in NON_GRADE_KEYS and isinstance(v, (str, int, float))
+            if costco_lookup.is_grade_key(k) and isinstance(v, (str, int, float))
         }
     return parsed
 
@@ -443,11 +421,7 @@ def lookup_prices(row: dict[str, Any]) -> dict[str, str]:
     gas_prices = row.get("gasPrices") or {}
     if not isinstance(gas_prices, dict):
         return {}
-    return {
-        str(k): str(v)
-        for k, v in gas_prices.items()
-        if str(k).lower() not in NON_GRADE_KEYS and isinstance(v, (str, int, float))
-    }
+    return costco_lookup.prices(gas_prices)
 
 
 # --------------------------------------------------------------------------- metadata

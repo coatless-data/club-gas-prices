@@ -131,6 +131,7 @@ def test_retries_5xx_429_and_timeouts_but_not_other_4xx():
     assert calls.count("gone.test") == 1
 
 
+@pytest.mark.real_sleep
 def test_backoff_gaps_stay_within_the_jittered_bounds():
     """FAST zeroes backoff so the suite stays quick, but the real schedule
     and jitter formula (never exercised by FAST) must still hold: each gap
@@ -172,6 +173,7 @@ def test_backoff_gaps_stay_within_the_jittered_bounds():
         assert gap <= nominal * 1.5 + 0.5
 
 
+@pytest.mark.real_sleep
 def test_backoff_sleeps_are_the_jittered_schedule(monkeypatch):
     """The same property as above, read rather than timed.
 
@@ -196,6 +198,7 @@ def test_backoff_sleeps_are_the_jittered_schedule(monkeypatch):
         assert nominal * 0.5 <= requested <= nominal * 1.5
 
 
+@pytest.mark.real_sleep
 def test_backoff_jitter_actually_varies_the_sleep(monkeypatch):
     """A jitter that silently collapsed to zero would satisfy the bounds above.
 
@@ -472,6 +475,7 @@ def test_html_is_not_a_signal_when_json_was_not_expected():
         assert client.signals.get("www.costco.com", 0) == 0
 
 
+@pytest.mark.real_sleep
 def test_pacing_is_per_host_and_shared_across_threads():
     cfg = HttpConfig(backoff_seconds=(0.0, 0.0), min_interval_seconds=0.2)
 

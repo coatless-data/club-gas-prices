@@ -21,6 +21,8 @@ from club_gas.schema import (
     STATION_SCHEMA,
     STATION_SORT,
     read_rows_csv_gz,
+    validate_fx,
+    validate_stations,
     write_csv,
 )
 from club_gas.store import open_store
@@ -378,10 +380,16 @@ def _seed_current_previous_state(store, work: Path, capture_id: str) -> None:
     store.ensure_release("current", "current", "", False, "true")
     work.mkdir(parents=True, exist_ok=True)
     stations = work / "stations.csv"
-    write_csv(previous_stations(capture_id), stations, schema=STATION_SCHEMA, sort_by=STATION_SORT)
+    write_csv(
+        previous_stations(capture_id),
+        stations,
+        schema=STATION_SCHEMA,
+        sort_by=STATION_SORT,
+        validate=validate_stations,
+    )
     store.upload_new("current", stations, "stations.csv")
     fx = work / "fx.csv"
-    write_csv(previous_fx(capture_id), fx, schema=FX_SCHEMA, sort_by=FX_SORT)
+    write_csv(previous_fx(capture_id), fx, schema=FX_SCHEMA, sort_by=FX_SORT, validate=validate_fx)
     store.upload_new("current", fx, "fx.csv")
 
 
@@ -471,3 +479,46 @@ def test_a_bundle_whose_columns_moved_is_refused_not_misread(tmp_path: Path):
 
     path.write_text(",".join(names) + "\n")
     assert _read_input_csv(path, FX_SCHEMA).height == 0
+
+
+def test_a_response_group_no_source_claims_refuses_the_rebuild(tmp_path, monkeypatch):
+    """A group the current SOURCES does not know is what a renamed dispatch key
+    looks like from inside a rebuild.
+
+    The old behaviour was `continue`, which would have dropped every row for
+    that group out of a closed month while reporting success -- and the bundle
+    is the only copy the data has. It refuses instead.
+    """
+    monkeypatch.setenv("GITHUB_SHA", "sha-unknown-group")
+    monkeypatch.delenv("GITHUB_RUN_ID", raising=False)
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    checkout = checkout_with_config(tmp_path)
+    (checkout / "status").mkdir(exist_ok=True)
+    monkeypatch.chdir(checkout)
+    store = open_store(f"local:{tmp_path / 'releases'}")
+    cfg = load_config(checkout)
+
+    result = run_capture(
+        cfg,
+        store,
+        tmp_path / "out",
+        countries=["AU"],
+        force_fallback=set(),
+        now=CAPTURE_NOW,
+        client=Client(cfg.http, transport=_capture_transport()),
+    )
+    seed_month(
+        store,
+        "2026-09",
+        bundles={CAPTURE_ID: result.out / "bundle.tar.gz"},
+        work=tmp_path / "seed",
+    )
+
+    # The bundle holds AU responses; this is what renaming that dispatch key
+    # would look like to a rebuild written against the new names.
+    import club_gas.rebuild as rebuild_module
+
+    monkeypatch.setattr(rebuild_module, "SOURCES", {"AU-COSTCO": object()})
+
+    with pytest.raises(RuntimeError, match="which no source claims"):
+        rebuild(store, cfg, scope="month", value="2026-09", now=NOW)

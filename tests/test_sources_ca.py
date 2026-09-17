@@ -212,7 +212,10 @@ def test_not_open_no_hours_and_priced_before_open():
 
     # #1790 is priced at 1.549 CAD/L before it opens, inside bounds["CAD/L"];
     # #1813 has no price at all.
-    assert ("priced_before_open", "1790") in codes(result.warnings)
+    # The source does NOT emit priced_before_open: normalize() owns that rule and
+    # applies it to the same stations, and checks.evaluate_country concatenates
+    # both lists, so emitting here counted every affected station twice.
+    assert ("priced_before_open", "1790") not in codes(result.warnings)
     assert ("priced_before_open", "1813") not in codes(result.warnings)
 
 
@@ -228,7 +231,6 @@ def test_ecom_api_supplies_coordinates_and_timezone():
     assert codes(result.warnings) == [
         ("timezone_from_region", "1213"),
         ("timezone_from_region", "1790"),
-        ("priced_before_open", "1790"),
         ("timezone_from_region", "1813"),
     ]
 
@@ -373,3 +375,33 @@ def test_stale_cached_stations_are_not_polled():
     run(handler, previous=previous, force_fallback=("CA",))
 
     assert str(seen[0].url).endswith("warehouseid=1213")
+
+
+def test_priced_before_open_is_emitted_exactly_once_end_to_end():
+    """The rule lives in one place, and the status block proves it.
+
+    `ca.py` used to apply it too, and `checks.evaluate_country` concatenates the
+    source's warnings with normalize's -- so every affected station appeared
+    twice in status.json and in the alert body. This runs the real chain rather
+    than either half, because that double-count was invisible to both halves'
+    own tests.
+    """
+    from collections import Counter
+
+    from club_gas.checks import evaluate_country
+    from club_gas.fx import FxRates
+    from club_gas.normalize import normalize
+
+    cfg = load_config(ROOT)
+    ctx = make_ctx(cfg, shared={"ecom-api": ecom_response()})
+    client = Client(cfg.http, transport=httpx.MockTransport(serve(LOOKUP_BODY)))
+    source = CaSource()
+    responses = source.fetch(client, ctx)
+    result = source.parse(responses, ctx)
+    out = normalize(result, FxRates(status="failed", rows=[]), ctx)
+    block = evaluate_country("CA", result, out, ctx, datetime(2026, 9, 15, 19, 10, tzinfo=UTC))
+
+    seen = Counter((w["code"], w.get("detail")) for w in block.get("warnings", []))
+    repeated = {k: n for k, n in seen.items() if n > 1}
+    assert not repeated, f"warnings counted more than once: {repeated}"
+    assert seen[("priced_before_open", "1790")] == 1

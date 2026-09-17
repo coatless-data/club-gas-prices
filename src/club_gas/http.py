@@ -13,7 +13,7 @@ import os
 import random
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from urllib.parse import urlsplit
@@ -50,7 +50,19 @@ def host_of(url: str) -> str:
 
 
 class Client:
-    def __init__(self, cfg: HttpConfig, *, transport=None) -> None:
+    def __init__(
+        self,
+        cfg: HttpConfig,
+        *,
+        transport=None,
+        sleep: Callable[[float], None] | None = None,
+    ) -> None:
+        # `sleep` is injectable for the same reason ReleaseStore's is: the retry
+        # schedule and the per-host pacing are real waits, so a test of an error
+        # path costs a second of wall clock. That is the wrong incentive, because
+        # error paths are where the coverage gaps are. Tests that assert on the
+        # gaps themselves record the durations instead of sleeping them.
+        self._sleep = sleep
         self.cfg = cfg
         self.signals: dict[str, int] = {}
         self.log: list[dict[str, object]] = []
@@ -144,7 +156,7 @@ class Client:
             wait = max(0.0, next_allowed - now)
             self._next_allowed[host] = max(now, next_allowed) + self.cfg.min_interval_seconds
         if wait > 0:
-            time.sleep(wait)
+            self._wait(wait)
 
     # -- headers -----------------------------------------------------------
 
@@ -322,6 +334,14 @@ class Client:
         if time.monotonic() >= deadline:
             raise _RequestDeadline
 
+    def _wait(self, seconds: float) -> None:
+        """One place to wait, resolved at call time.
+
+        Binding `time.sleep` as a default argument would freeze it at import,
+        so a test monkeypatching `http.time.sleep` would silently not take.
+        """
+        (self._sleep or time.sleep)(seconds)
+
     def _sleep_backoff(self, attempt: int) -> None:
         schedule = self.cfg.backoff_seconds
         if not schedule:
@@ -331,7 +351,7 @@ class Client:
         if base <= 0:
             return
         jitter = self.cfg.backoff_jitter
-        time.sleep(max(0.0, base * (1.0 + random.uniform(-jitter, jitter))))
+        self._wait(max(0.0, base * (1.0 + random.uniform(-jitter, jitter))))
 
 
 def _recorded_headers(headers: httpx.Headers) -> dict[str, str]:

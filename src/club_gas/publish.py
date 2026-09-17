@@ -487,9 +487,7 @@ def merge_capture(
         daily = pl.DataFrame(schema=schema.ROW_SCHEMA)
 
     daily = daily.filter(pl.col("capture_id") != captured.capture_id)
-    merged = pl.concat([daily, captured.rows], how="vertical").sort(
-        ["capture_id", "country", "station_key", "grade_raw"]
-    )
+    merged = pl.concat([daily, captured.rows], how="vertical").sort(schema.ROW_SORT)
     _check_unique(merged, ROW_KEY, daily_name)
     counts = {cid: int(n) for cid, n in merged.group_by("capture_id").len().iter_rows()}
     for capture_id, expected in recorded.items():
@@ -638,8 +636,8 @@ def _update_current(
     _check_unique(new_stations, ["station_key"], "stations.csv")
     _check_unique(new_fx, ["capture_id", "currency"], "fx.csv")
 
-    daily_sort = ["capture_date", "country", "station_key", "grade_raw"]
-    capture_sort = ["station_key", "grade_raw", "capture_id"]
+    daily_sort = rollup.DAILY_SORT
+    capture_sort = rollup.CAPTURE_SORT
     outputs: dict[str, Path] = {}
 
     path = scratch / "out-club-gas-all.parquet"
@@ -663,11 +661,23 @@ def _update_current(
     # canonical CSV date formats -- the same guarantees the row files get, rather
     # than ones each call site has to remember (final review, finding 3).
     path = scratch / "out-stations.csv"
-    schema.write_csv(new_stations, path, schema=schema.STATION_SCHEMA, sort_by=schema.STATION_SORT)
+    schema.write_csv(
+        new_stations,
+        path,
+        schema=schema.STATION_SCHEMA,
+        sort_by=schema.STATION_SORT,
+        validate=schema.validate_stations,
+    )
     outputs["stations.csv"] = path
 
     path = scratch / "out-fx.csv"
-    schema.write_csv(new_fx, path, schema=schema.FX_SCHEMA, sort_by=schema.FX_SORT)
+    schema.write_csv(
+        new_fx,
+        path,
+        schema=schema.FX_SCHEMA,
+        sort_by=schema.FX_SORT,
+        validate=schema.validate_fx,
+    )
     outputs["fx.csv"] = path
 
     # Every other `current` asset is durable at this point: all six

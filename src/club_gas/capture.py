@@ -232,10 +232,8 @@ def run_capture(
 
     blocks, collected = _run_countries(countries, client, ctx, fx, out, now, warnings)
 
-    rows = _concat(collected, "rows", schema.ROW_SCHEMA).sort(
-        ["capture_id", "country", "station_key", "grade_raw"]
-    )
-    stations = _concat(collected, "stations", schema.STATION_SCHEMA).sort("station_key")
+    rows = _concat(collected, "rows", schema.ROW_SCHEMA).sort(schema.ROW_SORT)
+    stations = _concat(collected, "stations", schema.STATION_SCHEMA).sort(schema.STATION_SORT)
     schema.write_rows_csv_gz(rows, capture_out / "rows.csv.gz")
     stations.write_csv(capture_out / "stations.csv")
     # fx.json is a JSON array of rate rows (spec 4.5). `publish` and `rebuild`

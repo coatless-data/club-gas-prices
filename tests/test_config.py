@@ -216,6 +216,7 @@ def test_grade_table(cfg):
 def test_us_extra_ids_table(cfg):
     df = cfg.us_extra_ids
     assert df.columns == [
+        "brand",
         "source_station_id",
         "name",
         "city",
@@ -492,3 +493,61 @@ def test_a_budget_the_code_does_not_have_is_rejected(config_copy: Path):
         load_config(config_copy)
     assert "captrue" in str(exc.value)
     assert "capture" in str(exc.value)
+
+
+def test_batch_size_above_the_protocol_limit_is_rejected(config_copy: Path):
+    """AjaxGetGasPricesService reads only the first ids of a request.
+
+    A larger batch_size loaded cleanly and then silently discarded most of a
+    country's stations, surfacing as `degraded` with nothing pointing at the
+    cause.
+    """
+    path = config_copy / "config" / "countries.toml"
+    text = path.read_text(encoding="utf-8")
+    path.write_text(text.replace("batch_size = 10", "batch_size = 50", 1), encoding="utf-8")
+    with pytest.raises(ConfigError, match="batch_size must be between 1 and 10"):
+        load_config(config_copy)
+
+
+def test_closed_after_days_of_zero_is_rejected(config_copy: Path):
+    """publish.station_status and rollup._restate_absent both read a falsy value
+    as "never call it closed", so 0 pins every vanished station at missing."""
+    path = config_copy / "config" / "countries.toml"
+    text = path.read_text(encoding="utf-8")
+    path.write_text(text.replace("closed_after_days = 45", "closed_after_days = 0", 1), "utf-8")
+    with pytest.raises(ConfigError, match="closed_after_days must be at least 1"):
+        load_config(config_copy)
+
+
+def test_a_well_formed_timezone_that_does_not_exist_is_rejected(config_copy: Path):
+    """The shape check alone accepts a typo like Asia/Toyko, which then raises
+    inside normalize and drops every station in that region as no_timezone --
+    with no alert unless the country also falls under its floor."""
+    path = config_copy / "config" / "countries.toml"
+    text = path.read_text(encoding="utf-8")
+    broken = text.replace('"America/Chicago"', '"America/Chicagoo"', 1)
+    assert broken != text
+    path.write_text(broken, encoding="utf-8")
+    with pytest.raises(ConfigError, match="not a timezone this system knows"):
+        load_config(config_copy)
+
+
+def test_a_bad_timezone_in_us_extra_ids_is_rejected(config_copy: Path):
+    path = config_copy / "config" / "us_extra_ids.csv"
+    text = path.read_text(encoding="utf-8")
+    broken = text.replace("America/Los_Angeles", "America/Los_Angelos", 1)
+    assert broken != text
+    path.write_text(broken, encoding="utf-8")
+    with pytest.raises(ConfigError, match="not a timezone this system knows"):
+        load_config(config_copy)
+
+
+def test_every_extra_id_row_names_a_brand(cfg):
+    """These ids are swept against Costco's price endpoint by `range(1, max+N)`.
+
+    A row for another chain would sweep the wrong numbering space: Sam's club
+    numbers are four digits in the 4700-8300 band, so one such row lifts the
+    monthly sweep from about 2,100 ids to about 6,800.
+    """
+    brands = set(cfg.us_extra_ids["brand"].to_list())
+    assert brands == {"COSTCO"}, brands

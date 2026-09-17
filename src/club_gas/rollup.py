@@ -76,9 +76,7 @@ def daily_grain(rows: pl.DataFrame) -> pl.DataFrame:
     )
     newest = rows.sort(["captured_at_utc", "capture_id"]).group_by(DAILY_KEYS).last()
     return (
-        newest.join(summary, on=DAILY_KEYS, how="left")
-        .select(list(DAILY_SCHEMA))
-        .sort(["capture_date", "country", "station_key", "grade_raw"])
+        newest.join(summary, on=DAILY_KEYS, how="left").select(list(DAILY_SCHEMA)).sort(DAILY_SORT)
     )
 
 
@@ -639,12 +637,22 @@ def _rebuild_current_impl(store, cfg, *, now: datetime) -> None:
         put(
             "stations.csv",
             lambda p: schema.write_csv(
-                stations, p, schema=schema.STATION_SCHEMA, sort_by=schema.STATION_SORT
+                stations,
+                p,
+                schema=schema.STATION_SCHEMA,
+                sort_by=schema.STATION_SORT,
+                validate=schema.validate_stations,
             ),
         )
         put(
             "fx.csv",
-            lambda p: schema.write_csv(fx, p, schema=schema.FX_SCHEMA, sort_by=schema.FX_SORT),
+            lambda p: schema.write_csv(
+                fx,
+                p,
+                schema=schema.FX_SCHEMA,
+                sort_by=schema.FX_SORT,
+                validate=schema.validate_fx,
+            ),
         )
         if set(assets) != set(CURRENT_DATA_ASSETS):
             raise ValueError(

@@ -349,3 +349,30 @@ def test_sweep_stops_when_the_host_is_abandoned(tmp_path, capsys):
     assert len(client.requested) == 3
     assert result.candidates == []
     assert "abandoned" in capsys.readouterr().out
+
+
+def test_a_non_costco_extra_id_never_widens_the_sweep():
+    """One Sam's-shaped row would add roughly 470 batched requests a month."""
+    import polars as pl
+
+    from club_gas.discover import BundleInputs, candidate_ids
+
+    bundle = BundleInputs(
+        capture_id="2026-09-15T1817Z",
+        polled_ids=set(),
+        us_ecom_ids={1000},
+        ca_ecom_ids=set(),
+        ca_lookup_ids=set(),
+        station_ids=set(),
+    )
+    costco_only = pl.DataFrame(
+        {"brand": ["COSTCO"], "source_station_id": ["1680"]},
+    )
+    with_sams = pl.DataFrame(
+        {"brand": ["COSTCO", "SAMS"], "source_station_id": ["1680", "8299"]},
+    )
+
+    narrow = candidate_ids(bundle, SimpleNamespace(us_extra_ids=costco_only))
+    wide = candidate_ids(bundle, SimpleNamespace(us_extra_ids=with_sams))
+
+    assert max(narrow) == max(wide), "a Sam's club number must not set the ceiling"

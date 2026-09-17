@@ -342,7 +342,11 @@ def test_stations_csv_round_trips(tmp_path):
     )
     validate_stations(stations)
     path = write_csv(
-        stations, tmp_path / "stations.csv", schema=STATION_SCHEMA, sort_by=STATION_SORT
+        stations,
+        tmp_path / "stations.csv",
+        schema=STATION_SCHEMA,
+        sort_by=STATION_SORT,
+        validate=validate_stations,
     )
     back = read_csv(path, STATION_SCHEMA)
     assert back.schema == pl.Schema(STATION_SCHEMA)
@@ -354,7 +358,9 @@ def test_stations_csv_round_trips(tmp_path):
 def test_fx_csv_round_trips_with_ten_significant_digits(tmp_path):
     fx = fx_frame()
     validate_fx(fx)
-    path = write_csv(fx, tmp_path / "fx.csv", schema=FX_SCHEMA, sort_by=FX_SORT)
+    path = write_csv(
+        fx, tmp_path / "fx.csv", schema=FX_SCHEMA, sort_by=FX_SORT, validate=validate_fx
+    )
     assert "0.00648340249" in path.read_text(encoding="utf-8")
     back = read_csv(path, FX_SCHEMA)
     assert back["fx_usd_per_unit"].item() == 0.00648340249
@@ -417,6 +423,7 @@ def test_write_csv_validates_stations_before_writing(tmp_path):
             tmp_path / "never-written.csv",
             schema=STATION_SCHEMA,
             sort_by=STATION_SORT,
+            validate=validate_stations,
         )
     assert not (tmp_path / "never-written.csv").exists()
 
@@ -456,6 +463,7 @@ def test_write_csv_validates_stations_null_in_required_column(tmp_path):
             tmp_path / "never-written.csv",
             schema=STATION_SCHEMA,
             sort_by=STATION_SORT,
+            validate=validate_stations,
         )
     assert not (tmp_path / "never-written.csv").exists()
 
