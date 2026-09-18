@@ -7,8 +7,9 @@ which is the path the first real Sam's capture would take. This one does, in
 the same capture as Costco's US feed, because two chains in one country is the
 case each stage has to keep apart.
 
-The roster is the recorded `clubfinder/list` answer. Every price answer is the
-recorded Tempo record for club 6376, relabelled for the club asked about.
+The roster is a locator sitemap listing the four fuel clubs and one non-fuel
+club; each fuel club answers a fuel-centre page whose `__NEXT_DATA__` carries its
+prices, and the non-fuel club 307s and is skipped.
 """
 
 from __future__ import annotations
@@ -32,8 +33,6 @@ from club_gas.store import LocalReleaseStore
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
-ROSTER = (FIXTURES / "sams_clubfinder.json").read_bytes()
-TEMPO = (FIXTURES / "sams_fuel_6376.json").read_bytes()
 FX_BODY = (FIXTURES / "fx" / "frankfurter_v2.json").read_bytes()
 ECOM_BODY = (FIXTURES / "us_ecom_warehouses.json").read_bytes()
 COSTCO_PRICES = json.loads((FIXTURES / "us" / "gasprices_batch.json").read_bytes())
@@ -42,25 +41,87 @@ NOW = datetime(2026, 9, 15, 18, 17, 40, tzinfo=UTC)
 CAPTURE_ID = "2026-09-15T1817Z"
 LITRES_PER_GALLON = 3.785411784
 
-# What each fuel club in the roster answers. 6376 is the recorded record as it
-# came, whose MIDGRAD of 2.979 sits below its own UNLEAD; 8248 carries the move
-# measured on 2026-09-17; the other two are priced in the same range.
-CLUB_PRICES = {
-    "6376": None,
-    "8299": {"UNLEAD": 3.549, "PREMIUM": 4.149},
-    "8248": {"UNLEAD": 3.749, "PREMIUM": 4.449, "DIESEL": 5.699},
-    "4857": {"UNLEAD": 3.799, "MID CLR": 4.379, "PREMIUM": 4.299, "PREM CLR": 4.659},
+# Each fuel club's (state, city, prices). 6376's MIDGRAD of 2.979 sits below its
+# own UNLEAD and is dropped; three clubs are in Texas, one in Florida.
+SAMS_CLUBS = {
+    "6376": (
+        "TX",
+        "Dallas",
+        {"UNLEAD": 3.699, "PREMIUM": 4.399, "DIESEL": 5.699, "MIDGRAD": 2.979},
+    ),
+    "8299": ("TX", "Houston", {"UNLEAD": 3.549, "PREMIUM": 4.149}),
+    "8248": ("TX", "Dallas", {"UNLEAD": 3.749, "PREMIUM": 4.449, "DIESEL": 5.699}),
+    "4857": (
+        "FL",
+        "Orlando",
+        {"UNLEAD": 3.799, "MID CLR": 4.379, "PREMIUM": 4.299, "PREM CLR": 4.659},
+    ),
 }
+# In the sitemap but with no fuel centre: it 307s to /club/6225 and is skipped.
+SAMS_NON_FUEL = ["6225"]
+_TZ_BY_STATE = {"TX": "America/Chicago", "FL": "America/New_York"}
 
 
-def tempo_for(club_id: str) -> bytes:
-    payload = json.loads(TEMPO)
-    block = payload["data"]["contentLayout"]["modules"][0]["configs"]["storeFuelPrices"]
-    block["id"] = f"CPF_FUELPRICE_PROD_{club_id}"
-    prices = CLUB_PRICES[club_id]
-    if prices is not None:
-        block["prices"] = [{"name": k, "price": v, "type": "fuel"} for k, v in prices.items()]
-    return json.dumps(payload).encode()
+def sams_sitemap() -> bytes:
+    ids = [*SAMS_CLUBS, *SAMS_NON_FUEL]
+    locs = "".join(f"<loc>https://www.samsclub.com/club/{i}-city-xx</loc>" for i in ids)
+    return f'<?xml version="1.0"?><urlset>{locs}</urlset>'.encode()
+
+
+def sams_fuel_page(club_id: str) -> bytes:
+    state, city, prices = SAMS_CLUBS[club_id]
+    block = {
+        "countryCode": "US",
+        "id": f"CPF_FUELPRICE_PROD_{club_id}",
+        "metadata": {"dateCreated": "2026-09-15T08:15:34.337Z", "createdBy": "CPF_STORAGE"},
+        "prices": [{"name": k, "price": v, "type": "fuel"} for k, v in prices.items()],
+    }
+    next_data = {
+        "props": {
+            "pageProps": {
+                "initialTempoData": {
+                    "contentLayout": {
+                        "modules": [
+                            {
+                                "configs": {
+                                    "storeDetails": {
+                                        "capabilities": [{"timeZone": _TZ_BY_STATE[state]}]
+                                    }
+                                }
+                            },
+                            {"configs": {"storeFuelPrices": block}},
+                        ]
+                    }
+                },
+                "initialNodeDetail": {
+                    "data": {
+                        "nodeDetail": {
+                            "id": club_id,
+                            "name": f"{city} Sam's Club",
+                            "displayName": f"{city} Sam's Club",
+                            "address": {
+                                "addressLineOne": "1 Main St",
+                                "city": city,
+                                "state": state,
+                                "postalCode": "75244",
+                                "country": "US",
+                            },
+                            "geoPoint": {"latitude": 32.9, "longitude": -96.8},
+                            "operationalHours": [
+                                {"day": "Monday", "start": "06:00", "end": "22:00", "closed": False}
+                            ],
+                        }
+                    }
+                },
+            }
+        }
+    }
+    script = json.dumps(next_data)
+    return (
+        f"<!doctype html><html><body>"
+        f'<script id="__NEXT_DATA__" type="application/json">{script}</script>'
+        f"</body></html>"
+    ).encode()
 
 
 def transport() -> httpx.MockTransport:
@@ -70,10 +131,17 @@ def transport() -> httpx.MockTransport:
     def handler(request: httpx.Request) -> httpx.Response:
         host = request.url.host
         if host == "www.samsclub.com":
-            if "clubfinder" in request.url.path:
-                return httpx.Response(200, content=ROSTER, headers=as_json)
-            club_id = json.loads(request.url.params["variables"])["nodeId"]
-            return httpx.Response(200, content=tempo_for(club_id), headers=as_json)
+            path = request.url.path
+            if "sitemap" in path:
+                return httpx.Response(200, content=sams_sitemap())
+            # /club/<id>/fuel-center -- a fuel club answers 200, a non-fuel club
+            # 307s to /club/<id>, which the source leaves unfollowed and skips.
+            club_id = path.split("/club/")[1].split("/")[0]
+            if club_id in SAMS_CLUBS:
+                return httpx.Response(
+                    200, content=sams_fuel_page(club_id), headers={"Content-Type": "text/html"}
+                )
+            return httpx.Response(307, headers={"Location": f"/club/{club_id}"})
         if host == "www.costco.com":
             # The price service answers only for the ids it was asked about.
             asked = request.url.params["warehouseid"].split("_")
@@ -94,9 +162,9 @@ def site(tmp_path: Path, monkeypatch) -> Path:
     shutil.copytree(REPO_ROOT / "config", tmp_path / "config")
     feeds = tmp_path / "config" / "feeds.toml"
     text = feeds.read_text(encoding="utf-8")
-    assert "enabled = false" in text
-    # On here and nowhere else: the committed config keeps the feed off.
-    feeds.write_text(text.replace("enabled = false", "enabled = true"), encoding="utf-8")
+    # The committed config now captures Sam's Club from its public pages; the
+    # end-to-end run exercises it straight from that config.
+    assert "enabled = true" in text
     (tmp_path / "status").mkdir()
     monkeypatch.chdir(tmp_path)
     for name in ("GITHUB_OUTPUT", "GITHUB_REPOSITORY", "GITHUB_TOKEN", "GITHUB_RUN_ID"):
@@ -113,7 +181,8 @@ def site(tmp_path: Path, monkeypatch) -> Path:
         countries=["US"],
         force_fallback=set(),
         now=NOW,
-        client=Client(cfg.http, transport=transport()),
+        # A no-op sleep so the ~6 paced Sam's requests do not really wait.
+        client=Client(cfg.http, transport=transport(), sleep=lambda _: None),
     )
     assert {fid: block["status"] for fid, block in captured.status["feeds"].items()} == {
         "US-COSTCO": "degraded",

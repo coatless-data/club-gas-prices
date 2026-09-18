@@ -232,13 +232,11 @@ def test_the_contact_address_is_spelled_out_for_people_not_harvesters():
     assert "support [at] caffeinatedmath [dot] com" in flowed()
 
 
-def test_the_sams_row_says_why_the_feed_is_off_and_what_would_change_it():
-    """It said the refused request "has not been re-tested since" for a while
-    after the re-test, from a second network, was refused the same way."""
+def test_the_sams_row_names_its_pages_and_why_not_the_stale_array():
+    """US-SAMS reads the sitemap and the fuel-centre pages, and the row says why
+    the page rather than the JSON club-finder's stale gasPrices array."""
     sources = readme().split("## Sources", 1)[1]
     row = next(line for line in sources.splitlines() if line.startswith("| US-SAMS |"))
-    assert "**Off**" in row
-    assert "HTTP 412" in row
-    assert "GitHub-hosted runner on 2026-09-17" in row
-    assert "home connection on 2026-09-18" in row
-    assert "stays off unless Sam's Club permits automated access" in row
+    assert "sitemap_locators.xml" in row
+    assert "/club/<id>/fuel-center" in row
+    assert "gasPrices" in row

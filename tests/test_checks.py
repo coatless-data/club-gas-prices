@@ -190,8 +190,8 @@ def test_a_feed_is_judged_against_its_own_floor(n_stations, expected):
     looked no different. Sam's own floor is 460."""
     block = evaluate_feed(
         "US-SAMS",
-        result("US", source="sams-clubfinder"),
-        normalized("US", n_stations, source="sams-clubfinder"),
+        result("US", source="sams-fuel-center"),
+        normalized("US", n_stations, source="sams-fuel-center"),
         context(),
         NOW,
     )
@@ -212,10 +212,10 @@ def test_a_sweep_cut_short_is_degraded_whatever_the_floor_says(code: str):
         "US-SAMS",
         result(
             "US",
-            source="sams-clubfinder",
+            source="sams-fuel-center",
             warnings=[Warning(code=code, detail="52 of 531 fuel clubs not reached")],
         ),
-        normalized("US", 479, source="sams-clubfinder"),
+        normalized("US", 479, source="sams-fuel-center"),
         context(),
         NOW,
     )

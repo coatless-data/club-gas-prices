@@ -12,46 +12,39 @@
 country = "US"
 brand = "SAMS"
 
-# OFF, because Sam's Club's bot protection refuses the collector's requests.
+# ON. Read from Sam's Club's public store pages.
 #
-# On 2026-09-17 a dry capture on a GitHub-hosted runner sent a single request,
-# the clubfinder roster below, with the project User-Agent. It answered HTTP 412
-# with a PerimeterX challenge body --
-# {"redirectUrl":"/are-you-human?...","appId":"PXsLC3j22K"} -- and the sweep
-# stopped there. On 2026-09-18 the collector sent the same roster request from
-# a home connection and was refused the same way: HTTP 412, PerimeterX. Two
-# networks gave one answer, so it is the collector's requests that are refused,
-# not GitHub's servers.
+# Each club's current fuel prices are on the page a member would open,
+# /club/<id>/fuel-center, embedded in the page's __NEXT_DATA__. The JSON
+# club-finder's gasPrices array is stale -- 31-43% below the page for the six
+# clubs checked on 2026-09-17 -- so the fuel-centre page is the price source.
+# See src/club_gas/sources/sams.py and docs/samsclub-vivaldi-api.md.
 #
-# The source, its tests and its fixtures stay. The feed stays off unless Sam's
-# Club permits automated access; turning it back on is then one line, after a
-# dry run of the collector's own requests.
-enabled = false
+# These are public, unauthenticated, robots-allowed pages read at low volume.
+# Sam's Club's Terms of Use license site content for "personal, non-commercial
+# use"; reviewed 2026-09-18, the owner accepted the risk of collecting and
+# republishing, as with Costco. Off again is one line: enabled = false.
+enabled = true
 
-# The roster: every US club in one request, with coordinates and the grades each
-# sells. Its own `gasPrices` array is NOT read -- measured on 2026-09-17 it ran
-# 31-43% below what a member pays -- so this is the roster only.
-url = "https://www.samsclub.com/api/node/vivaldi/browse/v2/clubfinder/list"
+# The roster: the locator sitemap, one request, every club as /club/<id>-<city>.
+# Deduplicated by id it is ~604 clubs; it does not say which sell fuel.
+url = "https://www.samsclub.com/sitemap_locators.xml"
 
-# Current prices, one club per request: the persisted query's $nodeId is typed
-# String!, so the schema itself refuses a batch.
-price_url = "https://www.samsclub.com/orchestra/home/graphql/HyperLocalPagesTempo"
-
-# The roster endpoint geocodes this and sorts by distance from it. The result set
-# is the whole country either way; only the ordering and the `distance` field
-# move, and neither is read.
-origin_postcode = "75001"
+# Current prices, one club per request. `{club_id}` is filled per club. A fuel
+# club answers 200 with the storeFuelPrices record in its __NEXT_DATA__; a
+# non-fuel club 307s to /club/<id>, which the source leaves unfollowed and skips.
+price_url = "https://www.samsclub.com/club/{club_id}/fuel-center"
 
 # This feed's own floor, in place of countries.US's, which counts Costco's
-# stations. 531 of 601 clubs had fuel on 2026-09-17; set below that so a short
-# sweep is degraded rather than a silent partial. A sweep its budget cut short
-# reads degraded on its own warning, whether or not it clears the floor.
+# stations. About 531 of ~604 clubs sell fuel; set below that so a short sweep
+# is degraded rather than a silent partial. A sweep its budget cut short reads
+# degraded on its own warning, whether or not it clears the floor.
 floor = 460
 
 # Seconds for the sweep, in place of http.toml's country budget of 480, which
-# does not fit it. The sweep is 1 roster + 531 price requests = 532 requests,
-# all to www.samsclub.com, which http.toml paces at one per 1.0 s: 532 s. Tempo
-# answered in about 0.46 s during development, so the spacing sets the pace.
-# 660 s leaves 128 s (24%) for slow answers, retries and new clubs, and stays
-# under the 720 s capture budget that every feed runs inside.
-budget_s = 660.0
+# does not fit it. The sweep is 1 sitemap + ~604 club requests, all to
+# www.samsclub.com, which http.toml paces at one per 1.0 s: about 605 s. A
+# non-fuel club's 307 is near-instant but still takes a pacing slot, so the
+# count, not the bytes, sets the pace. 715 s leaves ~110 s (18%) for slow pages
+# and retries and stays under the 720 s capture budget every feed runs inside.
+budget_s = 715.0

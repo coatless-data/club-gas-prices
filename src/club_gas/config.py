@@ -1,12 +1,8 @@
 """Load and validate every file in config/ into typed objects.
 
-The config splits into two halves. Fetch config (URLs, query parameters, HTTP
-policy, us_extra_ids.csv) says what to request. Interpretation config (grades,
-units, bounds, region-to-timezone tables, station floors, stale_after_days,
-closed_after_days,
-station_links.csv) says how to read a response that was stored earlier. The
-rebuild command replays months-old responses with today's interpretation
-config, which is why Config exposes fetch_view() and interp_view().
+Split into fetch config (what to request) and interpretation config (how to
+read a stored response). Rebuild replays old responses with today's interp
+config, hence Config.fetch_view() and Config.interp_view().
 """
 
 from __future__ import annotations
@@ -44,13 +40,7 @@ _IANA_RE = re.compile(r"[A-Za-z]+(?:/[A-Za-z0-9_+-]+){1,2}")
 
 
 def _check_zone(zone: str, where: str) -> None:
-    """Shape, then existence.
-
-    The shape check alone accepts `America/Nope` and `Asia/Toyko`, which then
-    raise inside normalize and drop every station in that region as
-    `no_timezone` -- with no alert unless the country also falls under its
-    floor. A typo belongs at load time.
-    """
+    """Validate shape and existence; a typo here must fail at load time."""
     if not _IANA_RE.fullmatch(zone):
         raise ConfigError(f"{where}: {zone!r} is not an IANA timezone name")
     try:
@@ -60,8 +50,7 @@ def _check_zone(zone: str, where: str) -> None:
 
 
 US_EXTRA_IDS_SCHEMA: dict[str, pl.DataType] = {
-    # These ids are swept against Costco's price endpoint, so a row for any
-    # other chain would sweep the wrong numbering space. Validated, not assumed.
+    # Swept against Costco's price endpoint; brand is validated.
     "brand": pl.String,
     "source_station_id": pl.String,
     "name": pl.String,
@@ -154,9 +143,7 @@ class HttpConfig:
     backoff_jitter: float = 0.5
     min_interval_seconds: float = 1.0
     block_signals_before_abandon: int = 2
-    # Seconds per named budget, from config/http.toml's [budgets] table. Every
-    # deadline the capture opens is looked up here, so editing that file is the
-    # only way any of them changes.
+    # Named budgets from config/http.toml's [budgets] table.
     budgets: dict[str, float] = field(default_factory=_default_budgets)
 
     def budget_seconds(self, name: str) -> float:
@@ -238,12 +225,7 @@ class GradeTable:
     entries: dict[tuple[str, str, str], GradeEntry]
 
     def map(self, country: str, brand: str, grade_raw: str) -> GradeEntry | None:
-        """The mapping is by exact label, per chain.
-
-        Two chains in one country publish different vocabularies -- Costco says
-        `regular`, Sam's says `UNLEAD` -- and nothing stops them from one day
-        using the same word for different fuel. The brand is part of the key.
-        """
+        """Exact label per chain — two chains may use the same word for different fuel."""
         return self.entries.get((country, brand, grade_raw))
 
     def rows(self) -> list[dict[str, object]]:
@@ -266,22 +248,19 @@ class GradeTable:
 
 @dataclass(frozen=True)
 class FeedConfig:
-    """One chain in one country, for the feeds countries.toml cannot describe."""
+    """A feed not described by countries.toml (e.g. Sam's Club)."""
 
     feed_id: str
     country: str
     brand: str
     url: str
     floor: int
-    # A feed whose source refuses the collector is off, not broken: it is
-    # `skipped` in the status, opens no issue, and does not sink the capture.
+    # Disabled feeds are skipped, not failed.
     enabled: bool = True
     price_url: str | None = None
     origin_postcode: str | None = None
     params: dict[str, str] = field(default_factory=dict)
-    # Seconds for this feed's fetch, in place of http.toml's `country` budget.
-    # Costco's feeds fit that budget; a feed that asks one station per request
-    # can need more, or it is cut short on every capture.
+    # Per-feed budget override when the default country budget is too short.
     budget_s: float | None = None
 
 
@@ -295,12 +274,7 @@ class SiteConfig:
     basemaps: dict[str, dict[str, object]]
 
     def notice(self, brands: Iterable[str] | None = None) -> list[str]:
-        """The prefix, then one clause per brand, in a stable order.
-
-        `brands` None means every configured brand, which is what a release body
-        wants: the dataset spans every feed. A page showing one chain passes just
-        that one, so the reader is not disclaimed at about a chain they cannot see.
-        """
+        """The prefix, then one clause per brand. None = all configured brands."""
         wanted = sorted(self.notices) if brands is None else sorted(set(brands))
         return [self.notice_prefix, *(self.notices[b] for b in wanted if b in self.notices)]
 
@@ -456,12 +430,7 @@ def _load_http(path: Path) -> HttpConfig:
             block_signals_before_abandon=int(
                 raw.get("blocks", {}).get("signals_before_abandon", 2)
             ),
-            # Merged over the defaults, so a table that names only some of the
-            # budgets still leaves the rest at their documented values. An
-            # unknown key is rejected rather than merged: silently ignoring one
-            # is how this table came to be dead config in the first place, and
-            # a typo would leave the real budget at its default with nothing
-            # to show for the edit.
+            # Merge over defaults; unknown keys are rejected (not silently ignored).
             budgets={**_default_budgets(), **_budget_overrides(raw, path)},
         )
     except (KeyError, TypeError, ValueError) as exc:
@@ -658,9 +627,7 @@ def _validate(cfg: Config) -> None:
         if country.stale_after_days < 1:
             raise ConfigError(f"{code}: stale_after_days must be at least 1")
         if country.closed_after_days < 1:
-            # 0 pins every vanished station at `missing` forever, because
-            # publish.station_status and rollup._restate_absent both treat a
-            # falsy value as "never call it closed".
+            # 0 would pin vanished stations at `missing` forever.
             raise ConfigError(f"{code}: closed_after_days must be at least 1")
         if country.batch_size is not None and not 1 <= country.batch_size <= MAX_BATCH_SIZE:
             raise ConfigError(
@@ -680,9 +647,7 @@ def _validate(cfg: Config) -> None:
         if feed.floor < 1:
             raise ConfigError(f"{fid}: floor must be at least 1")
         if feed.budget_s is not None and not 0 < feed.budget_s <= capture_s:
-            # Every feed thread runs inside the capture budget, so a longer feed
-            # budget is never reached: the capture's closes first and the sweep
-            # is cut short all the same.
+            # A feed budget longer than the capture budget is never reached.
             raise ConfigError(
                 f"{fid}: budget_s must be above 0 and no longer than the capture "
                 f"budget of {capture_s:g} s"

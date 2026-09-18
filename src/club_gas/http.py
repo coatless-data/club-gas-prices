@@ -80,11 +80,7 @@ class Client:
         transport=None,
         sleep: Callable[[float], None] | None = None,
     ) -> None:
-        # `sleep` is injectable for the same reason ReleaseStore's is: the retry
-        # schedule and the per-host pacing are real waits, so a test of an error
-        # path costs a second of wall clock. That is the wrong incentive, because
-        # error paths are where the coverage gaps are. Tests that assert on the
-        # gaps themselves record the durations instead of sleeping them.
+        # Injectable sleep so tests can record waits instead of sleeping them.
         self._sleep = sleep
         self.cfg = cfg
         self.signals: dict[str, int] = {}
@@ -92,10 +88,7 @@ class Client:
         self._http = httpx.Client(transport=transport, follow_redirects=True)
         self._lock = threading.Lock()
         self._next_allowed: dict[str, float] = {}
-        # A budget opened on the thread that built the Client (the capture, FX
-        # and metadata budgets) applies to every thread. A budget opened on a
-        # country thread applies only to that thread, so one country's budget
-        # never aborts another country's request.
+        # Main-thread budgets apply globally; per-thread budgets are scoped.
         self._owner_thread = threading.get_ident()
         self._global_budgets: list[tuple[str, float]] = []
         self._local = threading.local()
@@ -248,6 +241,7 @@ class Client:
         profile: str = "default",
         headers: dict[str, str] | None = None,
         expect_json: bool = True,
+        follow_redirects: bool = True,
     ) -> RawResponse:
         host = host_of(url)
         if self.abandoned(url):
@@ -276,7 +270,9 @@ class Client:
             self._check_budget()
             self._pace(host)
             self._check_budget()
-            status, response_headers, body, error = self._attempt(url, request_headers, timeouts)
+            status, response_headers, body, error = self._attempt(
+                url, request_headers, timeouts, follow_redirects
+            )
             retryable = error is not None or status == 429 or (status is not None and status >= 500)
             if not retryable or attempts >= self.cfg.max_attempts:
                 break
@@ -311,17 +307,14 @@ class Client:
         )
 
     def _attempt(
-        self, url: str, headers: dict[str, str], timeouts: TimeoutProfile
+        self,
+        url: str,
+        headers: dict[str, str],
+        timeouts: TimeoutProfile,
+        follow_redirects: bool = True,
     ) -> tuple[int | None, dict[str, str], bytes, str | None]:
-        # httpx applies read to every read, including the wait for response
-        # headers. But that alone only bounds the wait by the profile: a host
-        # that accepts the connection and then never answers would otherwise
-        # be bounded by up to the bulk profile's 150s read timeout, because
-        # the in-flight checks below never run until the first byte arrives.
-        # So connect, read and the request's own total deadline are all
-        # clamped to whatever time is actually left on the tightest active
-        # budget before the request is made, not just inside the streaming
-        # loop.
+        # Clamp per-request timeouts to the tightest active budget, so a slow
+        # host can't run out the clock.
         self._check_budget()
         _, budget_remaining = self._tightest_budget()
         effective_total = min(timeouts.total, budget_remaining)
@@ -333,7 +326,9 @@ class Client:
         )
         deadline = time.monotonic() + effective_total
         try:
-            with self._http.stream("GET", url, headers=headers, timeout=timeout) as response:
+            with self._http.stream(
+                "GET", url, headers=headers, timeout=timeout, follow_redirects=follow_redirects
+            ) as response:
                 chunks: list[bytes] = []
                 for chunk in response.iter_bytes():
                     chunks.append(chunk)

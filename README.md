@@ -4,8 +4,8 @@ Posted fuel prices at warehouse-club gas stations, collected four times a day fr
 chain's own public website, stored by day, and published as GitHub Releases.
 
 Currently collecting every Costco station in the United States, Canada, Mexico, the
-United Kingdom, Australia, Japan and Taiwan. A Sam's Club US feed is implemented and
-turned off; see [Sources](#sources).
+United Kingdom, Australia, Japan and Taiwan, plus a Sam's Club US feed read from
+Sam's Club's public fuel-centre pages; see [Sources](#sources).
 
 **Dashboard:** <https://dashboard.thecoatlessprofessor.com/club-gas-prices/>
  · built from this repository's releases by
@@ -88,7 +88,7 @@ gh release download current -R coatless-data/club-gas-prices -D state/current
 | `brand` | string | The chain: `COSTCO` or `SAMS`. |
 | `station_key` | string | `{country}-{brand}-{source_station_id}`, e.g. `US-COSTCO-1364`, `JP-COSTCO-Tomiya`. |
 | `source_station_id` | string | The station's id at its source. |
-| `source` | string | `costco-us-gasprices`, `costco-ca-lookup-us`, `costco-ca-lookup`, `costco-ca-gasprices`, `costco-occ` or `sams-clubfinder`. |
+| `source` | string | `costco-us-gasprices`, `costco-ca-lookup-us`, `costco-ca-lookup`, `costco-ca-gasprices`, `costco-occ` or `sams-fuel-center`. |
 | `name` | string | English or romanized name. |
 | `name_local` | string, nullable | Native-script name (JP, TW). |
 | `address` | string, nullable | Street address. |
@@ -269,7 +269,7 @@ requests. At most one request per second per host.
 | AU-COSTCO | `www.costco.com.au/rest/v2/australia/stores?fields=FULL&...` |
 | JP-COSTCO | `www.costco.co.jp/rest/v2/japan/stores?fields=FULL&...` |
 | TW-COSTCO | `www.costco.com.tw/rest/v2/taiwan/stores?fields=FULL&...` |
-| US-SAMS | `www.samsclub.com/api/node/vivaldi/browse/v2/clubfinder/list` for the roster, then the `HyperLocalPagesTempo` GraphQL query per club for prices. **Off** in `config/feeds.toml`. Sam's Club's bot protection (PerimeterX) refused the collector's roster request with HTTP 412 from a GitHub-hosted runner on 2026-09-17 and again from a home connection on 2026-09-18, so it is the collector's requests that are refused, not GitHub's servers. The feed stays off unless Sam's Club permits automated access. For the six clubs checked on 2026-09-17, the roster's `gasPrices` field ran 31-43% below the price on each club's page, so only the per-club query gives a current price. |
+| US-SAMS | `www.samsclub.com/sitemap_locators.xml` for the club roster, then `/club/<id>/fuel-center` per club, whose page embeds the current prices in its `__NEXT_DATA__`. Read on paths robots.txt permits; a club with no fuel centre redirects and is skipped. The JSON club-finder's `gasPrices` array is stale — 31-43% below the page price for the six clubs checked on 2026-09-17 — so the fuel-centre page is the source of the current price. |
 | FX | `api.frankfurter.dev/v2/rates?base=USD&quotes=CAD,MXN,GBP,AUD,JPY,TWD`, then `cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@<date>/v1/currencies/usd.json` |
 
 No source publishes a timestamp with its prices, prices change during the day, and the

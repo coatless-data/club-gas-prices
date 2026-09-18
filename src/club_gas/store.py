@@ -38,11 +38,8 @@ SIDECAR_NAME = "_release.json"
 LATEST_NAME = "_latest.json"
 POLL_SECONDS = 60.0
 RENAME_RETRY_DELAYS = (5.0, 10.0, 20.0, 40.0, 80.0)
-# A release asset is replaced by name, so after a replace the public download
-# can still answer with the bytes it replaced while the listing already
-# describes the new ones. Verification stays strict -- wrong bytes are never
-# accepted -- and the retries ask by asset id instead, which cannot be stale.
-# The delays are for an upload still settling, not for a cache to expire.
+# After a replace, the public download can still serve old bytes while the
+# listing already describes the new ones. Retries ask by asset id instead.
 STALE_READ_RETRY_DELAYS = (2.0, 5.0, 10.0, 20.0)
 
 
@@ -322,14 +319,8 @@ class _BaseStore:
 
         self.upload_new(tag, path, temp, label=local_label)
 
-        # Poll for the asset to report `state == "uploaded"` at the right size,
-        # with a digest that either already matches or was never reported at
-        # all. A digest that is present but wrong may still be catching up
-        # with GitHub's own metadata, so that case keeps polling to the
-        # deadline. A missing digest never will (older assets never grow one),
-        # so once we reach it we stop polling and fall through to a single
-        # download-and-hash fallback below, rather than re-downloading the
-        # asset on every one-second tick for up to 60 iterations.
+        # Poll until the asset reports uploaded at the right size with a matching
+        # digest. A missing digest (older assets) falls through to download-and-hash.
         deadline = self._monotonic() + POLL_SECONDS
         ready: Asset | None = None
         while True:
@@ -400,13 +391,7 @@ class _BaseStore:
             else:
                 live.append(asset)
 
-        # 2-4. put a copy back under the real name if it is missing. A verified
-        # `.next` and an `.old` both being present means two different replaces
-        # left something behind; `replace_atomic` never deletes a foreign-token
-        # leftover, so a self-consistent but stale `.next` from an abandoned
-        # run can verify even though a later run already produced a newer
-        # `.old`. Compare `created_at` and let the newer one win; prefer the
-        # `.next` only on an exact tie.
+        # Restore the real name from the newest verified temp if it is missing.
         if self._asset_by_name(tag, base) is None:
             best_next: Asset | None = None
             for candidate in self._temps_for(live, base, "next"):
@@ -1098,8 +1083,6 @@ def recover_temporaries(store: ReleaseStore, tag: str) -> list[str]:
             groups.setdefault(parsed[0], []).append(asset)
     actions: list[str] = []
     for base in sorted(groups):
-        # Both concrete stores derive from `_BaseStore`, which owns the
-        # per-name logic; the protocol only has to promise the public asset
-        # operations that logic is written against.
+        # _BaseStore owns the per-name recovery logic.
         actions.extend(store._recover_name(tag, base, groups[base]))
     return actions

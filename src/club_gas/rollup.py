@@ -152,12 +152,7 @@ def _blocking_reasons(store, tag: str) -> list[str]:
         match = BUNDLE_ASSET.match(asset.name)
         if match and asset.state == "uploaded" and match.group(1) not in known:
             reasons.append(f"bundle `{asset.name}` has no entry in the month manifest")
-    # A day the manifest records rows for, but whose daily file is missing or not
-    # `uploaded`, must block the month exactly like a temp asset or an orphan
-    # bundle: `_close_month`'s own row-count checks compare `captures.height` and
-    # `per_file` only over days that ARE present, so a missing day makes both
-    # sides shrink together and would otherwise close the month short (spec
-    # review round 4, Finding 1).
+    # A recorded day with no uploaded daily file must block the month.
     expected = _expected_daily_rows(manifest)
     recorded_days = set(expected)
     uploaded = {
@@ -169,16 +164,7 @@ def _blocking_reasons(store, tag: str) -> list[str]:
         reasons.append(
             f"day `{day}` has no uploaded daily file, though the month manifest records rows for it"
         )
-    # A daily file whose row count disagrees with what the month manifest
-    # records for it must block the month the same way, rather than let
-    # `_close_month`'s own cross-check raise `ValueError` and abort the whole
-    # `close_periods` call -- including every other month still to be checked
-    # in the same invocation. The daily file and the manifest are each written
-    # by their own `replace_atomic` call, so nothing guarantees they always
-    # land together (a rebuild interrupted between the two, or manual
-    # surgery, can leave them disagreeing); disagreeing about a fact this
-    # basic needs a human, via the same blocked-month issue as every other
-    # refusal here, not a crash (spec review, Task 16 round 2).
+    # Row-count mismatches block the month (need human attention, not a crash).
     mismatched = sorted(recorded_days & set(uploaded))
     if mismatched:
         with tempfile.TemporaryDirectory() as td:
@@ -257,12 +243,7 @@ def close_periods(
             )
             continue
         _close_month(store, cfg, tag, month, token=token, now=now)
-        # The data rebuild runs before `prerelease` is cleared on purpose (an
-        # interrupted close is simply retried), so it still sees this month as
-        # open and `current/manifest.json`'s closed_months cannot list it yet.
-        # Refresh that list right after clearing `prerelease`: a small
-        # manifest-only write, safe to lose to an interrupt since the next close
-        # or an explicit rebuild repairs it (spec review round 4, Finding 2).
+        # Rebuild runs before prerelease is cleared; refresh closed_months after.
         _rebuild_current_impl(store, cfg, now=now)
         rebuilt = True
         store.update_release(tag, prerelease=False, make_latest="false")
@@ -412,11 +393,7 @@ def _read_current_stations(store, work: Path) -> pl.DataFrame:
         path = store.download("current", "stations.csv", work / "stations-existing.csv")
     except AssetNotFound:
         return pl.DataFrame(schema=schema.STATION_SCHEMA)
-    # Polars' own reader, not the strict `schema.read_csv` (matching publish.py's
-    # `_update_current`, which reads its own `current` CSVs back the same way).
-    # Both writers now emit `schema`'s CSV_DATETIME_FORMAT, but an asset written
-    # before that carries Polars' default datetime text, and this reader accepts
-    # either.
+    # Polars' own reader (not the strict schema.read_csv) for backwards compat.
     return pl.read_csv(path, schema=schema.STATION_SCHEMA)
 
 
@@ -672,11 +649,7 @@ def _rebuild_current_impl(store, cfg, *, now: datetime) -> None:
         grain = daily_grain(captures)
         latest = _latest_rows(captures)
         fx = _fx_frame(fx_rows)
-        # `current` must exist before anything reads it back: on the very first
-        # rebuild ever, `list_assets("current")` raises StorageError for a release
-        # that does not exist at all, which is a different failure than the
-        # AssetNotFound `_read_current_stations` handles for a merely-missing
-        # asset. publish.py's `ensure_current` runs first for the same reason.
+        # Ensure the release exists before anything tries to read it back.
         store.ensure_release("current", "Current", _current_body(cfg), False, "true")
         stations = _rebuild_stations(
             captures,
@@ -733,16 +706,8 @@ def _rebuild_current_impl(store, cfg, *, now: datetime) -> None:
             raise ValueError(
                 f"current rebuild wrote {sorted(assets)}, expected {sorted(CURRENT_DATA_ASSETS)}"
             )
-        # `merged_captures` (Task 14, spec review round 3) is the commit marker
-        # `read_or_rebuild_manifest` trusts to decide a bundle is already merged
-        # into `current`. A full rebuild starts from nothing and reads every row it
-        # writes to `club-gas-all-captures.parquet` right here as `captures`, so
-        # the correct value is exactly the capture ids present in that frame -- not
-        # whatever a previous, possibly stale or incomplete, manifest.json claimed.
-        # Carrying the old list over, or omitting the key, would either resurrect
-        # the exact silent-data-loss hole that marker was added to close (a
-        # capture claimed done whose rows are not actually in `current`) or make
-        # the next incremental publish re-merge bundles it does not need to.
+        # merged_captures must match exactly what this rebuild wrote, not what
+        # a previous manifest claimed.
         merged_captures = (
             sorted(captures["capture_id"].unique().to_list()) if not captures.is_empty() else []
         )
@@ -755,12 +720,8 @@ def _rebuild_current_impl(store, cfg, *, now: datetime) -> None:
             "assets": assets,
             "merged_captures": merged_captures,
         }
-        # The dashboard's five files are part of `current` too, and a rebuild
-        # that wrote only the six above left them describing the dataset as it
-        # was BEFORE the rebuild -- and absent from the manifest that the site
-        # verifies its download against, so the site could not render at all.
-        # Built here exactly as publish._write_current builds them: same inputs,
-        # same moment in the manifest's life, so the two writers cannot drift.
+        # Site data files are part of `current` too; built here the same way as
+        # publish._build_site_assets so the two cannot drift.
         for name, site_path in publish._build_site_assets(
             cfg, work, outputs, manifest, now=now
         ).items():

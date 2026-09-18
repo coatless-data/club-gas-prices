@@ -1,11 +1,17 @@
-"""The Sam's Club source, against responses captured from the live endpoints."""
+"""The Sam's Club source, against its public server-rendered pages.
+
+Sam's Club is read from the locator sitemap (the roster) and each club's
+`/club/<id>/fuel-center` page, whose `__NEXT_DATA__` embeds the current fuel
+record. A club with no fuel centre 307s and is skipped. These tests build those
+pages compactly rather than carrying a 250 KB fixture per club.
+"""
 
 from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
 from pathlib import Path
-from urllib.parse import parse_qs, urlsplit
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -16,14 +22,83 @@ from club_gas.sources import sams
 from club_gas.sources.base import RawResponse
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
-CAPTURED_AT = datetime(2026, 9, 17, 16, 45, tzinfo=UTC)
-# The roster request's answer on a GitHub-hosted runner, from the dry capture of
-# 2026-09-17 (run 35281651770), byte for byte.
+CAPTURED_AT = datetime(2026, 9, 18, 16, 45, tzinfo=UTC)
+# A PerimeterX 412 body, kept so the safety net can be exercised even though the
+# HTML surface is not gated the way the JSON API is.
 PERIMETERX = (FIXTURES / "blocks" / "perimeterx_412.json").read_bytes()
 
 
-def body(name: str) -> bytes:
-    return (FIXTURES / name).read_bytes()
+def sitemap(ids: list[str]) -> bytes:
+    locs = "".join(f"<loc>https://www.samsclub.com/club/{i}-city-tx</loc>" for i in ids)
+    return f'<?xml version="1.0"?><urlset>{locs}</urlset>'.encode()
+
+
+def fuel_page(
+    club_id: str,
+    prices: dict[str, float],
+    *,
+    record_id: str | None = None,
+    name: str = "Test Sam's Club",
+    city: str = "Dallas",
+    state: str = "TX",
+    postcode: str = "75244",
+    tz: str | None = "America/Chicago",
+    lat: float = 32.921881,
+    lon: float = -96.843062,
+) -> bytes:
+    """A fuel-centre page's bytes: the `__NEXT_DATA__` the parser reads, minimal.
+
+    `record_id` overrides the storeFuelPrices id (e.g. "INVALID STORE"); it
+    defaults to the club's own, as "CPF_FUELPRICE_PROD_<id>".
+    """
+    block = {
+        "countryCode": "US",
+        "id": record_id or f"CPF_FUELPRICE_PROD_{club_id}",
+        "metadata": {"dateCreated": "2026-09-18T08:15:34.337Z", "createdBy": "CPF_STORAGE"},
+        "prices": [{"name": k, "price": v, "type": "fuel"} for k, v in prices.items()],
+    }
+    store_details = {"capabilities": [{"timeZone": tz}, {"timeZone": tz}]}
+    next_data = {
+        "props": {
+            "pageProps": {
+                "initialTempoData": {
+                    "contentLayout": {
+                        "modules": [
+                            {"configs": {"storeDetails": store_details}},
+                            {"configs": {"storeFuelPrices": block}},
+                        ]
+                    }
+                },
+                "initialNodeDetail": {
+                    "data": {
+                        "nodeDetail": {
+                            "id": club_id,
+                            "name": name,
+                            "displayName": name,
+                            "address": {
+                                "addressLineOne": "1 Main St",
+                                "addressLineTwo": None,
+                                "city": city,
+                                "state": state,
+                                "postalCode": postcode,
+                                "country": "US",
+                            },
+                            "geoPoint": {"latitude": lat, "longitude": lon},
+                            "operationalHours": [
+                                {"day": "Monday", "start": "06:00", "end": "22:00", "closed": False}
+                            ],
+                        }
+                    }
+                },
+            }
+        }
+    }
+    script = json.dumps(next_data)
+    return (
+        f"<!doctype html><html><body>"
+        f'<script id="__NEXT_DATA__" type="application/json">{script}</script>'
+        f"</body></html>"
+    ).encode()
 
 
 def response(key: str, payload: bytes, status: int = 200, error: str | None = None) -> RawResponse:
@@ -39,22 +114,16 @@ def response(key: str, payload: bytes, status: int = 200, error: str | None = No
     )
 
 
-def roster_response() -> RawResponse:
-    return response(sams.KEY_ROSTER, body("sams_clubfinder.json"))
+def sitemap_response(ids: list[str]) -> RawResponse:
+    return response(sams.KEY_SITEMAP, sitemap(ids))
 
 
-def price_response(n: int = 1) -> RawResponse:
-    return response(sams.KEY_PRICES.format(n=n), body("sams_fuel_6376.json"))
+def club_response(club_id: str, prices: dict[str, float], **kwargs) -> RawResponse:
+    return response(sams.KEY_CLUB.format(club_id=club_id), fuel_page(club_id, prices, **kwargs))
 
 
-def tempo(n: int, club_id: str, prices: dict[str, float] | None = None) -> RawResponse:
-    """The recorded Tempo answer, relabelled for another club or other prices."""
-    payload = json.loads(body("sams_fuel_6376.json"))
-    block = payload["data"]["contentLayout"]["modules"][0]["configs"]["storeFuelPrices"]
-    block["id"] = f"CPF_FUELPRICE_PROD_{club_id}"
-    if prices is not None:
-        block["prices"] = [{"name": k, "price": v, "type": "fuel"} for k, v in prices.items()]
-    return response(sams.KEY_PRICES.format(n=n), json.dumps(payload).encode())
+def redirect_response(club_id: str) -> RawResponse:
+    return response(sams.KEY_CLUB.format(club_id=club_id), b"", status=307)
 
 
 class ScriptedClient:
@@ -63,239 +132,160 @@ class ScriptedClient:
     def __init__(self, answer):
         self.answer = answer
         self.keys: list[str] = []
+        self.follow_redirects: list[bool] = []
 
     def abandoned(self, url: str) -> bool:
         return False
 
-    def request(self, key, url, *, headers=None, expect_json=True) -> RawResponse:
+    def request(self, key, url, *, headers=None, expect_json=True, follow_redirects=True):
         self.keys.append(key)
+        self.follow_redirects.append(follow_redirects)
         return self.answer(key)
 
 
-# --------------------------------------------------------------------- urls
+def _ctx():
+    return SimpleNamespace(fetch_config=SimpleNamespace(feeds={}), capture_date=None)
 
 
-def test_roster_url_saturates_both_caps():
-    """Both are real, enforced caps; saturating them returns the whole country."""
-    url = sams.roster_url(sams.DEFAULT_ROSTER_URL, "75001")
-    q = parse_qs(urlsplit(url).query)
-    assert q["singleLineAddr"] == ["75001"]
-    assert q["nbrOfStores"] == ["2147483647"]
-    assert q["distance"] == ["2147483647"]
+# --------------------------------------------------------------------- roster
 
 
-def test_price_url_carries_one_club_and_the_document_hash():
-    url = sams.price_url(sams.DEFAULT_PRICE_URL, "6376", "75244")
-    assert sams.PRICE_QUERY_SHA256 in url
-    variables = json.loads(parse_qs(urlsplit(url).query)["variables"][0])
-    # $nodeId is typed String! -- an array is rejected by the schema, so this
-    # endpoint is one club per request and no batching is possible.
-    assert variables["nodeId"] == "6376"
-    assert isinstance(variables["nodeId"], str)
-    assert variables["pageId"] == "fuel-center"
+def test_club_ids_are_deduped_and_numerically_ordered():
+    """The sitemap repeats some clubs and lists them by name; the roster is the
+    set of ids in numeric order, so a sweep cut short stops on a stable prefix."""
+    body = (
+        b"<loc>https://www.samsclub.com/club/8248-dallas-tx</loc>"
+        b"<loc>https://www.samsclub.com/club/6376-addison-tx</loc>"
+        b"<loc>https://www.samsclub.com/club/6376-addison-tx</loc>"
+        b"<loc>https://www.samsclub.com/club/10003-somewhere-nv</loc>"
+    )
+    assert sams.club_ids(body.decode()) == ["6376", "8248", "10003"]
 
 
-def test_the_csrf_header_is_the_one_that_works():
-    """Without it the gateway 400s; content-type: application/json does not do."""
-    assert sams.PRICE_HEADERS["x-apollo-operation-name"] == "HyperLocalPagesTempo"
-
-
-# ------------------------------------------------------------------- roster
-
-
-def test_only_clubs_that_sell_fuel_are_polled():
-    roster = json.loads(body("sams_clubfinder.json"))
-    ids = sams.fuel_club_ids(roster)
-
-    assert ids == ["6376", "8299", "8248", "4857"]
-    # 4925 sells no fuel and 6225 is Puerto Rico, where no club does.
-    assert "4925" not in ids and "6225" not in ids
-
-
-def test_gasprices_beats_the_services_tag_in_both_directions():
-    """Measured on the live roster, the two disagree both ways.
-
-    Clubs 8132 (Springdale OH) and 4704 (Fresno CA) carry prices with no "gas"
-    tag; club 7673 (Lebanon) tags "gas" and carries none. Filtering on the tag
-    loses two real fuel clubs and polls one that has nothing.
-    """
-    untagged = {"id": 8132, "services": ["cafe"], "gasPrices": [{"name": "UNLEAD", "price": 3.1}]}
-    tagged_dry = {"id": 7673, "services": ["gas"], "gasPrices": []}
-
-    ids = sams.fuel_club_ids([untagged, tagged_dry])
-
-    assert ids == ["8132"]
-
-
-def test_a_roster_that_is_not_a_list_is_an_error_not_an_empty_capture():
-    result = sams.SamsSource().parse([response(sams.KEY_ROSTER, b'{"statusCode":500}')], _ctx())
-    assert [e.code for e in result.errors] == ["roster_unavailable"]
+def test_a_sitemap_with_no_clubs_is_an_error_not_an_empty_capture():
+    result = sams.SamsSource().parse([response(sams.KEY_SITEMAP, b"<urlset></urlset>")], _ctx())
+    assert [e.code for e in result.errors] == ["sitemap_unavailable"]
     assert result.stations == []
 
 
-# ------------------------------------------------------------------- prices
-
-
-def test_prices_come_from_the_tempo_module_never_from_vivaldi():
-    """The whole point: vivaldi's gasPrices ran 31-43% below what members pay."""
-    result = sams.SamsSource().parse([roster_response(), price_response()], _ctx())
-
-    station = next(s for s in result.stations if s.source_station_id == "6376")
-    prices = {p.grade_raw: float(p.price_raw) for p in station.prices}
-    # The record also lists MIDGRAD at 2.979, below its own UNLEAD, which the
-    # guard drops; see the test after this one.
-    assert prices == {"UNLEAD": 3.699, "PREMIUM": 4.399, "DIESEL": 5.699}
-
-    # The same club's stale vivaldi value, which must never reach a station.
-    roster = json.loads(body("sams_clubfinder.json"))
-    stale = {
-        p["name"]: p["price"] for c in roster if c["id"] == 6376 for p in (c.get("gasPrices") or [])
-    }
-    assert stale["UNLEAD"] == 2.319
-    assert prices["UNLEAD"] != stale["UNLEAD"]
-
-
-def test_a_grade_priced_below_the_clubs_own_regular_is_dropped():
-    """Mid-grade cannot be cheaper than regular, yet club 6376 lists MIDGRAD at
-    2.979 against UNLEAD 3.699, and the API notes say to drop any grade below
-    the club's own UNLEAD. A grade at or above it stays; the one dropped is
-    named in a warning, so a real price that falls below regular still shows.
-    """
-    result = sams.SamsSource().parse(
-        [
-            roster_response(),
-            price_response(1),
-            tempo(2, "8299", {"UNLEAD": 3.499, "MIDGRAD": 3.499, "PREMIUM": 4.099}),
-        ],
-        _ctx(),
-    )
-
-    prices = {
-        s.source_station_id: {p.grade_raw: p.price_raw for p in s.prices} for s in result.stations
-    }
-    assert prices["6376"] == {"UNLEAD": "3.699", "PREMIUM": "4.399", "DIESEL": "5.699"}
-    assert prices["8299"] == {"UNLEAD": "3.499", "MIDGRAD": "3.499", "PREMIUM": "4.099"}
-    assert [(w.code, w.detail) for w in result.warnings if w.code == "below_regular"] == [
-        ("below_regular", "6376:MIDGRAD=2.979")
+def test_a_refused_sitemap_names_perimeterx():
+    """The HTML surface is not gated like the JSON API, but if PerimeterX ever
+    does answer the sitemap, the failure says so instead of recording nothing."""
+    result = sams.SamsSource().parse([response(sams.KEY_SITEMAP, PERIMETERX, status=412)], _ctx())
+    assert [(e.code, e.http_status, e.detail) for e in result.errors] == [
+        ("sitemap_unavailable", 412, "PerimeterX challenge")
     ]
 
 
-def test_with_no_regular_to_compare_against_every_grade_stays():
+# -------------------------------------------------------------------- sweep
+
+
+def test_the_sweep_asks_the_sitemap_then_every_club_without_following_redirects():
+    """Redirects are left unfollowed so a non-fuel club's 307 costs one empty
+    response, not its 250 KB club home."""
+
+    def answer(key):
+        if key == sams.KEY_SITEMAP:
+            return sitemap_response(["6376", "8248"])
+        return club_response(key.split("-")[-1], {"UNLEAD": 3.5})
+
+    client = ScriptedClient(answer)
+    responses = sams.SamsSource().fetch(client, _ctx())
+
+    assert client.keys == [
+        sams.KEY_SITEMAP,
+        sams.KEY_CLUB.format(club_id="6376"),
+        sams.KEY_CLUB.format(club_id="8248"),
+    ]
+    # The sitemap may follow redirects; every club request must not.
+    assert client.follow_redirects == [True, False, False]
+    assert len(responses) == 3
+
+
+def test_a_non_fuel_club_redirects_and_is_skipped_without_a_warning():
     result = sams.SamsSource().parse(
-        [roster_response(), tempo(1, "6376", {"PREMIUM": 4.399, "MIDGRAD": 2.979})], _ctx()
+        [
+            sitemap_response(["4866", "6376"]),
+            redirect_response("4866"),
+            club_response("6376", {"UNLEAD": 3.799, "PREMIUM": 4.499}),
+        ],
+        _ctx(),
     )
-
-    station = next(s for s in result.stations if s.source_station_id == "6376")
-    assert {p.grade_raw for p in station.prices} == {"PREMIUM", "MIDGRAD"}
-
-
-def test_a_club_with_no_price_response_is_warned_and_dropped():
-    """Better a short capture than a station carrying a stale roster price.
-
-    A club that was never asked about is `not_reached`, not `no_current_price`:
-    this capture knows nothing about it, and publish must not read its absence
-    as Sam's Club no longer listing it. A club asked and answered without a
-    price is the one that says something.
-    """
-    result = sams.SamsSource().parse([roster_response()], _ctx())
-
-    assert result.stations == []
-    assert sorted(w.detail for w in result.warnings) == ["4857", "6376", "8248", "8299"]
-    assert {w.code for w in result.warnings} == {"not_reached"}
-
-    asked = tempo(2, "8299", {})
-    result = sams.SamsSource().parse([roster_response(), asked], _ctx())
-
-    codes = {w.detail: w.code for w in result.warnings}
-    assert codes == {
-        "6376": "not_reached",
-        "8299": "no_current_price",
-        "8248": "not_reached",
-        "4857": "not_reached",
-    }
+    assert [s.source_station_id for s in result.stations] == ["6376"]
+    # 4866 sells no fuel: not a station, and not a warning either.
+    assert result.warnings == []
+    assert result.errors == []
 
 
-def test_a_sweep_its_budget_cut_short_says_so_and_names_every_club_it_never_asked():
-    """The roster is sorted by distance from 75001, so a sweep cut short loses
-    the same far-away clubs every time. It has to say so, and say which."""
+def test_a_sweep_its_budget_cut_short_names_every_club_it_never_asked():
+    """The roster is in numeric order, so a sweep cut short loses the same tail
+    every time. It has to say so, and say which."""
 
-    def answer(key: str) -> RawResponse:
-        if key == sams.KEY_ROSTER:
-            return roster_response()
-        if key == sams.KEY_PRICES.format(n=1):
-            return price_response(1)
-        if key == sams.KEY_PRICES.format(n=2):
-            return tempo(2, "8299")
+    def answer(key):
+        if key == sams.KEY_SITEMAP:
+            return sitemap_response(["4857", "6376", "8248", "8299"])
+        if key in (sams.KEY_CLUB.format(club_id="4857"), sams.KEY_CLUB.format(club_id="6376")):
+            return club_response(key.split("-")[-1], {"UNLEAD": 3.5, "PREMIUM": 4.1})
         raise BudgetExceeded("country-US")
 
     client = ScriptedClient(answer)
     responses = sams.SamsSource().fetch(client, _ctx())
     result = sams.SamsSource().parse(responses, _ctx())
 
-    assert client.keys == [sams.KEY_ROSTER, *(sams.KEY_PRICES.format(n=n) for n in (1, 2, 3))]
-    # The marker for club 3 goes into the bundle, so a rebuild sees the same.
+    # The marker for the club the budget stopped on goes into the bundle, so a
+    # rebuild replaying it sees the same stop.
     assert (responses[-1].key, responses[-1].error) == (
-        sams.KEY_PRICES.format(n=3),
+        sams.KEY_CLUB.format(club_id="8248"),
         "deadline_exceeded",
     )
-    assert result.requests == 3
-    assert sorted(s.source_station_id for s in result.stations) == ["6376", "8299"]
-    warnings = [(w.code, w.detail) for w in result.warnings if w.code != "below_regular"]
+    assert sorted(s.source_station_id for s in result.stations) == ["4857", "6376"]
+    warnings = [(w.code, w.detail) for w in result.warnings]
     assert warnings == [
         ("not_reached", "8248"),
-        ("not_reached", "4857"),
-        ("budget_exhausted", "2 of 4 fuel clubs not reached"),
+        ("not_reached", "8299"),
+        ("budget_exhausted", "2 of 4 clubs not reached"),
     ]
 
 
 def test_a_sweep_the_client_abandoned_partway_says_so_like_a_budget_cut():
-    """Bot protection can refuse late in a sweep as well as early. Once the
-    client gives up on the host the loop stops asking, and the clubs after that
-    point were never asked about -- the same position as a sweep the budget cut
-    short, and it has to read the same way: degraded, naming how many were
-    missed. Without a marker it read `ok` whenever enough clubs had answered."""
+    """Bot protection can refuse late in a sweep too. Once the client gives up on
+    the host the loop stops, and the unasked clubs read the same as a budget cut:
+    degraded, naming how many were missed."""
 
     class AbandonsAfterTwo(ScriptedClient):
-        def abandoned(self, url: str) -> bool:
-            return len(self.keys) > 2
+        def abandoned(self, url):
+            return len([k for k in self.keys if k.startswith(sams._KEY_CLUB_PREFIX)]) >= 2
 
-    def answer(key: str) -> RawResponse:
-        if key == sams.KEY_ROSTER:
-            return roster_response()
-        if key == sams.KEY_PRICES.format(n=1):
-            return price_response(1)
-        return tempo(2, "8299")
+    def answer(key):
+        if key == sams.KEY_SITEMAP:
+            return sitemap_response(["4857", "6376", "8248"])
+        return club_response(key.split("-")[-1], {"UNLEAD": 3.5})
 
     client = AbandonsAfterTwo(answer)
     responses = sams.SamsSource().fetch(client, _ctx())
     result = sams.SamsSource().parse(responses, _ctx())
 
-    assert client.keys == [sams.KEY_ROSTER, *(sams.KEY_PRICES.format(n=n) for n in (1, 2))]
-    # A marker for club 3, as with the deadline, so a rebuild reads it the same.
     assert (responses[-1].key, responses[-1].error) == (
-        sams.KEY_PRICES.format(n=3),
+        sams.KEY_CLUB.format(club_id="8248"),
         "host_abandoned",
     )
-    assert result.requests == 3
-    warnings = [(w.code, w.detail) for w in result.warnings if w.code != "below_regular"]
+    warnings = [(w.code, w.detail) for w in result.warnings]
     assert warnings == [
         ("not_reached", "8248"),
-        ("not_reached", "4857"),
-        ("sweep_abandoned", "2 of 4 fuel clubs not reached"),
+        ("sweep_abandoned", "1 of 3 clubs not reached"),
     ]
 
 
 def test_a_perimeterx_refusal_stops_the_sweep_and_is_named_in_the_errors():
-    """Sam's Club refuses with HTTP 412 and a PerimeterX body. Two of those and
-    the client leaves the host alone (http.toml signals_before_abandon), rather
-    than sending the rest of ~531 requests into the challenge, and the failed
-    feed says what refused it instead of recording no error at all."""
+    """If the club pages ever answer 412, two of them and the client leaves the
+    host alone, rather than sending the rest of ~604 requests into the challenge,
+    and the failed feed says what refused it."""
     sent: list[str] = []
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request):
         sent.append(request.url.path)
-        if "clubfinder" in request.url.path:
-            return httpx.Response(200, content=body("sams_clubfinder.json"))
+        if "sitemap" in request.url.path:
+            return httpx.Response(200, content=sitemap(["6376", "8248", "8299"]))
         return httpx.Response(
             412, content=PERIMETERX, headers={"Content-Type": "application/json; charset=UTF-8"}
         )
@@ -308,46 +298,123 @@ def test_a_perimeterx_refusal_stops_the_sweep_and_is_named_in_the_errors():
     assert len(sent) == 1 + cfg.block_signals_before_abandon
     assert result.stations == []
     assert [(e.code, e.http_status, e.detail) for e in result.errors] == [
-        ("price_request_failed", 412, "2 of 2 price requests: PerimeterX challenge")
+        ("club_request_failed", 412, "2 of 2 club requests: PerimeterX challenge")
     ]
 
 
-def test_a_refused_roster_names_perimeterx():
-    result = sams.SamsSource().parse([response(sams.KEY_ROSTER, PERIMETERX, status=412)], _ctx())
-
-    assert [(e.code, e.http_status, e.detail) for e in result.errors] == [
-        ("roster_unavailable", 412, "PerimeterX challenge")
-    ]
+# -------------------------------------------------------------------- prices
 
 
-def test_an_unknown_club_record_is_dropped():
-    """A comma-joined nodeId answers 200 with id INVALID STORE and no prices."""
-    payload = json.loads(body("sams_fuel_6376.json"))
-    block = payload["data"]["contentLayout"]["modules"][0]["configs"]["storeFuelPrices"]
-    block["id"] = "INVALID STORE"
+def test_prices_come_from_the_fuel_centre_pages_storefuelprices():
     result = sams.SamsSource().parse(
-        [roster_response(), response(sams.KEY_PRICES.format(n=1), json.dumps(payload).encode())],
+        [
+            sitemap_response(["6376"]),
+            club_response("6376", {"UNLEAD": 3.799, "PREMIUM": 4.499, "DIESEL": 5.899}),
+        ],
+        _ctx(),
+    )
+    station = next(s for s in result.stations if s.source_station_id == "6376")
+    prices = {p.grade_raw: float(p.price_raw) for p in station.prices}
+    assert prices == {"UNLEAD": 3.799, "PREMIUM": 4.499, "DIESEL": 5.899}
+
+
+def test_a_grade_priced_below_the_clubs_own_regular_is_dropped():
+    """Mid-grade cannot be cheaper than regular. A grade below the club's own
+    UNLEAD is dropped and named in a warning, so a real price that dips below
+    regular still shows."""
+    result = sams.SamsSource().parse(
+        [
+            sitemap_response(["6376"]),
+            club_response("6376", {"UNLEAD": 3.799, "MIDGRAD": 2.979, "PREMIUM": 4.499}),
+        ],
+        _ctx(),
+    )
+    station = next(s for s in result.stations if s.source_station_id == "6376")
+    assert {p.grade_raw for p in station.prices} == {"UNLEAD", "PREMIUM"}
+    assert [(w.code, w.detail) for w in result.warnings] == [
+        ("below_regular", "6376:MIDGRAD=2.979")
+    ]
+
+
+def test_with_no_regular_to_compare_against_every_grade_stays():
+    result = sams.SamsSource().parse(
+        [sitemap_response(["6376"]), club_response("6376", {"PREMIUM": 4.499, "MIDGRAD": 2.979})],
+        _ctx(),
+    )
+    station = next(s for s in result.stations if s.source_station_id == "6376")
+    assert {p.grade_raw for p in station.prices} == {"PREMIUM", "MIDGRAD"}
+
+
+def test_a_fuel_club_answering_without_a_price_is_no_current_price():
+    """A fuel club that answers 200 but carries no price is `no_current_price` --
+    which says something -- not `not_reached`, which says nothing."""
+    result = sams.SamsSource().parse(
+        [sitemap_response(["6376"]), club_response("6376", {})], _ctx()
+    )
+    assert result.stations == []
+    assert [(w.code, w.detail) for w in result.warnings] == [("no_current_price", "6376")]
+
+
+def test_an_unreached_club_is_only_warned_when_the_sweep_stopped():
+    """A club with no response, when the sweep ran to the end, is simply absent
+    (a non-fuel club never enters the roster's fuel set); `not_reached` is
+    reserved for a sweep that stopped early, so publish does not read a complete
+    sweep's silence as a closure."""
+    result = sams.SamsSource().parse(
+        [sitemap_response(["6376", "8248"]), club_response("6376", {"UNLEAD": 3.5})], _ctx()
+    )
+    # 8248 had no response but the sweep was not cut short, so no not_reached.
+    assert [s.source_station_id for s in result.stations] == ["6376"]
+    assert [w.code for w in result.warnings] == []
+
+
+def test_an_invalid_store_record_is_skipped():
+    """A 200 whose fuel record is INVALID STORE (a fuel-centre URL that resolved
+    to the club home without a redirect) is non-fuel, not a failure."""
+    result = sams.SamsSource().parse(
+        [sitemap_response(["6376"]), club_response("6376", {}, record_id="INVALID STORE")],
         _ctx(),
     )
     assert result.stations == []
+    assert result.warnings == []
+    assert result.errors == []
 
 
 @pytest.mark.parametrize("status", [400, 403, 429, 500])
-def test_a_failed_price_response_never_becomes_a_station(status):
+def test_a_failed_club_response_never_becomes_a_station(status):
     result = sams.SamsSource().parse(
-        [roster_response(), response(sams.KEY_PRICES.format(n=1), b"", status=status)], _ctx()
+        [
+            sitemap_response(["6376"]),
+            response(sams.KEY_CLUB.format(club_id="6376"), b"", status=status),
+        ],
+        _ctx(),
     )
     assert result.stations == []
+    assert [(e.code, e.http_status) for e in result.errors] == [("club_request_failed", status)]
+
+
+def test_a_page_with_no_next_data_is_a_failure_not_a_crash():
+    result = sams.SamsSource().parse(
+        [
+            sitemap_response(["6376"]),
+            response(sams.KEY_CLUB.format(club_id="6376"), b"<html>x</html>"),
+        ],
+        _ctx(),
+    )
+    assert result.stations == []
+    assert [e.code for e in result.errors] == ["club_request_failed"]
 
 
 # ------------------------------------------------------------------ station
 
 
 def test_a_station_carries_what_the_dashboard_needs():
-    result = sams.SamsSource().parse([roster_response(), price_response()], _ctx())
+    result = sams.SamsSource().parse(
+        [sitemap_response(["6376"]), club_response("6376", {"UNLEAD": 3.799})], _ctx()
+    )
     station = next(s for s in result.stations if s.source_station_id == "6376")
 
-    assert station.name == "Addison Sam's Club"
+    assert station.name == "Test Sam's Club"
     assert station.region == "TX"
     assert station.city == "Dallas"
     assert station.postcode == "75244"
@@ -355,58 +422,34 @@ def test_a_station_carries_what_the_dashboard_needs():
     assert station.lon == pytest.approx(-96.843062)
     # The fuel-centre page resolves from the id alone, with no city slug.
     assert station.alt_id == "6376"
-    # The feed says "CST" plus isDSTObserved; the pair resolves to a real zone.
+    # The page carries a real IANA zone, so no abbreviation disambiguation.
     assert station.timezone == "America/Chicago"
+    assert station.has_hours is True
 
 
 def test_the_result_is_branded_so_keys_cannot_collide():
-    result = sams.SamsSource().parse([roster_response(), price_response()], _ctx())
-    assert (result.country, result.brand, result.source) == ("US", "SAMS", "sams-clubfinder")
+    result = sams.SamsSource().parse(
+        [sitemap_response(["6376"]), club_response("6376", {"UNLEAD": 3.5})], _ctx()
+    )
+    assert (result.country, result.brand, result.source) == ("US", "SAMS", "sams-fuel-center")
 
 
-def _ctx():
-    from types import SimpleNamespace
-
-    return SimpleNamespace(fetch_config=SimpleNamespace(feeds={}), capture_date=None)
+# -------------------------------------------------------------- extraction
 
 
-# --------------------------------------------------------------- timezone
+def test_the_iana_timezone_is_read_straight_from_the_page():
+    props = json.loads(
+        fuel_page("6609", {"UNLEAD": 5.5}, tz="America/Los_Angeles")
+        .split(b'application/json">')[1]
+        .split(b"</script>")[0]
+    )["props"]["pageProps"]
+    assert sams.iana_timezone(props) == "America/Los_Angeles"
 
 
-@pytest.mark.parametrize(
-    ("abbreviation", "observes_dst", "expected"),
-    [
-        ("EST", True, "America/New_York"),
-        ("CST", True, "America/Chicago"),
-        ("MST", True, "America/Denver"),
-        ("PST", True, "America/Los_Angeles"),
-        ("MST", False, "America/Phoenix"),
-        ("HST", False, "Pacific/Honolulu"),
-    ],
-)
-def test_the_zone_needs_both_the_abbreviation_and_the_dst_flag(
-    abbreviation, observes_dst, expected
-):
-    """These six pairs are every one that occurs across the 531 fuel clubs.
-
-    MST is the case that matters: Denver where DST is observed, Phoenix where it
-    is not. The abbreviation alone cannot tell them apart, and 13 Arizona clubs
-    ride on it.
-    """
-    club = {"timeZone": abbreviation, "clubAttributes": {"isDSTObserved": observes_dst}}
-    assert sams.timezone_of(club) == expected
-
-
-def test_an_unknown_zone_pair_is_none_rather_than_a_guess():
-    """normalize drops a station with no timezone, which is the right outcome:
-    a wrong zone puts a price on the wrong local day."""
-    assert sams.timezone_of({"timeZone": "XYZ", "clubAttributes": {"isDSTObserved": True}}) is None
-    assert sams.timezone_of({"timeZone": None}) is None
-    assert sams.timezone_of({}) is None
-
-
-def test_every_resolved_zone_is_one_python_actually_knows():
-    from zoneinfo import ZoneInfo
-
-    for (abbreviation, dst), zone in sams.IANA_BY_ZONE.items():
-        assert ZoneInfo(zone), (abbreviation, dst, zone)
+def test_a_missing_timezone_is_none_rather_than_a_guess():
+    props = json.loads(
+        fuel_page("6376", {"UNLEAD": 3.5}, tz=None)
+        .split(b'application/json">')[1]
+        .split(b"</script>")[0]
+    )["props"]["pageProps"]
+    assert sams.iana_timezone(props) is None

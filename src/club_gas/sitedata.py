@@ -128,11 +128,8 @@ STATION_JSON_FIELDS = (
 )
 CORE_GRADES = ("regular", "premium", "diesel")
 
-# `build_site_data` writes the left-hand names into a directory; `publish` uploads
-# them to the `current` release under the right-hand names. The dashboard lives in
-# its own repository, downloads them with the pattern `site-*`, and renames them
-# back. Keep the prefix: it is what makes one download pattern enough, and what
-# keeps `stations.json` from reading like a sibling of `stations.csv`.
+# Local name → release name. The `site-` prefix lets one download pattern fetch
+# exactly these five, and avoids confusion with `stations.csv`.
 SITE_ASSETS = {
     "meta.json": "site-meta.json",
     "latest.json": "site-latest.json",
@@ -240,9 +237,7 @@ SUMMARY_COLUMNS = [
     "p25_usd_per_litre",
     "p75_usd_per_litre",
 ]
-# Brand is part of the KEY, not just a column. The site never pools two chains
-# into one figure, so there is no (country, grade) row spanning both -- there is
-# one row per brand and the page draws two series.
+# Brand is part of the key — no pooled cross-chain figures.
 SUMMARY_KEY = ["capture_date", "country", "brand", "level", "region", "grade"]
 SUMMARY_SORT = ["country", "brand", "level", "region", "grade", "capture_date"]
 HISTORY_COLUMNS = [
@@ -253,16 +248,11 @@ HISTORY_COLUMNS = [
     "price_local_per_litre",
     "price_usd_per_litre",
     "currency",
-    # The denominator: how many readings that day stand behind the price.
-    # Without it "this station changes 1.4 times a day" cannot be told apart
-    # from "we happened to look 1.4 times a day".
+    # How many readings that day — distinguishes change rate from capture rate.
     "n_captures",
-    # Did this day's price differ from the previous day this station and grade
-    # were seen? Null on the first day of a series, where there is nothing to
-    # differ from.
+    # Day-over-day change flag (null on first day).
     "changed",
-    # Did the price move at all WITHIN the day? A price that rises and falls
-    # back between captures leaves no day-over-day trace.
+    # Intraday movement flag (a round-trip within the day leaves no day-over-day trace).
     "moved_intraday",
 ]
 HISTORY_SORT = ["station_key", "grade", "capture_date"]
@@ -395,10 +385,7 @@ GRADE_TABLE_FIELDS = (
 def _meta(current_dir: Path, cfg, *, now: datetime, brands: list[str]) -> dict:
     manifest = _read_json(current_dir / "manifest.json")
     status = _manifest_status(manifest)
-    # Sorted, so meta.json is byte-stable for a given capture: publish builds it
-    # from a status dict that came straight off the capture the first time and
-    # out of a round-tripped manifest.json the next, and those two differ only in
-    # key order.
+    # Sorted for byte-stable output across fresh and round-tripped status dicts.
     countries = {
         code: {
             "status": entry.get("status"),

@@ -739,17 +739,79 @@ def test_capture_takes_its_deadlines_from_the_budgets_table(workspace: Path):
     assert [key for key in keys if key.startswith("US-COSTCO/")]
 
 
-SAMS_ROSTER = (FIXTURES / "sams_clubfinder.json").read_bytes()
-SAMS_TEMPO = (FIXTURES / "sams_fuel_6376.json").read_bytes()
+SAMS_SITEMAP = (
+    b'<?xml version="1.0"?><urlset>'
+    b"<loc>https://www.samsclub.com/club/6376-dallas-tx</loc>"
+    b"<loc>https://www.samsclub.com/club/8248-dallas-tx</loc>"
+    b"</urlset>"
+)
+
+
+def _sams_fuel_page(club_id: str) -> bytes:
+    next_data = {
+        "props": {
+            "pageProps": {
+                "initialTempoData": {
+                    "contentLayout": {
+                        "modules": [
+                            {
+                                "configs": {
+                                    "storeDetails": {
+                                        "capabilities": [{"timeZone": "America/Chicago"}]
+                                    }
+                                }
+                            },
+                            {
+                                "configs": {
+                                    "storeFuelPrices": {
+                                        "id": f"CPF_FUELPRICE_PROD_{club_id}",
+                                        "prices": [
+                                            {"name": "UNLEAD", "price": 3.5, "type": "fuel"}
+                                        ],
+                                    }
+                                }
+                            },
+                        ]
+                    }
+                },
+                "initialNodeDetail": {
+                    "data": {
+                        "nodeDetail": {
+                            "id": club_id,
+                            "name": "Test Sam's Club",
+                            "address": {
+                                "addressLineOne": "1 Main St",
+                                "city": "Dallas",
+                                "state": "TX",
+                                "postalCode": "75244",
+                            },
+                            "geoPoint": {"latitude": 32.9, "longitude": -96.8},
+                        }
+                    }
+                },
+            }
+        }
+    }
+    script = json.dumps(next_data)
+    return (
+        f"<html><body>"
+        f'<script id="__NEXT_DATA__" type="application/json">{script}</script>'
+        f"</body></html>"
+    ).encode()
 
 
 def sams_transport() -> httpx.MockTransport:
-    """Serve FX, the warehouse locator, and the recorded Sam's roster and Tempo answer."""
+    """Serve FX, the warehouse locator, and Sam's sitemap and fuel-centre pages."""
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.host == "www.samsclub.com":
-            recorded = SAMS_ROSTER if "clubfinder" in request.url.path else SAMS_TEMPO
-            return httpx.Response(200, content=recorded)
+            path = request.url.path
+            if "sitemap" in path:
+                return httpx.Response(200, content=SAMS_SITEMAP)
+            club_id = path.split("/club/")[1].split("/")[0]
+            return httpx.Response(
+                200, content=_sams_fuel_page(club_id), headers={"Content-Type": "text/html"}
+            )
         if request.url.host == "api.frankfurter.dev":
             return httpx.Response(200, content=FX_BODY)
         if request.url.host == "ecom-api.costco.com":
@@ -763,11 +825,8 @@ def test_a_feed_with_its_own_budget_is_not_bound_by_the_countrys(workspace: Path
     """feeds.toml's budget_s replaces http.toml's country budget for that feed.
 
     The country budget is set to zero here, which spends it before any request;
-    Sam's still sweeps its whole roster, on its own 660 s.
+    Sam's still sweeps its whole roster, on its own 715 s.
     """
-    path = workspace / "config" / "feeds.toml"
-    text = path.read_text(encoding="utf-8")
-    path.write_text(text.replace("enabled = false", "enabled = true"), encoding="utf-8")
     set_budgets(workspace, country=0.0)
     cfg = load_config(workspace)
     store = LocalReleaseStore(workspace / "releases")
@@ -784,12 +843,12 @@ def test_a_feed_with_its_own_budget_is_not_bound_by_the_countrys(workspace: Path
     )
 
     sent = [entry["key"] for entry in client.log if entry["key"].startswith("US-SAMS/")]
-    assert sent == ["US-SAMS/01-clubfinder", *(f"US-SAMS/02-fuel-{n:04d}" for n in range(1, 5))]
+    assert sent == ["US-SAMS/01-sitemap", "US-SAMS/02-6376", "US-SAMS/02-8248"]
     block = result.status["feeds"]["US-SAMS"]
-    assert block["requests"] == 5
+    assert block["requests"] == 3
     assert "budget_exhausted" not in {w["code"] for w in block["warnings"]}
-    # Every price answer is club 6376's, so it is the one station.
-    assert block["stations"] == 1
+    # Both sitemap clubs sell fuel, so both become stations.
+    assert block["stations"] == 2
 
 
 def test_a_disabled_feed_is_never_dispatched(monkeypatch):

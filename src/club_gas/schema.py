@@ -11,19 +11,15 @@ import polars as pl
 
 UTC_DATETIME = pl.Datetime("us", "UTC")
 
-# Written as "2026-09-15" and "2026-09-15T18:19:02Z" in every CSV we produce, so
-# the files round-trip exactly and stay diffable.
+# Fixed CSV date formats for exact round-tripping and diffability.
 CSV_DATE_FORMAT = "%Y-%m-%d"
 CSV_DATETIME_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 
-# Derived price columns are computed from unrounded intermediates and rounded
-# only here, at write time.
+# Derived prices are rounded only at write time.
 PRICE_DECIMALS = 4
 PRICE_COLUMNS = ("price_local_per_litre", "price_usd_per_litre", "price_usd_per_gallon")
 
-# Rates are kept to significant digits, not decimals: JPY at 154.24 per USD is
-# 0.006483 USD per yen, which 4-decimal rounding would turn into 0.0065, an
-# error of 0.26%.
+# Significant digits, not decimals — 4-decimal rounding would distort JPY rates.
 FX_SIGNIFICANT_DIGITS = 10
 FX_RATE_COLUMNS = ("units_per_usd", "fx_usd_per_unit")
 
@@ -62,9 +58,7 @@ ROW_SCHEMA: dict[str, pl.DataType] = {
     "price_usd_per_gallon": pl.Float64(),
 }
 
-# Every column that must never hold a null. The rest are nullable by design:
-# a station can lack a local name or coordinates, and every fx_* and USD column
-# is null when the capture could not get an exchange rate.
+# Columns that must never be null; the rest are nullable by design.
 REQUIRED_ROW_COLUMNS: tuple[str, ...] = (
     "capture_id",
     "capture_date",
@@ -233,8 +227,7 @@ def _write_csv_bytes(df: pl.DataFrame) -> bytes:
 
 
 def _read_csv_bytes(raw: bytes, schema: dict[str, pl.DataType]) -> pl.DataFrame:
-    # Every field is read as text and cast explicitly, so no column's type
-    # depends on how the first rows happen to look.
+    # Read as text and cast explicitly to avoid type inference surprises.
     df = pl.read_csv(raw, infer_schema_length=0)
     missing = [name for name in schema if name not in df.columns]
     if missing:
@@ -259,8 +252,7 @@ def _read_csv_bytes(raw: bytes, schema: dict[str, pl.DataType]) -> pl.DataFrame:
 
 def _write_gzip(raw: bytes, path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
-    # mtime=0 and an empty stored filename keep the bytes identical for
-    # identical content, so re-publishing a capture does not change any digest.
+    # Deterministic gzip output (mtime=0, no filename) for stable digests.
     with path.open("wb") as fh, gzip.GzipFile(filename="", mode="wb", fileobj=fh, mtime=0) as gz:
         gz.write(raw)
     return path
@@ -287,14 +279,7 @@ def write_csv(
     sort_by: list[str],
     validate: Callable[[pl.DataFrame], None],
 ) -> Path:
-    """Write a plain CSV asset such as stations.csv or fx.csv, validating first.
-
-    The caller names its validator. Choosing one by `schema is STATION_SCHEMA`
-    meant a caller passing `dict(STATION_SCHEMA)`, or a merged schema such as
-    `rollup.DAILY_SCHEMA`, silently fell through to a structure-only check and
-    lost duplicate-key detection -- the exact corruption these validators exist
-    to stop. Two of the four branches were unreachable anyway.
-    """
+    """Write a plain CSV asset, validating with the caller's chosen validator."""
     validate(df)
     out = _prepare(df, schema, sort_by)
     path = Path(path)

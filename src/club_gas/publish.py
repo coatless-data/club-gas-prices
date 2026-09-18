@@ -111,20 +111,9 @@ def read_or_rebuild_manifest(
         if match and asset.state == "uploaded":
             bundles[match.group("capture_id")] = asset
 
-    # A capture id may only get a rebuilt entry once `current/manifest.json`
-    # itself lists it in `merged_captures` -- being in the daily file alone
-    # only means merge_capture reached that far, not that `current` was ever
-    # fully updated for it. Checking a data file (spec review round 2 checked
-    # club-gas-all-captures.parquet) is not enough: that file is only the
-    # third of seven `current` assets `_update_current` writes, so a crash
-    # after it but before, say, fx.csv would still fabricate a "done" entry
-    # (spec review round 3). `merged_captures` is written last, as part of
-    # manifest.json, so it is a true commit marker: if a capture id is in it,
-    # every other `current` asset already holds that capture's data. When
-    # `current/manifest.json` itself is absent (the genuine first publish
-    # ever, nothing has completed `_update_current` even once), no entries
-    # are fabricated at all and every bundle in these daily files is left
-    # for `_reconcile`.
+    # `merged_captures` in `current/manifest.json` is the commit marker: it is
+    # written last, so a capture listed there is fully reflected in every asset.
+    # Missing manifest = first publish ever, so no entries are fabricated.
     try:
         current_manifest_path = store.download(
             "current", "manifest.json", scratch / f"{tag}-current-manifest.json"
@@ -565,17 +554,8 @@ def merge_capture(
         .iter_rows()
     }
     entry["bundle"] = {"sha256": captured.bundle_sha256, "rows": captured.rows.height}
-    # The day's file holds every capture of the day, so every capture the manifest
-    # records for the day is given the new file's digest and row count, not just
-    # this one. The month close trusts the greatest capture id's entry, and a
-    # capture recovered after the day's last one (Rebuild scope=artifact) used to
-    # leave that entry describing a file with fewer rows, which blocked the month
-    # until someone ran Rebuild month by hand. Correcting the record here,
-    # rather than having the close look for the entry whose digest matches the
-    # file, keeps the rule `rebuild` and the manifest rebuild above already
-    # follow, so every entry for a day describes the file that is really there.
-    # Only existing entries are touched: an entry is `_reconcile`'s commit
-    # marker, so one must never appear for a capture that is not merged yet.
+    # Update every existing entry for this day to reflect the current daily file,
+    # not just this capture's. Keeps the manifest consistent after recoveries.
     daily_info = {"sha256": sha256_file(out_daily), "rows": merged.height}
     for capture_id in [*recorded, captured.capture_id]:
         manifest["captures"][capture_id].setdefault("daily_files", {})[day] = daily_info
@@ -739,14 +719,9 @@ def _update_current(
     )
     outputs["fx.csv"] = path
 
-    # Every other `current` asset is durable at this point: all six
-    # replace_atomic calls above have already succeeded. Only now is it safe
-    # to record this capture as merged -- merged_captures is written below as
-    # part of manifest.json, the LAST `current` write, making it a true
-    # commit marker (spec review round 3). Recording it any earlier, or
-    # deriving completeness from one of the data files instead, would let a
-    # crash between two of those six writes fabricate a "done" capture that
-    # `current` does not actually fully reflect.
+    # All data assets are durable. merged_captures is written last (in
+    # manifest.json) as the commit marker — recording it earlier would let a
+    # crash fabricate a "done" capture.
     for name, path in outputs.items():
         store.replace_atomic("current", path, name, captured.capture_id)
         assets_written.append(f"current/{name}")
@@ -769,12 +744,8 @@ def _update_current(
         {*manifest.get("merged_captures", []), captured.capture_id}
     )
 
-    # The dashboard is a separate repository with no Python in it: it downloads
-    # these five files and renders. They are built here, from the same frames the
-    # six assets above were written from, and uploaded inside the same
-    # transaction -- which is what stops the site from ever showing one capture's
-    # map over another capture's history. They are built after `status` and
-    # `merged_captures` are settled because meta.json reads both.
+    # Site data files, built from the same frames as the six assets above.
+    # Built after status and merged_captures are settled (meta.json reads both).
     for name, path in _build_site_assets(cfg, scratch, outputs, manifest, now=now).items():
         store.replace_atomic("current", path, name, captured.capture_id)
         assets_written.append(f"current/{name}")

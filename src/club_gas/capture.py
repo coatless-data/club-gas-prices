@@ -35,16 +35,12 @@ from .sources.base import (
 )
 from .store import ReleaseStore, sha256_file
 
-# Paths are relative to the repository checkout the CLI runs in (capture.yml
-# checks out the default branch, then runs from its root).
+# Paths relative to the repo checkout the CLI runs in.
 CONFIG_DIR = Path("config")
 STATUS_PATH = Path("status/latest.json")
 
-# The warehouse locator is shared by US and CA, so capture fetches it once
-# (spec 4.2 step 1, 5.3 step 3). The client-identifier is a public id embedded
-# in Costco's own front end; it lives in config/countries.toml under
-# [countries.US] so it can be rotated without a code change, and these
-# constants are only the built-in default.
+# Shared warehouse locator for US and CA (spec 4.2, 5.3). The client-identifier
+# is a public id from Costco's front end; configurable via countries.toml.
 ECOM_API_URL = "https://ecom-api.costco.com/core/warehouse-locator/v1/warehouses.json"
 ECOM_API_PARAMS = {"latitude": "0", "longitude": "0", "limit": "5000"}
 ECOM_CLIENT_IDENTIFIER = "7c71124c-7bf1-44db-bc9d-498584cd66e5"
@@ -60,9 +56,7 @@ US_ID_SET_SCHEMA = {
     "ecom_state": pl.String,
 }
 
-# The countries that run off the previous `current/stations.csv`: US takes its
-# `seen` ids from it and CA takes its fallback's cached metadata from it, so
-# spec 5.3 step 1 makes both degraded when it could not be read.
+# Countries that depend on the previous `current/stations.csv`.
 PREVIOUS_STATE_COUNTRIES = ("US", "CA")
 
 
@@ -117,10 +111,7 @@ def _read_previous_state(
 ) -> tuple[pl.DataFrame, pl.DataFrame, bool]:
     """Read `stations.csv` and `fx.csv` from `current` (spec 5.3 step 1).
 
-    `read_resolved` is used instead of `download` because capture runs before
-    the §8.4 recovery that publish performs: a crashed publish can leave only a
-    `stations.csv.next-<token>-1` behind, and read_resolved resolves it without
-    modifying the release.
+    Uses `read_resolved` to handle partially-written assets from crashed publishes.
     """
     scratch.mkdir(parents=True, exist_ok=True)
     complete = True
@@ -230,8 +221,7 @@ def run_capture(
             ctx.shared["ecom-api"] = resp
             write_response(out / "shared", resp, "ecom-api")
 
-    # A feed turned off in feeds.toml is left out of the run, so it reads
-    # `skipped` rather than failing every capture and opening an issue.
+    # Disabled feeds are excluded from the run.
     configured = getattr(cfg, "feeds", {}) or {}
     feeds = [fid for fid in feeds_for(countries) if getattr(configured.get(fid), "enabled", True)]
     blocks, collected = _run_feeds(feeds, client, ctx, fx, out, now, warnings)
@@ -240,8 +230,7 @@ def run_capture(
     stations = _concat(collected, "stations", schema.STATION_SCHEMA).sort(schema.STATION_SORT)
     schema.write_rows_csv_gz(rows, capture_out / "rows.csv.gz")
     stations.write_csv(capture_out / "stations.csv")
-    # fx.json is a JSON array of rate rows (spec 4.5). `publish` and `rebuild`
-    # both read that array, so the writer is FxRates.to_json() and nothing else.
+    # fx.json: rate rows as JSON (spec 4.5), read by publish and rebuild.
     (capture_out / "fx.json").write_text(
         json.dumps(fx.to_json(), indent=1, sort_keys=True), encoding="utf-8"
     )
@@ -264,9 +253,7 @@ def run_capture(
     try:
         _write_bundle(out, capture_out, ctx, run, collected)
     except Exception as exc:
-        # status.json is already durable at this point; a bundle failure must
-        # be visible there, not fatal to the capture (spec review finding 1b,
-        # Task 13). The workflow still uploads out/ as an artifact either way.
+        # Bundle failure is recorded, not fatal — status.json is already durable.
         detail = f"{type(exc).__name__}: {exc}"
         status["warnings"].append({"code": "bundle_failed", "detail": detail})
         (capture_out / "status.json").write_text(
@@ -300,21 +287,8 @@ def run_feed(
 ) -> dict:
     """Fetch, parse, normalize, check and write one feed (spec 5.3 step 4).
 
-    The unit is the feed, not the country: the United States has two chains and
-    each is fetched, bounded and reported on separately.
-
-    From the output directory's creation onward, everything is inside one try
-    block, so an exception anywhere in this country's pipeline -- including an
-    unknown-country lookup or a crash inside fetch/parse -- marks only this
-    country failed (spec 10.1) instead of aborting the whole capture. Outputs
-    land in `out/feeds/<feed>/` as soon as the feed finishes, before the
-    other threads are done.
-
-    For US, the polled-id frame for `inputs/us_id_set.csv` is computed here,
-    once, inside this same guard (review finding 1, Task 13): `fetch_us` makes
-    the identical call as its first statement, so if the ecom-api metadata is
-    malformed this call fails exactly where that one would, and is caught by
-    the same `except` below. `_write_bundle` must never recompute it.
+    Each feed runs in isolation: an exception marks only this feed failed.
+    The US polled-id frame is computed here inside the same guard.
     """
     country = SOURCES[fid].country
     directory = out / "feeds" / fid
@@ -326,9 +300,7 @@ def run_feed(
         directory.mkdir(parents=True, exist_ok=True)
         source = SOURCES[fid]
         extra: list[Warning] = []
-        # A feed may carry its own budget in feeds.toml. Sam's Club asks one club
-        # per request, and its 532 paced requests do not fit the country budget
-        # that Costco's feeds run inside.
+        # Per-feed budget override from feeds.toml.
         declared = (getattr(ctx.fetch_config, "feeds", None) or {}).get(fid)
         seconds = getattr(declared, "budget_s", None)
         try:
@@ -363,11 +335,8 @@ def run_feed(
         us_id_set = None
 
     if country in PREVIOUS_STATE_COUNTRIES and not ctx.previous_state_complete:
-        # `checks.evaluate_feed` only ever inspects this feed's own warning
-        # list, so the capture-level warning `run_capture` records has to be
-        # repeated here or spec 6.5's "makes US and CA degraded" never fires.
-        # Appended after the try/except so it survives the failure path too,
-        # which builds a fresh FetchResult with no warnings.
+        # Repeated on the feed's own warnings (the capture-level one isn't visible
+        # to evaluate_feed). Appended after try/except to survive the failure path.
         result.warnings.append(Warning(code="previous_state_unavailable"))
 
     block = checks.evaluate_feed(fid, result, normalized, ctx, now)
@@ -427,21 +396,9 @@ def _run_feeds(
 
 
 def _us_id_set(collected: dict[str, dict]) -> pl.DataFrame:
-    """``inputs/us_id_set.csv``: every id the US fetcher POLLED, not every id it priced.
+    """The set of US ids that were polled (not just priced), for discovery.
 
-    `discover` (spec 10.4) subtracts this file from its candidate range, so it has to
-    hold the polled set. Deriving it from `FetchResult.stations` instead would omit
-    every id that answered `{}`, and discovery would re-sweep those ids every month.
-
-    The frame was already computed once, inside `run_feed`'s guarded US path,
-    and carried here in `collected["US-COSTCO"]["us_id_set"]`. `collected` is
-    keyed by feed, not country: a lookup of "US" finds nothing and leaves the
-    file header-only. This function only reads the frame back -- it must never
-    call `polled_id_frame` itself, because that call would run after
-    `status.json` is already durable and unguarded by the try that isolates one
-    feed's failure from the rest of the capture (spec review finding 1, Task
-    13). US skipped, US failed, or a synthetic result with no `us_id_set` all
-    fall back to an empty, correctly-shaped frame.
+    Reads the frame computed in `run_feed`'s guarded path — must never recompute.
     """
     us = collected.get("US-COSTCO")
     frame = us.get("us_id_set") if us else None
@@ -470,11 +427,8 @@ def _write_bundle(
             shutil.copy2(path, stage / "config" / path.name)
             config_sha[path.name] = sha256_file(path)
 
-    # Into the bundle AND the capture directory. publish.load_capture_dir reads
-    # `capture.json` from the capture directory and names it in its required
-    # list, so writing it only into the bundle left publish with nothing to read
-    # -- which no test saw, because the publish tests build a capture directory
-    # of their own rather than the one capture actually writes.
+    # Written to both the bundle and the capture directory (publish reads it
+    # from the latter).
     capture_meta = json.dumps(
         {
             "capture_id": ctx.capture_id,
