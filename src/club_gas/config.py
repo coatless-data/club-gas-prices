@@ -279,6 +279,10 @@ class FeedConfig:
     price_url: str | None = None
     origin_postcode: str | None = None
     params: dict[str, str] = field(default_factory=dict)
+    # Seconds for this feed's fetch, in place of http.toml's `country` budget.
+    # Costco's feeds fit that budget; a feed that asks one station per request
+    # can need more, or it is cut short on every capture.
+    budget_s: float | None = None
 
 
 @dataclass(frozen=True)
@@ -340,6 +344,7 @@ class Config:
             },
             grades=GradeTable(entries={}),
             station_links=pl.DataFrame(schema=STATION_LINKS_SCHEMA),
+            feeds={fid: replace(feed, floor=0) for fid, feed in self.feeds.items()},
         )
 
     def interp_view(self) -> Config:
@@ -367,6 +372,13 @@ class Config:
                 for code, country in self.countries.items()
             },
             us_extra_ids=pl.DataFrame(schema=US_EXTRA_IDS_SCHEMA),
+            # A feed's floor is read from here, exactly like a country's.
+            feeds={
+                fid: replace(
+                    feed, url="", price_url=None, origin_postcode=None, params={}, budget_s=None
+                )
+                for fid, feed in self.feeds.items()
+            },
         )
 
 
@@ -587,6 +599,7 @@ def _load_feeds(path: Path) -> dict[str, FeedConfig]:
                     str(spec["origin_postcode"]) if spec.get("origin_postcode") else None
                 ),
                 params={str(k): str(v) for k, v in (spec.get("params") or {}).items()},
+                budget_s=(float(spec["budget_s"]) if "budget_s" in spec else None),
             )
         except (KeyError, TypeError, ValueError) as exc:
             raise ConfigError(f"{path}: feed {fid}: {exc}") from exc
@@ -661,6 +674,19 @@ def _validate(cfg: Config) -> None:
         for region in sorted(country.unit_overrides):
             if region not in country.timezones:
                 raise ConfigError(f"{code}: no timezone for region {region!r}")
+
+    capture_s = cfg.http.budget_seconds("capture")
+    for fid, feed in cfg.feeds.items():
+        if feed.floor < 1:
+            raise ConfigError(f"{fid}: floor must be at least 1")
+        if feed.budget_s is not None and not 0 < feed.budget_s <= capture_s:
+            # Every feed thread runs inside the capture budget, so a longer feed
+            # budget is never reached: the capture's closes first and the sweep
+            # is cut short all the same.
+            raise ConfigError(
+                f"{fid}: budget_s must be above 0 and no longer than the capture "
+                f"budget of {capture_s:g} s"
+            )
 
     for (country_code, _brand, grade_raw), entry in cfg.grades.entries.items():
         where = f"grades.csv: {country_code} {grade_raw!r}"

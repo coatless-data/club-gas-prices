@@ -556,10 +556,10 @@ def test_every_extra_id_row_names_a_brand(cfg):
 def test_a_feed_can_be_turned_off(cfg):
     """A feed the operator has no working route to is off, not broken.
 
-    Sam's Club answers HTTP 412 with a PerimeterX challenge from a GitHub
-    runner while serving the same request from a residential IP, so leaving it
-    on would fail every capture and open an issue four times a day for a
-    condition no retry fixes.
+    The collector's one recorded request to Sam's Club, the roster from a
+    GitHub-hosted runner, was answered with HTTP 412 and a PerimeterX challenge.
+    Leaving the feed on would fail every capture and open an issue four times a
+    day for a condition no retry fixes.
     """
     assert cfg.feeds["US-SAMS"].enabled is False
 
@@ -569,3 +569,59 @@ def test_a_feed_is_on_unless_it_says_otherwise(config_copy: Path):
     text = path.read_text(encoding="utf-8")
     path.write_text(text.replace("enabled = false", ""), encoding="utf-8")
     assert load_config(config_copy).feeds["US-SAMS"].enabled is True
+
+
+def test_a_feeds_floor_is_interpretation_and_its_urls_are_fetch_config(cfg):
+    """The same split as a country's: a rebuild reads the floor from the live
+    checkout and the URLs from the bundle, and neither view carries the other."""
+    fetch = cfg.fetch_view().feeds["US-SAMS"]
+    interp = cfg.interp_view().feeds["US-SAMS"]
+
+    assert fetch.url.startswith("https://www.samsclub.com/")
+    assert fetch.budget_s == 660.0
+    assert fetch.floor == 0
+    assert interp.floor == 460
+    assert (interp.url, interp.price_url, interp.origin_postcode, interp.budget_s) == (
+        "",
+        None,
+        None,
+        None,
+    )
+    assert cfg.feeds["US-SAMS"].floor == 460
+
+
+def test_the_sams_budget_fits_its_sweep_inside_the_capture(cfg):
+    """feeds.toml's arithmetic, pinned: 1 roster + 531 price requests, one per
+    min_interval_seconds on one host, inside the capture budget that bounds
+    every feed thread. The country budget does not fit it, which is why the
+    feed has its own."""
+    requests = 1 + 531
+    budget = cfg.feeds["US-SAMS"].budget_s
+
+    assert cfg.http.budget_seconds("country") < requests * cfg.http.min_interval_seconds
+    assert budget >= 1.2 * requests * cfg.http.min_interval_seconds
+    assert budget <= cfg.http.budget_seconds("capture")
+
+
+@pytest.mark.parametrize("value", ["0.0", "-60.0", "721.0"])
+def test_a_feed_budget_outside_the_capture_budget_is_refused(config_copy: Path, value: str):
+    path = config_copy / "config" / "feeds.toml"
+    text = path.read_text(encoding="utf-8")
+    path.write_text(text.replace("budget_s = 660.0", f"budget_s = {value}"), encoding="utf-8")
+    with pytest.raises(ConfigError, match="budget_s must be above 0"):
+        load_config(config_copy)
+
+
+def test_a_feed_with_no_budget_uses_the_country_budget(config_copy: Path):
+    path = config_copy / "config" / "feeds.toml"
+    text = path.read_text(encoding="utf-8")
+    path.write_text(text.replace("budget_s = 660.0", ""), encoding="utf-8")
+    assert load_config(config_copy).feeds["US-SAMS"].budget_s is None
+
+
+def test_a_feed_floor_below_one_is_refused(config_copy: Path):
+    path = config_copy / "config" / "feeds.toml"
+    text = path.read_text(encoding="utf-8")
+    path.write_text(text.replace("floor = 460", "floor = 0"), encoding="utf-8")
+    with pytest.raises(ConfigError, match="US-SAMS: floor must be at least 1"):
+        load_config(config_copy)

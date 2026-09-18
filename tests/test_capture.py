@@ -739,6 +739,59 @@ def test_capture_takes_its_deadlines_from_the_budgets_table(workspace: Path):
     assert [key for key in keys if key.startswith("US-COSTCO/")]
 
 
+SAMS_ROSTER = (FIXTURES / "sams_clubfinder.json").read_bytes()
+SAMS_TEMPO = (FIXTURES / "sams_fuel_6376.json").read_bytes()
+
+
+def sams_transport() -> httpx.MockTransport:
+    """Serve FX, the warehouse locator, and the recorded Sam's roster and Tempo answer."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "www.samsclub.com":
+            recorded = SAMS_ROSTER if "clubfinder" in request.url.path else SAMS_TEMPO
+            return httpx.Response(200, content=recorded)
+        if request.url.host == "api.frankfurter.dev":
+            return httpx.Response(200, content=FX_BODY)
+        if request.url.host == "ecom-api.costco.com":
+            return httpx.Response(200, content=ECOM_BODY)
+        return httpx.Response(404, content=b"{}")
+
+    return httpx.MockTransport(handler)
+
+
+def test_a_feed_with_its_own_budget_is_not_bound_by_the_countrys(workspace: Path):
+    """feeds.toml's budget_s replaces http.toml's country budget for that feed.
+
+    The country budget is set to zero here, which spends it before any request;
+    Sam's still sweeps its whole roster, on its own 660 s.
+    """
+    path = workspace / "config" / "feeds.toml"
+    text = path.read_text(encoding="utf-8")
+    path.write_text(text.replace("enabled = false", "enabled = true"), encoding="utf-8")
+    set_budgets(workspace, country=0.0)
+    cfg = load_config(workspace)
+    store = LocalReleaseStore(workspace / "releases")
+    client = Client(cfg.http, transport=sams_transport())
+
+    result = run_capture(
+        cfg,
+        store,
+        workspace / "out",
+        countries=["US"],
+        force_fallback=set(),
+        now=NOW,
+        client=client,
+    )
+
+    sent = [entry["key"] for entry in client.log if entry["key"].startswith("US-SAMS/")]
+    assert sent == ["US-SAMS/01-clubfinder", *(f"US-SAMS/02-fuel-{n:04d}" for n in range(1, 5))]
+    block = result.status["feeds"]["US-SAMS"]
+    assert block["requests"] == 5
+    assert "budget_exhausted" not in {w["code"] for w in block["warnings"]}
+    # Every price answer is club 6376's, so it is the one station.
+    assert block["stations"] == 1
+
+
 def test_a_disabled_feed_is_never_dispatched(monkeypatch):
     """It reads `skipped`, which opens no issue and sinks no capture."""
     from types import SimpleNamespace

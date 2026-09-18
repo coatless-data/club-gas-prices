@@ -366,6 +366,7 @@ def upsert_stations(
     newest_by_feed: dict[str, str],
     capture_id: str,
     closed_after_days: dict[str, int] | None = None,
+    disabled_feeds: frozenset[str] = frozenset(),
 ) -> pl.DataFrame:
     """Spec 6.3 incremental upsert.
 
@@ -375,6 +376,11 @@ def upsert_stations(
 
     Stations are only ever added. One that disappears from its feed keeps its
     row and its history and is relabelled; see `station_status`.
+
+    A feed switched off in feeds.toml is skipped by every capture, and a
+    skipped feed normally changes nothing. Left there, its stations would read
+    `active` forever over prices nobody is collecting, so `disabled_feeds` are
+    relabelled by the same rule as a station its feed stopped listing.
     """
     metadata = [
         "source_station_id",
@@ -397,6 +403,14 @@ def upsert_stations(
         fid
         for fid, block in (status.get("feeds") or {}).items()
         if block.get("status") in ("ok", "degraded")
+    }
+    # A sweep cut short names the stations it never asked about. Absent from
+    # this capture is not evidence about them, so they keep their status.
+    unreached = {
+        (fid, warning.get("detail"))
+        for fid, block in (status.get("feeds") or {}).items()
+        for warning in block.get("warnings") or []
+        if warning.get("code") == "not_reached"
     }
     incoming_keys = set(incoming["station_key"].to_list())
 
@@ -429,10 +443,16 @@ def upsert_stations(
         if key in incoming_keys:
             continue
         fid = f"{record['country']}-{record['brand']}"
-        if fid in succeeded and capture_id > (newest_by_feed.get(fid) or ""):
-            record["status"] = station_status(
-                record["last_seen_utc"], at, thresholds.get(record["country"])
-            )
+        if capture_id <= (newest_by_feed.get(fid) or ""):
+            continue
+        if fid in succeeded:
+            if (fid, record["source_station_id"]) in unreached:
+                continue
+        elif fid not in disabled_feeds:
+            continue
+        record["status"] = station_status(
+            record["last_seen_utc"], at, thresholds.get(record["country"])
+        )
 
     link_map: dict[str, str] = {}
     if links.height:
@@ -657,6 +677,7 @@ def _update_current(
         manifest["newest_capture_by_feed"],
         captured.capture_id,
         {code: c.closed_after_days for code, c in cfg.countries.items()},
+        frozenset(fid for fid, feed in cfg.feeds.items() if not feed.enabled),
     )
     new_fx = upsert_fx(fx, captured.capture_id, captured.fx)
 

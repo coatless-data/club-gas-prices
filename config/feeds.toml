@@ -12,16 +12,21 @@
 country = "US"
 brand = "SAMS"
 
-# OFF, because the site says no from a hosted runner.
+# OFF, because the collector's one recorded request to Sam's Club was refused.
 #
-# A dry capture on 2026-09-17 answered HTTP 412 with a PerimeterX challenge body
-# -- {"redirectUrl":"/are-you-human?...","appId":"PXsLC3j22K"} -- where the same
-# request from a residential IP answered 200 forty-one times in a row without a
-# single throttle. So it is the runner's address that is refused, not the rate.
+# On 2026-09-17 a dry capture on a GitHub-hosted runner sent a single request,
+# the clubfinder roster below, with the project User-Agent. It answered HTTP 412
+# with a PerimeterX challenge body --
+# {"redirectUrl":"/are-you-human?...","appId":"PXsLC3j22K"} -- and the sweep
+# stopped there. The requests that answered 200 during development were not
+# that request: they were Tempo price requests, sent from a residential address
+# with a browser User-Agent. Origin, endpoint and User-Agent all differ between
+# the two, so which of them was refused is not known, and the collector's
+# request has not been re-tested since.
 #
-# The source, its tests and its fixtures stay: nothing about them is wrong, and
-# the only missing piece is a request origin the site will serve. Turning this
-# back on is one line, and needs a route the operator is entitled to use.
+# The source, its tests and its fixtures stay. Turning this back on is one line;
+# it needs a route the operator is entitled to use, and a dry run of the
+# collector's own requests from that route first.
 enabled = false
 
 # The roster: every US club in one request, with coordinates and the grades each
@@ -38,6 +43,16 @@ price_url = "https://www.samsclub.com/orchestra/home/graphql/HyperLocalPagesTemp
 # move, and neither is read.
 origin_postcode = "75001"
 
-# 531 of 601 clubs had fuel on 2026-09-17. Set below that so a short sweep is
-# degraded rather than a silent partial.
+# This feed's own floor, in place of countries.US's, which counts Costco's
+# stations. 531 of 601 clubs had fuel on 2026-09-17; set below that so a short
+# sweep is degraded rather than a silent partial. A sweep its budget cut short
+# reads degraded on its own warning, whether or not it clears the floor.
 floor = 460
+
+# Seconds for the sweep, in place of http.toml's country budget of 480, which
+# does not fit it. The sweep is 1 roster + 531 price requests = 532 requests,
+# all to www.samsclub.com, which http.toml paces at one per 1.0 s: 532 s. Tempo
+# answered in about 0.46 s during development, so the spacing sets the pace.
+# 660 s leaves 128 s (24%) for slow answers, retries and new clubs, and stays
+# under the 720 s capture budget that every feed runs inside.
+budget_s = 660.0

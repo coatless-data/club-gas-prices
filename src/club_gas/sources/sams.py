@@ -27,7 +27,7 @@ from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import quote
 
-from club_gas.http import BudgetExceeded
+from club_gas.http import BudgetExceeded, perimeterx_challenge
 from club_gas.sources.base import (
     CaptureContext,
     Error,
@@ -45,6 +45,13 @@ FEED = f"{COUNTRY}-{BRAND}"
 
 KEY_ROSTER = f"{FEED}/01-clubfinder"
 KEY_PRICES = f"{FEED}/02-fuel-{{n:04d}}"
+HOST = "www.samsclub.com"
+
+# A price response carrying one of these errors stands for a request that was
+# never sent. `deadline_exceeded` is the marker fetch() leaves where the budget
+# ran out; `host_abandoned` is the client declining a host it has given up on.
+DEADLINE = "deadline_exceeded"
+NOT_SENT = frozenset({DEADLINE, "host_abandoned"})
 
 DEFAULT_ROSTER_URL = "https://www.samsclub.com/api/node/vivaldi/browse/v2/clubfinder/list"
 DEFAULT_PRICE_URL = "https://www.samsclub.com/orchestra/home/graphql/HyperLocalPagesTempo"
@@ -235,6 +242,74 @@ def _prices(block: dict | None) -> tuple[RawPrice, ...]:
     return tuple(out)
 
 
+def _below_regular(prices: tuple[RawPrice, ...]) -> tuple[tuple[RawPrice, ...], list[RawPrice]]:
+    """Split off every grade priced below the same club's UNLEAD.
+
+    Mid-grade cannot be cheaper than regular, yet club 6376 lists MIDGRAD at
+    2.979 against an UNLEAD of 3.699, in the roster and in the Tempo record
+    alike, and the figure has not moved while the other grades did. The API
+    notes (docs/samsclub-vivaldi-api.md) prescribe dropping any grade below the
+    club's own UNLEAD. The caller warns about each one, because diesel can
+    legitimately dip below regular, and if it ever does here the warning is
+    where it shows.
+    """
+    regular = next((float(p.price_raw) for p in prices if p.grade_raw == "UNLEAD"), None)
+    if regular is None:
+        return prices, []
+    kept = tuple(p for p in prices if float(p.price_raw) >= regular)
+    return kept, [p for p in prices if float(p.price_raw) < regular]
+
+
+def _position(key: str) -> int | None:
+    """The 1-based place in the roster's fuel-club order a price key was sent for."""
+    try:
+        return int(key.rsplit("-", 1)[-1])
+    except ValueError:
+        return None
+
+
+def _refusal(response: RawResponse) -> str | None:
+    """What a failed response says about why, when it says anything."""
+    if perimeterx_challenge(response.status, response.body):
+        return "PerimeterX challenge"
+    return response.error
+
+
+def _price_errors(failed: list[RawResponse], sent: int) -> list[Error]:
+    """One error per distinct failure, not one per club.
+
+    A refused sweep fails every one of its ~531 requests in the same way, and
+    the status keeps the errors of the last three failed captures, so an entry
+    per request would bury the one fact that matters under hundreds of copies.
+    """
+    counts: dict[tuple[int | None, str | None], int] = {}
+    for response in failed:
+        reason = (response.status, _refusal(response))
+        counts[reason] = counts.get(reason, 0) + 1
+    return [
+        Error(
+            code="price_request_failed",
+            host=HOST,
+            http_status=status,
+            detail=f"{count} of {sent} price requests" + (f": {why}" if why else ""),
+        )
+        for (status, why), count in counts.items()
+    ]
+
+
+def _deadline_response(key: str, url: str, at: datetime) -> RawResponse:
+    return RawResponse(
+        key=key,
+        url=url,
+        status=None,
+        headers={},
+        received_at_utc=at,
+        elapsed_ms=0,
+        body=b"",
+        error=DEADLINE,
+    )
+
+
 @dataclass
 class SamsSource:
     country: str = COUNTRY
@@ -269,8 +344,13 @@ class SamsSource:
                     )
                 )
             except BudgetExceeded:
-                # Whatever was collected still publishes; the floor check
-                # decides whether a short sweep counts as degraded.
+                # Whatever was collected still publishes. The marker goes into
+                # the bundle with the rest, so parse() -- and a rebuild replaying
+                # it -- can tell the clubs this sweep never asked about from the
+                # ones that answered without a price.
+                responses.append(
+                    _deadline_response(KEY_PRICES.format(n=n), url, responses[-1].received_at_utc)
+                )
                 break
         return responses
 
@@ -281,7 +361,7 @@ class SamsSource:
             source=SOURCE,
             captured_at_utc=captured_at,
             brand=self.brand,
-            requests=len(responses),
+            requests=sum(1 for r in responses if r.error not in NOT_SENT),
         )
         roster_response = next((r for r in responses if r.key == KEY_ROSTER), None)
         roster = _payload(roster_response) if roster_response is not None else None
@@ -289,18 +369,38 @@ class SamsSource:
             result.errors.append(
                 Error(
                     code="roster_unavailable",
-                    host="www.samsclub.com",
+                    host=HOST,
                     http_status=(roster_response.status if roster_response else None),
+                    detail=(_refusal(roster_response) if roster_response else None),
                 )
             )
             return result
 
         by_id = {str(c["id"]): c for c in roster if isinstance(c, dict) and c.get("id") is not None}
+        ids = fuel_club_ids(roster)
         priced: dict[str, dict] = {}
+        asked: set[str] = set()
+        failed: list[RawResponse] = []
+        sent = 0
+        cut_short = False
         for response in responses:
             if not response.key.startswith(f"{FEED}/02-"):
                 continue
-            block = store_fuel_prices(_payload(response))
+            if response.error in NOT_SENT:
+                cut_short = cut_short or response.error == DEADLINE
+                continue
+            sent += 1
+            # fetch() numbers its requests by the club's place in this same
+            # roster, so the key says which club was asked even when the answer
+            # names none.
+            position = _position(response.key)
+            if position is not None and 0 < position <= len(ids):
+                asked.add(ids[position - 1])
+            payload = _payload(response)
+            if payload is None:
+                failed.append(response)
+                continue
+            block = store_fuel_prices(payload)
             if block is None:
                 continue
             record_id = str(block.get("id") or "")
@@ -309,15 +409,38 @@ class SamsSource:
             club_id = record_id.rsplit("_", 1)[-1]
             if club_id in by_id:
                 priced[club_id] = block
+        result.errors.extend(_price_errors(failed, sent))
 
-        for club_id in fuel_club_ids(roster):
-            prices = _prices(priced.get(club_id))
+        unreached = 0
+        for club_id in ids:
+            if club_id not in asked and club_id not in priced:
+                # Not the same as no_current_price: nothing was asked, so this
+                # capture says nothing about the club, and publish leaves its
+                # station's status as it was.
+                result.warnings.append(Warning(code="not_reached", detail=club_id))
+                unreached += 1
+                continue
+            prices, dropped = _below_regular(_prices(priced.get(club_id)))
+            for price in dropped:
+                result.warnings.append(
+                    Warning(
+                        code="below_regular",
+                        detail=f"{club_id}:{price.grade_raw}={price.price_raw}",
+                    )
+                )
             if not prices:
                 result.warnings.append(Warning(code="no_current_price", detail=club_id))
                 continue
             station = _station(by_id[club_id], prices)
             if station is not None:
                 result.stations.append(station)
+        if cut_short:
+            result.warnings.append(
+                Warning(
+                    code="budget_exhausted",
+                    detail=f"{unreached} of {len(ids)} fuel clubs not reached",
+                )
+            )
         return result
 
 

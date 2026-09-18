@@ -16,7 +16,7 @@ import pytest
 
 from club_gas import publish as publish_module
 from club_gas import rollup, schema, sitedata
-from club_gas.config import load_config
+from club_gas.config import FeedConfig, load_config
 from club_gas.publish import publish, upsert_stations
 from club_gas.store import LocalReleaseStore, StorageError, sha256_file
 
@@ -1398,6 +1398,116 @@ def test_a_closed_station_that_comes_back_is_active_again(cfg):
     )
 
     assert out.to_dicts()[0]["status"] == "active"
+
+
+def sams_station(club_id: str) -> dict:
+    row = station_row(club_id, DAY1, {"UNLEAD", "PREMIUM"})
+    row.update(
+        station_key=f"US-SAMS-{club_id}",
+        country="US",
+        brand="SAMS",
+        region="TX",
+        timezone="America/Chicago",
+    )
+    return row
+
+
+def test_a_station_the_sweep_never_reached_keeps_its_status(cfg):
+    """A sweep cut short never asked about the clubs past the cut, and the
+    roster is sorted by distance, so it is the same clubs every time. Reading
+    their absence as Sam's no longer listing them would call them missing, and
+    six weeks later closed, on the strength of requests never sent."""
+    previous = pl.DataFrame(
+        [sams_station("6376"), sams_station("8248")], schema=schema.STATION_SCHEMA
+    )
+    status = {
+        "feeds": {
+            "US-SAMS": {
+                "status": "degraded",
+                "warnings": [
+                    {"code": "no_current_price", "detail": "6376"},
+                    {"code": "not_reached", "detail": "8248"},
+                    {"code": "budget_exhausted", "detail": "1 of 2 fuel clubs not reached"},
+                ],
+            }
+        }
+    }
+
+    def statuses_at(capture_id):
+        out = upsert_stations(
+            previous,
+            pl.DataFrame([], schema=schema.STATION_SCHEMA),
+            status,
+            cfg.station_links,
+            {},
+            capture_id,
+            {"US": 45},
+        )
+        return {row["source_station_id"]: row["status"] for row in out.to_dicts()}
+
+    assert statuses_at("2026-09-20T1200Z") == {"6376": "missing", "8248": "active"}
+    assert statuses_at("2026-12-01T1200Z") == {"6376": "closed", "8248": "active"}
+
+
+def test_a_switched_off_feeds_stations_go_missing_and_then_closed(cfg):
+    """A feed turned off in feeds.toml is skipped by every capture, and a
+    skipped feed changes nothing, so its stations read active forever over
+    their last price. Off, they follow the rule a delisted station does."""
+    previous = pl.DataFrame([sams_station("6376")], schema=schema.STATION_SCHEMA)
+    status = {"feeds": {"US-COSTCO": {"status": "ok"}, "US-SAMS": {"status": "skipped"}}}
+
+    def status_at(capture_id, disabled):
+        return upsert_stations(
+            previous,
+            pl.DataFrame([], schema=schema.STATION_SCHEMA),
+            status,
+            cfg.station_links,
+            {"US-SAMS": "2026-09-15T1817Z"},
+            capture_id,
+            {"US": 45},
+            disabled,
+        ).to_dicts()[0]["status"]
+
+    off = frozenset({"US-SAMS"})
+    assert status_at("2026-09-20T1200Z", off) == "missing"
+    assert status_at("2026-12-01T1200Z", off) == "closed"
+    # Older than the feed's newest capture: a late publish still moves nothing.
+    assert status_at("2026-09-15T0017Z", off) == "active"
+    # Skipped only because a run left its country out: kept, as spec 6.3 says.
+    assert status_at("2026-12-01T1200Z", frozenset()) == "active"
+
+
+def test_publish_relabels_the_stations_of_a_feed_switched_off_in_feeds_toml(tmp_path: Path, cfg):
+    """The switch is read from feeds.toml at publish time. The rule goes by feed
+    id, so Taiwan's Costco feed stands in for Sam's: the capture helpers here
+    write Taiwan."""
+    store = LocalReleaseStore(tmp_path / "releases")
+    first = make_capture_dir(tmp_path / "captures", "2026-09-15T1817Z", DAY1, prices=PRICES)
+    publish(store, first, cfg, now=NOW)
+
+    switched_off = dataclass_replace(
+        cfg,
+        feeds={
+            **cfg.feeds,
+            "TW-COSTCO": FeedConfig(
+                feed_id="TW-COSTCO", country="TW", brand="COSTCO", url="", floor=1, enabled=False
+            ),
+        },
+    )
+    later = DAY1 + timedelta(hours=6)
+    second = make_capture_dir(
+        tmp_path / "captures", "2026-09-16T0017Z", later, prices=[], tw_status="skipped"
+    )
+    publish(store, second, switched_off, now=NOW + timedelta(hours=6))
+
+    stations = pl.read_csv(
+        store.download("current", "stations.csv", tmp_path / "stations.csv"),
+        schema=schema.STATION_SCHEMA,
+    )
+    assert dict(zip(stations["source_station_id"], stations["status"], strict=True)) == {
+        "Chungli": "missing",
+        "Xinzhuang": "missing",
+    }
 
 
 def test_publish_puts_the_dashboard_files_into_current(tmp_path: Path, cfg):

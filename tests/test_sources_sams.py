@@ -7,13 +7,19 @@ from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
+import httpx
 import pytest
 
+from club_gas.config import HttpConfig
+from club_gas.http import BudgetExceeded, Client
 from club_gas.sources import sams
 from club_gas.sources.base import RawResponse
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 CAPTURED_AT = datetime(2026, 9, 17, 16, 45, tzinfo=UTC)
+# The roster request's answer on a GitHub-hosted runner, from the dry capture of
+# 2026-09-17 (run 35281651770), byte for byte.
+PERIMETERX = (FIXTURES / "blocks" / "perimeterx_412.json").read_bytes()
 
 
 def body(name: str) -> bytes:
@@ -39,6 +45,31 @@ def roster_response() -> RawResponse:
 
 def price_response(n: int = 1) -> RawResponse:
     return response(sams.KEY_PRICES.format(n=n), body("sams_fuel_6376.json"))
+
+
+def tempo(n: int, club_id: str, prices: dict[str, float] | None = None) -> RawResponse:
+    """The recorded Tempo answer, relabelled for another club or other prices."""
+    payload = json.loads(body("sams_fuel_6376.json"))
+    block = payload["data"]["contentLayout"]["modules"][0]["configs"]["storeFuelPrices"]
+    block["id"] = f"CPF_FUELPRICE_PROD_{club_id}"
+    if prices is not None:
+        block["prices"] = [{"name": k, "price": v, "type": "fuel"} for k, v in prices.items()]
+    return response(sams.KEY_PRICES.format(n=n), json.dumps(payload).encode())
+
+
+class ScriptedClient:
+    """Answers each request from a script; the script raises to end the budget."""
+
+    def __init__(self, answer):
+        self.answer = answer
+        self.keys: list[str] = []
+
+    def abandoned(self, url: str) -> bool:
+        return False
+
+    def request(self, key, url, *, headers=None, expect_json=True) -> RawResponse:
+        self.keys.append(key)
+        return self.answer(key)
 
 
 # --------------------------------------------------------------------- urls
@@ -111,7 +142,9 @@ def test_prices_come_from_the_tempo_module_never_from_vivaldi():
 
     station = next(s for s in result.stations if s.source_station_id == "6376")
     prices = {p.grade_raw: float(p.price_raw) for p in station.prices}
-    assert prices == {"UNLEAD": 3.699, "PREMIUM": 4.399, "DIESEL": 5.699, "MIDGRAD": 2.979}
+    # The record also lists MIDGRAD at 2.979, below its own UNLEAD, which the
+    # guard drops; see the test after this one.
+    assert prices == {"UNLEAD": 3.699, "PREMIUM": 4.399, "DIESEL": 5.699}
 
     # The same club's stale vivaldi value, which must never reach a station.
     roster = json.loads(body("sams_clubfinder.json"))
@@ -122,13 +155,132 @@ def test_prices_come_from_the_tempo_module_never_from_vivaldi():
     assert prices["UNLEAD"] != stale["UNLEAD"]
 
 
+def test_a_grade_priced_below_the_clubs_own_regular_is_dropped():
+    """Mid-grade cannot be cheaper than regular, yet club 6376 lists MIDGRAD at
+    2.979 against UNLEAD 3.699, and the API notes say to drop any grade below
+    the club's own UNLEAD. A grade at or above it stays; the one dropped is
+    named in a warning, so a real price that falls below regular still shows.
+    """
+    result = sams.SamsSource().parse(
+        [
+            roster_response(),
+            price_response(1),
+            tempo(2, "8299", {"UNLEAD": 3.499, "MIDGRAD": 3.499, "PREMIUM": 4.099}),
+        ],
+        _ctx(),
+    )
+
+    prices = {
+        s.source_station_id: {p.grade_raw: p.price_raw for p in s.prices} for s in result.stations
+    }
+    assert prices["6376"] == {"UNLEAD": "3.699", "PREMIUM": "4.399", "DIESEL": "5.699"}
+    assert prices["8299"] == {"UNLEAD": "3.499", "MIDGRAD": "3.499", "PREMIUM": "4.099"}
+    assert [(w.code, w.detail) for w in result.warnings if w.code == "below_regular"] == [
+        ("below_regular", "6376:MIDGRAD=2.979")
+    ]
+
+
+def test_with_no_regular_to_compare_against_every_grade_stays():
+    result = sams.SamsSource().parse(
+        [roster_response(), tempo(1, "6376", {"PREMIUM": 4.399, "MIDGRAD": 2.979})], _ctx()
+    )
+
+    station = next(s for s in result.stations if s.source_station_id == "6376")
+    assert {p.grade_raw for p in station.prices} == {"PREMIUM", "MIDGRAD"}
+
+
 def test_a_club_with_no_price_response_is_warned_and_dropped():
-    """Better a short capture than a station carrying a stale roster price."""
+    """Better a short capture than a station carrying a stale roster price.
+
+    A club that was never asked about is `not_reached`, not `no_current_price`:
+    this capture knows nothing about it, and publish must not read its absence
+    as Sam's Club no longer listing it. A club asked and answered without a
+    price is the one that says something.
+    """
     result = sams.SamsSource().parse([roster_response()], _ctx())
 
     assert result.stations == []
     assert sorted(w.detail for w in result.warnings) == ["4857", "6376", "8248", "8299"]
-    assert {w.code for w in result.warnings} == {"no_current_price"}
+    assert {w.code for w in result.warnings} == {"not_reached"}
+
+    asked = tempo(2, "8299", {})
+    result = sams.SamsSource().parse([roster_response(), asked], _ctx())
+
+    codes = {w.detail: w.code for w in result.warnings}
+    assert codes == {
+        "6376": "not_reached",
+        "8299": "no_current_price",
+        "8248": "not_reached",
+        "4857": "not_reached",
+    }
+
+
+def test_a_sweep_its_budget_cut_short_says_so_and_names_every_club_it_never_asked():
+    """The roster is sorted by distance from 75001, so a sweep cut short loses
+    the same far-away clubs every time. It has to say so, and say which."""
+
+    def answer(key: str) -> RawResponse:
+        if key == sams.KEY_ROSTER:
+            return roster_response()
+        if key == sams.KEY_PRICES.format(n=1):
+            return price_response(1)
+        if key == sams.KEY_PRICES.format(n=2):
+            return tempo(2, "8299")
+        raise BudgetExceeded("country-US")
+
+    client = ScriptedClient(answer)
+    responses = sams.SamsSource().fetch(client, _ctx())
+    result = sams.SamsSource().parse(responses, _ctx())
+
+    assert client.keys == [sams.KEY_ROSTER, *(sams.KEY_PRICES.format(n=n) for n in (1, 2, 3))]
+    # The marker for club 3 goes into the bundle, so a rebuild sees the same.
+    assert (responses[-1].key, responses[-1].error) == (
+        sams.KEY_PRICES.format(n=3),
+        "deadline_exceeded",
+    )
+    assert result.requests == 3
+    assert sorted(s.source_station_id for s in result.stations) == ["6376", "8299"]
+    warnings = [(w.code, w.detail) for w in result.warnings if w.code != "below_regular"]
+    assert warnings == [
+        ("not_reached", "8248"),
+        ("not_reached", "4857"),
+        ("budget_exhausted", "2 of 4 fuel clubs not reached"),
+    ]
+
+
+def test_a_perimeterx_refusal_stops_the_sweep_and_is_named_in_the_errors():
+    """Sam's Club refuses with HTTP 412 and a PerimeterX body. Two of those and
+    the client leaves the host alone (http.toml signals_before_abandon), rather
+    than sending the rest of ~531 requests into the challenge, and the failed
+    feed says what refused it instead of recording no error at all."""
+    sent: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(request.url.path)
+        if "clubfinder" in request.url.path:
+            return httpx.Response(200, content=body("sams_clubfinder.json"))
+        return httpx.Response(
+            412, content=PERIMETERX, headers={"Content-Type": "application/json; charset=UTF-8"}
+        )
+
+    cfg = HttpConfig(backoff_seconds=(0.0, 0.0), min_interval_seconds=0.0)
+    with Client(cfg, transport=httpx.MockTransport(handler)) as client:
+        responses = sams.SamsSource().fetch(client, _ctx())
+    result = sams.SamsSource().parse(responses, _ctx())
+
+    assert len(sent) == 1 + cfg.block_signals_before_abandon
+    assert result.stations == []
+    assert [(e.code, e.http_status, e.detail) for e in result.errors] == [
+        ("price_request_failed", 412, "2 of 2 price requests: PerimeterX challenge")
+    ]
+
+
+def test_a_refused_roster_names_perimeterx():
+    result = sams.SamsSource().parse([response(sams.KEY_ROSTER, PERIMETERX, status=412)], _ctx())
+
+    assert [(e.code, e.http_status, e.detail) for e in result.errors] == [
+        ("roster_unavailable", 412, "PerimeterX challenge")
+    ]
 
 
 def test_an_unknown_club_record_is_dropped():

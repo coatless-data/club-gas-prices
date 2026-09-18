@@ -35,12 +35,14 @@ STALE_AFTER_DAYS = {"US": 3, "CA": 3, "MX": 3, "GB": 3, "AU": 3, "JP": 10, "TW":
 
 
 def interp_config() -> SimpleNamespace:
-    """checks.py only reads .countries[cc].floor and .stale_after_days."""
+    """checks.py only reads .countries[cc].floor and .stale_after_days, and the
+    .floor of a feed feeds.toml declares (Sam's is 460)."""
     return SimpleNamespace(
         countries={
             code: SimpleNamespace(code=code, floor=floor, stale_after_days=STALE_AFTER_DAYS[code])
             for code, floor in FLOORS.items()
-        }
+        },
+        feeds={"US-SAMS": SimpleNamespace(floor=460)},
     )
 
 
@@ -178,6 +180,43 @@ def test_a_healthy_country_is_ok():
 
 def test_a_station_count_below_the_floor_is_degraded():
     block = evaluate_feed("AU-COSTCO", result("AU"), normalized("AU", 13), context(), NOW)
+    assert block["status"] == "degraded"
+
+
+@pytest.mark.parametrize(("n_stations", "expected"), [(531, "ok"), (479, "ok"), (459, "degraded")])
+def test_a_feed_is_judged_against_its_own_floor(n_stations, expected):
+    """countries.US's floor of 585 counts Costco's stations. Against it a
+    complete Sam's sweep of 531 clubs read degraded forever, and a short one
+    looked no different. Sam's own floor is 460."""
+    block = evaluate_feed(
+        "US-SAMS",
+        result("US", source="sams-clubfinder"),
+        normalized("US", n_stations, source="sams-clubfinder"),
+        context(),
+        NOW,
+    )
+    assert block["status"] == expected
+
+
+def test_costco_us_keeps_the_country_floor_beside_a_feed_with_its_own():
+    block = evaluate_feed("US-COSTCO", result("US"), normalized("US", 531), context(), NOW)
+    assert block["status"] == "degraded"
+
+
+def test_a_sweep_cut_short_by_its_budget_is_degraded_whatever_the_floor_says():
+    """479 of 531 clubs clears the floor of 460, so the floor alone reads a
+    truncated sweep as ok. The source's own warning is what degrades it."""
+    block = evaluate_feed(
+        "US-SAMS",
+        result(
+            "US",
+            source="sams-clubfinder",
+            warnings=[Warning(code="budget_exhausted", detail="52 of 531 fuel clubs not reached")],
+        ),
+        normalized("US", 479, source="sams-clubfinder"),
+        context(),
+        NOW,
+    )
     assert block["status"] == "degraded"
 
 

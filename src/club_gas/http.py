@@ -9,6 +9,7 @@ response was observed; it never computes anything from "now".
 
 from __future__ import annotations
 
+import json
 import os
 import random
 import threading
@@ -47,6 +48,28 @@ class _RequestDeadline(Exception):
 
 def host_of(url: str) -> str:
     return urlsplit(url).hostname or ""
+
+
+def perimeterx_challenge(status: int | None, body: bytes) -> bool:
+    """Whether a response is PerimeterX refusing the request.
+
+    Sam's Club answers a refused request with HTTP 412 and a small JSON body
+    that names the PerimeterX app and the challenge page a browser would be
+    sent to: {"redirectUrl":"/are-you-human?...","appId":"PXsLC3j22K",...}.
+    It is JSON, so the HTML rule never sees it, and 412 is neither 403 nor 429.
+    A 412 without that body is an ordinary failed precondition and is left
+    alone.
+    """
+    if status != 412 or not body:
+        return False
+    if b"/are-you-human" in body:
+        return True
+    try:
+        payload = json.loads(body)
+    except ValueError:
+        return False
+    app_id = payload.get("appId") if isinstance(payload, dict) else None
+    return isinstance(app_id, str) and app_id.startswith("PX")
 
 
 class Client:
@@ -202,6 +225,8 @@ class Client:
         flag every good US price response as a block.
         """
         if status in (403, 429):
+            return True
+        if perimeterx_challenge(status, body):
             return True
         if error is not None and "timeout" in error:
             return True

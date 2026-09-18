@@ -16,6 +16,7 @@ from club_gas.http import BudgetExceeded, Client
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 US_BATCH = FIXTURES / "us" / "gasprices_batch.json"
 AKAMAI = FIXTURES / "blocks" / "akamai_access_denied.html"
+PERIMETERX = FIXTURES / "blocks" / "perimeterx_412.json"
 
 # Real policy, minus the waiting, so the suite stays fast.
 FAST = HttpConfig(backoff_seconds=(0.0, 0.0), min_interval_seconds=0.0)
@@ -23,6 +24,7 @@ FAST = HttpConfig(backoff_seconds=(0.0, 0.0), min_interval_seconds=0.0)
 PRICE_URL = "https://www.costco.com/AjaxGetGasPricesService?warehouseid=1364"
 ECOM_URL = "https://ecom-api.costco.com/core/warehouse-locator/v1/warehouses.json"
 FX_URL = "https://api.frankfurter.dev/v2/rates?base=USD"
+SAMS_URL = "https://www.samsclub.com/orchestra/home/graphql/HyperLocalPagesTempo/x"
 
 
 def json_ok(request: httpx.Request) -> httpx.Response:
@@ -464,6 +466,49 @@ def test_a_403_or_a_429_is_a_block_signal_on_the_status_alone():
         assert client.signals["forbidden.test"] == 1
         assert client.signals["limited.test"] == 1
         assert [entry["block_signal"] for entry in client.log] == [True, True]
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        PERIMETERX.read_bytes(),
+        b'{"appId":"PXsLC3j22K","jsClientSrc":"/px/PXsLC3j22K/init.js"}',
+        b'{"redirectUrl":"/are-you-human?url=Lw==&uuid=x"}',
+    ],
+    ids=["recorded", "app-id", "redirect"],
+)
+def test_a_perimeterx_412_is_a_block_signal(body):
+    """Sam's Club refuses with 412 and a small JSON body, not 403 and HTML.
+
+    The recorded body is the roster request's answer on a GitHub-hosted runner
+    on 2026-09-17. Neither the status rule nor the HTML rule sees it, so a
+    refused sweep kept sending its ~531 requests into the challenge.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            412, content=body, headers={"Content-Type": "application/json; charset=UTF-8"}
+        )
+
+    with Client(FAST, transport=httpx.MockTransport(handler)) as client:
+        client.request("US-SAMS/02-fuel-0001", SAMS_URL)
+        assert client.signals["www.samsclub.com"] == 1
+        assert client.abandoned(SAMS_URL) is False
+
+        client.request("US-SAMS/02-fuel-0002", SAMS_URL)
+        assert client.abandoned(SAMS_URL) is True
+
+
+@pytest.mark.parametrize(
+    "body", [b"", b'{"message":"Precondition Failed"}', b'{"appId":"not-perimeterx"}']
+)
+def test_a_412_without_the_perimeterx_body_is_not_a_block_signal(body):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(412, content=body)
+
+    with Client(FAST, transport=httpx.MockTransport(handler)) as client:
+        client.request("US-SAMS/02-fuel-0001", SAMS_URL)
+        assert client.signals.get("www.samsclub.com", 0) == 0
 
 
 def test_html_is_not_a_signal_when_json_was_not_expected():

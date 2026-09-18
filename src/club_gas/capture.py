@@ -326,8 +326,13 @@ def run_feed(
         directory.mkdir(parents=True, exist_ok=True)
         source = SOURCES[fid]
         extra: list[Warning] = []
+        # A feed may carry its own budget in feeds.toml. Sam's Club asks one club
+        # per request, and its 532 paced requests do not fit the country budget
+        # that Costco's feeds run inside.
+        declared = (getattr(ctx.fetch_config, "feeds", None) or {}).get(fid)
+        seconds = getattr(declared, "budget_s", None)
         try:
-            with client.budget(f"country-{country}", key="country"):
+            with client.budget(f"country-{country}", seconds, key="country"):
                 responses = source.fetch(client, ctx)
         except BudgetExceeded:
             # A source that catches this itself returns its partial responses;

@@ -25,6 +25,9 @@ DEGRADING_WARNINGS = {
     "previous_state_unavailable",
     "fallback_used",
     "unknown_grade",
+    # A sweep that ran out of time before asking about every station. The
+    # floor cannot be trusted to catch it: a cut-short sweep can still clear it.
+    "budget_exhausted",
 }
 
 OUT_OF_BOUNDS_SHARE = 0.05
@@ -92,6 +95,17 @@ def _duration_s(result: FetchResult) -> float:
     ]
     ends = [response.received_at_utc for response in result.responses]
     return round((max(ends) - min(starts)).total_seconds(), 1)
+
+
+def _floor(ctx: CaptureContext, fid: str, country_floor: int) -> int:
+    """The feed's own floor if feeds.toml declares one, else its country's.
+
+    A country's floor counts Costco's stations, so judging another chain in the
+    same country against it would call a complete Sam's sweep of 531 clubs
+    degraded forever, against Costco's 585, and hide a short one behind it.
+    """
+    feed = (getattr(ctx.interp_config, "feeds", None) or {}).get(fid)
+    return country_floor if feed is None else feed.floor
 
 
 def _is_stale(unchanged_since: str | None, now: datetime, stale_after_days: int) -> bool:
@@ -195,7 +209,7 @@ def evaluate_feed(
     sources = set(rows["source"].unique().to_list())
 
     degraded = (
-        n_stations < country_cfg.floor
+        n_stations < _floor(ctx, fid, country_cfg.floor)
         or bool(sources & FALLBACK_SOURCES)
         or bool(warning_codes & DEGRADING_WARNINGS)
         or (parsed > 0 and out_of_bounds / parsed > OUT_OF_BOUNDS_SHARE)
