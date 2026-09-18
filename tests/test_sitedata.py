@@ -41,10 +41,16 @@ class StubGrades:
         return SimpleNamespace(grade=found[0], priority=found[1], label=grade_raw)
 
     def rows(self):
+        costco = [
+            ("COSTCO", country, grade_raw, grade, priority)
+            for (country, grade_raw), (grade, priority) in GRADE_TABLE.items()
+        ]
+        # config/grades.csv lists Sam's labels whether or not the feed runs.
+        sams = [("SAMS", "US", "UNLEAD", "regular", 1), ("SAMS", "US", "MIDGRAD", "other", 1)]
         return [
             {
                 "country": country,
-                "brand": "COSTCO",
+                "brand": brand,
                 "grade_raw": grade_raw,
                 "grade": grade,
                 "priority": priority,
@@ -53,7 +59,7 @@ class StubGrades:
                 "spec_source": "",
                 "spec_source_url": "",
             }
-            for (country, grade_raw), (grade, priority) in GRADE_TABLE.items()
+            for brand, country, grade_raw, grade, priority in [*costco, *sams]
         ]
 
 
@@ -419,6 +425,13 @@ STATION_ROWS = [
 MANIFEST = {
     "status": {
         "capture_id": "2026-09-15T1817Z",
+        "feeds": {
+            "US-COSTCO": {"status": "ok", "last_success_capture_id": "2026-09-15T1817Z"},
+            "US-SAMS": {"status": "skipped", "last_success_capture_id": None},
+            "JP-COSTCO": {"status": "degraded", "last_success_capture_id": "2026-09-15T1817Z"},
+            "GB-COSTCO": {"status": "failed", "last_success_capture_id": "2026-09-14T1817Z"},
+            "AU-COSTCO": {"status": "ok", "last_success_capture_id": "2026-09-15T1817Z"},
+        },
         "countries": {
             "US": {"status": "ok", "last_success_capture_id": "2026-09-15T1817Z"},
             "JP": {"status": "degraded", "last_success_capture_id": "2026-09-15T1817Z"},
@@ -780,6 +793,107 @@ def test_meta_json_carries_status_grades_and_releases(current_dir, tmp_path, mon
     assert meta["releases"]["current"] == f"{base}/tag/current"
     assert meta["releases"]["latest_csv"] == f"{base}/download/current/club-gas-latest.csv"
     assert meta["releases"]["all_parquet"] == f"{base}/download/current/club-gas-all.parquet"
+
+
+def test_meta_json_carries_each_feed_that_ran(current_dir, tmp_path, monkeypatch):
+    """The country roll-up takes the newest success across a country's feeds, so
+    one chain can stop for days while its country still reads fresh. Each feed
+    carries its own status and last success; a skipped feed was not asked."""
+    monkeypatch.delenv("CARTO_BASEMAP_KEY", raising=False)
+    out = tmp_path / "data"
+    build_site_data(current_dir, out, _cfg(), now=NOW)
+    meta = json.loads((out / "meta.json").read_text(encoding="utf-8"))
+
+    assert meta["feeds"] == {
+        "AU-COSTCO": {
+            "country": "AU",
+            "brand": "COSTCO",
+            "status": "ok",
+            "last_success_capture_id": "2026-09-15T1817Z",
+        },
+        "GB-COSTCO": {
+            "country": "GB",
+            "brand": "COSTCO",
+            "status": "failed",
+            "last_success_capture_id": "2026-09-14T1817Z",
+        },
+        "JP-COSTCO": {
+            "country": "JP",
+            "brand": "COSTCO",
+            "status": "degraded",
+            "last_success_capture_id": "2026-09-15T1817Z",
+        },
+        "US-COSTCO": {
+            "country": "US",
+            "brand": "COSTCO",
+            "status": "ok",
+            "last_success_capture_id": "2026-09-15T1817Z",
+        },
+    }
+    assert list(meta["feeds"]) == sorted(meta["feeds"])
+    # The country block is unchanged: the per-feed one sits beside it.
+    assert meta["countries"]["US"] == {
+        "status": "ok",
+        "last_success_capture_id": "2026-09-15T1817Z",
+    }
+
+
+def test_meta_json_leaves_out_a_feed_switched_off_since_its_status_was_written(
+    current_dir, tmp_path, monkeypatch
+):
+    """A status written before feeds.toml turned a feed off still reads `failed`
+    for it. The feed is no longer collected, so the site has nothing to say
+    about how fresh it is."""
+    monkeypatch.delenv("CARTO_BASEMAP_KEY", raising=False)
+    manifest = json.loads((current_dir / "manifest.json").read_text(encoding="utf-8"))
+    manifest["status"]["feeds"]["US-SAMS"] = {
+        "status": "failed",
+        "last_success_capture_id": None,
+    }
+    (current_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    cfg = _cfg()
+    cfg.feeds = {"US-SAMS": SimpleNamespace(enabled=False)}
+
+    out = tmp_path / "data"
+    build_site_data(current_dir, out, cfg, now=NOW)
+    meta = json.loads((out / "meta.json").read_text(encoding="utf-8"))
+
+    assert "US-SAMS" not in meta["feeds"]
+    assert "US-COSTCO" in meta["feeds"]
+
+
+def test_meta_json_grades_name_their_chain_and_only_chains_in_the_data(
+    current_dir, tmp_path, monkeypatch
+):
+    """The About page's Chain column reads `brand`, and without it every row
+    was blank. config/grades.csv also lists Sam's labels while no Sam's station
+    exists, and the site names no chain whose data it does not show."""
+    monkeypatch.delenv("CARTO_BASEMAP_KEY", raising=False)
+    out = tmp_path / "data"
+    build_site_data(current_dir, out, _cfg(), now=NOW)
+    grades = json.loads((out / "meta.json").read_text(encoding="utf-8"))["grades"]
+
+    assert grades
+    assert {row["brand"] for row in grades} == {"COSTCO"}
+
+    sams = {
+        "station_key": "US-SAMS-6376",
+        "country": "US",
+        "brand": "SAMS",
+        "source_station_id": "6376",
+        "name": "Addison Sam's Club",
+        "status": "active",
+    }
+    pl.DataFrame([*STATION_ROWS, sams]).write_csv(current_dir / "stations.csv")
+    out = tmp_path / "data-with-sams"
+    build_site_data(current_dir, out, _cfg(), now=NOW)
+    grades = json.loads((out / "meta.json").read_text(encoding="utf-8"))["grades"]
+
+    assert {(row["brand"], row["grade_raw"]) for row in grades if row["brand"] == "SAMS"} == {
+        ("SAMS", "UNLEAD"),
+        ("SAMS", "MIDGRAD"),
+    }
+    assert {row["brand"] for row in grades if row["country"] == "AU"} == {"COSTCO"}
 
 
 def test_meta_json_falls_back_to_osm_without_a_key(current_dir, tmp_path, monkeypatch, capsys):

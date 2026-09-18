@@ -379,6 +379,9 @@ CURRENT_ASSETS = {
 }
 GRADE_TABLE_FIELDS = (
     "country",
+    # The About page's Chain column. Two chains in one country publish their own
+    # labels, so a row that does not say whose label it is cannot be read.
+    "brand",
     "grade_raw",
     "grade",
     "priority",
@@ -408,9 +411,10 @@ def _meta(current_dir: Path, cfg, *, now: datetime, brands: list[str]) -> dict:
         "built_at_utc": _json_default(now),
         "capture_id": status.get("capture_id"),
         "countries": countries,
+        "feeds": _feeds(status, cfg),
         "closed_months": manifest.get("closed_months") or [],
         "closed_years": manifest.get("closed_years") or [],
-        "grades": _grade_table(cfg),
+        "grades": _grade_table(cfg, brands),
         "notice": _notice(cfg, brands),
         "stale_after_hours": STALE_AFTER_HOURS,
         "releases": {
@@ -420,6 +424,36 @@ def _meta(current_dir: Path, cfg, *, now: datetime, brands: list[str]) -> dict:
         },
         "basemap": _basemap(cfg),
     }
+
+
+def _feeds(status: dict, cfg) -> dict:
+    """Each feed's own status and last success, for a freshness line per chain.
+
+    The country block takes the newest success across a country's feeds, so once
+    the United States has two chains, one of them can stop for days while the
+    country still reads fresh. A skipped feed was not asked this time, and a feed
+    switched off in feeds.toml is not collected at all, so neither is listed.
+    """
+    disabled = {
+        fid
+        for fid, feed in (getattr(cfg, "feeds", None) or {}).items()
+        if not getattr(feed, "enabled", True)
+    }
+    feeds = {}
+    # Sorted for the same reason `countries` is: byte-stable for a given capture.
+    for fid, block in sorted((status.get("feeds") or {}).items()):
+        if block.get("status") == "skipped" or fid in disabled:
+            continue
+        # A feed id is its country and brand joined by a hyphen (feed_id in
+        # sources/base.py), and config.py refuses a feed whose id is not.
+        country, _, brand = fid.partition("-")
+        feeds[fid] = {
+            "country": country,
+            "brand": brand,
+            "status": block.get("status"),
+            "last_success_capture_id": block.get("last_success_capture_id"),
+        }
+    return feeds
 
 
 def _notice(cfg, brands: list[str]) -> list[str]:
@@ -457,7 +491,13 @@ def _site_value(cfg, name: str, default):
     return default if value in (None, "") else value
 
 
-def _grade_table(cfg) -> list[dict]:
+def _grade_table(cfg, brands: list[str]) -> list[dict]:
+    """The grade mapping for the About page, for the chains in the data only.
+
+    config/grades.csv lists every configured chain's labels, including a chain
+    whose feed is off. The site names no chain it holds no prices for, which is
+    the rule the notice follows, over the same set of brands.
+    """
     grades = getattr(cfg, "grades", None)
     rows = getattr(grades, "rows", None)
     if callable(rows):
@@ -468,12 +508,15 @@ def _grade_table(cfg) -> list[dict]:
         rows = rows.to_dicts()
     if isinstance(rows, dict):
         rows = list(rows.values())
+    wanted = set(brands)
     table = []
     for entry in rows:
         if isinstance(entry, dict):
-            table.append({field: entry.get(field) for field in GRADE_TABLE_FIELDS})
+            row = {field: entry.get(field) for field in GRADE_TABLE_FIELDS}
         else:
-            table.append({field: getattr(entry, field, None) for field in GRADE_TABLE_FIELDS})
+            row = {field: getattr(entry, field, None) for field in GRADE_TABLE_FIELDS}
+        if row["brand"] in wanted:
+            table.append(row)
     return table
 
 
