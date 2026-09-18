@@ -136,8 +136,8 @@ class StubCountry:
 
 @dataclass
 class StubConfig:
-    """rollup reads `.root`, `.station_links`, `.site.notice` and, per country,
-    `.closed_after_days`."""
+    """rollup reads `.root`, `.station_links`, `.site.notice`, `.feeds` (which
+    are switched off) and, per country, `.closed_after_days`."""
 
     root: Path
     station_links: pl.DataFrame
@@ -147,6 +147,8 @@ class StubConfig:
             code: StubCountry() for code in ("US", "CA", "MX", "GB", "AU", "JP", "TW")
         }
     )
+    # Empty, like Config's own default: every Costco feed needs no entry.
+    feeds: dict = field(default_factory=dict)
 
 
 def stub_config(tmp_path: Path, links: pl.DataFrame | None = None) -> StubConfig:

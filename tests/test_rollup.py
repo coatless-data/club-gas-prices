@@ -867,3 +867,90 @@ def test_rebuild_current_flag_runs_without_a_close_and_restores_latest(tmp_path)
     assert store.get_release("current").is_latest is True
     names = {a.name for a in store.list_assets("current")}
     assert "club-gas-all.parquet" in names and "manifest.json" in names
+
+
+def _station(key: str, status: str, last_seen: datetime) -> dict:
+    country, brand, sid = key.split("-", 2)
+    return {
+        "station_key": key,
+        "country": country,
+        "brand": brand,
+        "source_station_id": sid,
+        "alt_id": None,
+        "name": key,
+        "name_local": None,
+        "address": None,
+        "city": None,
+        "region": "TX",
+        "postcode": None,
+        "lat": None,
+        "lon": None,
+        "timezone": "America/Chicago",
+        "grades_seen": "regular",
+        "first_seen_utc": datetime(2026, 6, 1, 0, 17, tzinfo=UTC),
+        "last_seen_utc": last_seen,
+        "status": status,
+        "superseded_by": None,
+    }
+
+
+@pytest.mark.parametrize(
+    ("sams_block", "disabled", "expected"),
+    [
+        # Swept, but cut short before club 6376: absence says nothing about
+        # 6376, while 8119 was asked and did not answer.
+        (
+            {"status": "degraded", "warnings": [{"code": "not_reached", "detail": "6376"}]},
+            frozenset(),
+            {"US-SAMS-6376": "missing", "US-SAMS-8119": "closed"},
+        ),
+        # The feed failed outright: nothing about any of its stations is known.
+        (
+            {"status": "failed", "warnings": []},
+            frozenset(),
+            {"US-SAMS-6376": "missing", "US-SAMS-8119": "missing"},
+        ),
+        # Switched off: nobody is collecting it, so the age rule applies.
+        (None, frozenset({"US-SAMS"}), {"US-SAMS-6376": "closed", "US-SAMS-8119": "closed"}),
+    ],
+)
+def test_a_full_rebuild_relabels_absent_stations_by_publishs_rule(sams_block, disabled, expected):
+    """_restate_absent promises the rebuilt `current` agrees with the one publish
+    builds incrementally, but it relabelled every absent station by age alone.
+    Publish leaves a station alone when its feed failed or when a cut-short
+    sweep never asked about it; a rebuild has to do the same, or it can close a
+    station publish would have left `missing`."""
+    newest = "2026-09-15T1817Z"
+    captures = rows_frame(
+        [
+            price_row(
+                capture_id=newest,
+                station_key="US-COSTCO-1364",
+                grade_raw="regular",
+                grade="regular",
+                price=3.999,
+            )
+        ]
+    )
+    long_ago = datetime(2026, 7, 1, 0, 17, tzinfo=UTC)  # past the 45-day threshold
+    stations = stations_frame(
+        [
+            _station("US-COSTCO-1364", "active", captures["captured_at_utc"].max()),
+            _station("US-SAMS-6376", "missing", long_ago),
+            _station("US-SAMS-8119", "missing", long_ago),
+        ]
+    )
+    feeds = {"US-COSTCO": {"status": "ok", "warnings": []}}
+    if sams_block is not None:
+        feeds["US-SAMS"] = sams_block
+
+    out = rollup._restate_absent(
+        stations,
+        captures,
+        {"US": 45},
+        newest_status={"capture_id": newest, "feeds": feeds},
+        disabled_feeds=disabled,
+    )
+
+    got = dict(zip(out["station_key"].to_list(), out["status"].to_list(), strict=True))
+    assert got == {"US-COSTCO-1364": "active", **expected}

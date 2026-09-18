@@ -486,6 +486,9 @@ def _rebuild_stations(
     existing: pl.DataFrame,
     links: pl.DataFrame,
     closed_after_days: dict[str, int] | None = None,
+    *,
+    newest_status: dict | None = None,
+    disabled_feeds: frozenset[str] = frozenset(),
 ) -> pl.DataFrame:
     """§6.3 full rebuild: recompute the three seen columns, keep everything else.
 
@@ -538,25 +541,61 @@ def _rebuild_stations(
         .select(list(schema.STATION_SCHEMA))
     )
     out = pl.concat([kept, fresh], how="vertical")
-    out = _restate_absent(out, captures, closed_after_days or {})
+    out = _restate_absent(
+        out,
+        captures,
+        closed_after_days or {},
+        newest_status=newest_status,
+        disabled_feeds=disabled_feeds,
+    )
     return _apply_links(out, links).cast(schema.STATION_SCHEMA).sort("station_key")
 
 
 def _restate_absent(
-    stations: pl.DataFrame, captures: pl.DataFrame, closed_after_days: dict[str, int]
+    stations: pl.DataFrame,
+    captures: pl.DataFrame,
+    closed_after_days: dict[str, int],
+    *,
+    newest_status: dict | None = None,
+    disabled_feeds: frozenset[str] = frozenset(),
 ) -> pl.DataFrame:
     """Relabel stations the newest capture no longer lists, the same way publish
-    does, so a rebuilt `current` and an incrementally-built one agree."""
+    does, so a rebuilt `current` and an incrementally-built one agree.
+
+    That means publish's three cases (publish.update_stations), judged on the
+    newest capture's status: a feed that succeeded relabels its absent stations
+    except those its sweep was cut short before asking about; a switched-off
+    feed relabels them all, since nobody is collecting it; a feed that failed or
+    was skipped says nothing about its stations, so they keep their status.
+    Without a status to judge by -- a month manifest from before statuses were
+    recorded -- every absent station is relabelled, as before.
+    """
     if stations.is_empty() or captures.is_empty():
         return stations
     newest_at = captures["captured_at_utc"].max()
     listed = set(captures.filter(pl.col("captured_at_utc") == newest_at)["station_key"].to_list())
+    feeds = (newest_status or {}).get("feeds") or {}
+    succeeded = {fid for fid, block in feeds.items() if block.get("status") in ("ok", "degraded")}
+    unreached = {
+        (fid, warning.get("detail"))
+        for fid, block in feeds.items()
+        for warning in block.get("warnings") or []
+        if warning.get("code") == "not_reached"
+    }
     rows = []
     for record in stations.to_dicts():
         if record["station_key"] not in listed and record["status"] != "active":
-            record["status"] = publish.station_status(
-                record["last_seen_utc"], newest_at, closed_after_days.get(record["country"])
-            )
+            fid = f"{record['country']}-{record['brand']}"
+            if not feeds:
+                judged = True
+            elif fid in succeeded:
+                judged = (fid, record["source_station_id"]) not in unreached
+            else:
+                judged = fid in disabled_feeds
+            if judged:
+                record["status"] = publish.station_status(
+                    record["last_seen_utc"], newest_at, closed_after_days.get(record["country"])
+                )
         rows.append(record)
     return pl.DataFrame(rows, schema=schema.STATION_SCHEMA)
 
@@ -644,6 +683,8 @@ def _rebuild_current_impl(store, cfg, *, now: datetime) -> None:
             _read_current_stations(store, work),
             cfg.station_links,
             {code: c.closed_after_days for code, c in cfg.countries.items()},
+            newest_status=statuses[max(statuses)] if statuses else None,
+            disabled_feeds=frozenset(fid for fid, feed in cfg.feeds.items() if not feed.enabled),
         )
         assets: dict[str, dict] = {}
         outputs: dict[str, Path] = {}
