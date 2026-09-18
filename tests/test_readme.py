@@ -198,3 +198,29 @@ def test_sources_and_basemap_attribution():
     assert "© OpenStreetMap contributors, © CARTO" in text
     assert "https://carto.com/attributions" in text
     assert "The code is MIT licensed." in text
+
+
+def test_station_status_names_every_value_publish_writes():
+    """It read `active` or `missing` for a while after publish began writing
+    `closed` for a station gone longer than `closed_after_days`."""
+    from datetime import UTC, datetime, timedelta
+
+    from club_gas.publish import station_status
+
+    now = datetime(2026, 9, 18, tzinfo=UTC)
+    written = {
+        "active",
+        station_status(now - timedelta(days=1), now, 45),
+        station_status(now - timedelta(days=46), now, 45),
+    }
+    paragraph = next(p for p in readme().split("\n\n") if p.startswith("`stations.csv` holds"))
+    for value in sorted(written):
+        assert f"`{value}`" in paragraph, value
+
+
+def test_no_link_points_into_the_gitignored_docs_directory():
+    """docs/ is local working notes and never published, so a path into it is a
+    dead link for every reader on GitHub."""
+    import re
+
+    assert re.findall(r"(?<![\w./-])docs/\S*", readme()) == []

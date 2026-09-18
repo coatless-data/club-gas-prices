@@ -113,7 +113,11 @@ gh release download current -R coatless-data/club-gas-prices -D state/current
 
 `stations.csv` holds one row per `station_key` ever seen: identity and metadata,
 `grades_seen` (pipe-joined `grade_raw` values), `first_seen_utc`, `last_seen_utc`,
-`status` (`active` or `missing`) and `superseded_by`.
+`status` and `superseded_by`. `status` is `active` while the station's feed lists it,
+`missing` once a successful capture of that feed no longer does or the feed is turned
+off, and `closed` once it has gone unseen for longer than `closed_after_days` in
+`config/countries.toml` (45 days). No station is ever removed, and one that comes back
+reads `active` again.
 
 `fx.csv` holds one row per capture and non-USD currency: `capture_id`, `currency`,
 `units_per_usd`, `fx_usd_per_unit`, `fx_rate_date`, `fx_source`, `fx_fetched_at_utc`.
@@ -140,6 +144,7 @@ about 4.15 per gallon, and Puerto Rico retail is priced per litre.
 | AU-COSTCO | `Unleaded 91`, `E10`, `Premium 98`, `Diesel` | `E10` and `Unleaded 91` both map to `regular`; `Unleaded 91` wins when a station lists both. Diesel is premium diesel (reported). |
 | JP-COSTCO | `Regular`, `Premium`, `Diesel`, `Kerosene` | Kerosene is heating fuel: it maps to `other` and is excluded from comparisons. |
 | TW-COSTCO | `95`, `98`, `Diesel` | The names are octane numbers. No 92 is sold. |
+| US-SAMS | `UNLEAD`, `PREMIUM`, `DIESEL`, `MIDGRAD`, `MID CLR`, `PREM CLR` | `MIDGRAD` and the two clear grades map to `other`. A grade priced below the club's own `UNLEAD` is dropped with a warning, because mid-grade cannot be cheaper than regular. The source states no octane. |
 
 Each row of `config/grades.csv` carries `spec`, `spec_source` and `spec_source_url`.
 `spec_source` is `source` when the retailer itself states the specification, and `reported`
@@ -264,7 +269,7 @@ requests. At most one request per second per host.
 | AU-COSTCO | `www.costco.com.au/rest/v2/australia/stores?fields=FULL&...` |
 | JP-COSTCO | `www.costco.co.jp/rest/v2/japan/stores?fields=FULL&...` |
 | TW-COSTCO | `www.costco.com.tw/rest/v2/taiwan/stores?fields=FULL&...` |
-| US-SAMS | `www.samsclub.com/api/node/vivaldi/browse/v2/clubfinder/list` for the roster, then the `HyperLocalPagesTempo` GraphQL query per club for prices. **Off** in `config/feeds.toml`: hosted runners are refused by the site's bot protection (HTTP 412), and the roster's own `gasPrices` field is stale by a third or more, so only the per-club query gives a current price. See `docs/samsclub-vivaldi-api.md`. |
+| US-SAMS | `www.samsclub.com/api/node/vivaldi/browse/v2/clubfinder/list` for the roster, then the `HyperLocalPagesTempo` GraphQL query per club for prices. **Off** in `config/feeds.toml`. The collector's one request to Sam's Club so far, the roster from a GitHub-hosted runner on 2026-09-17, was refused by the site's bot protection with HTTP 412, and it has not been re-tested since. For the six clubs checked that day, the roster's `gasPrices` field ran 31-43% below the price on each club's page, so only the per-club query gives a current price. |
 | FX | `api.frankfurter.dev/v2/rates?base=USD&quotes=CAD,MXN,GBP,AUD,JPY,TWD`, then `cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@<date>/v1/currencies/usd.json` |
 
 No source publishes a timestamp with its prices, prices change during the day, and the
