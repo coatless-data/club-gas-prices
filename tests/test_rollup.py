@@ -250,6 +250,65 @@ def test_month_close_writes_both_grains_and_clears_prerelease_last(tmp_path):
     assert cleared > store.log.index("replace_atomic:current:manifest.json")
 
 
+def _sams_rows(capture_id: str) -> pl.DataFrame:
+    row = price_row(
+        capture_id=capture_id,
+        station_key="US-SAMS-6376",
+        grade_raw="unleaded",
+        grade="regular",
+        price=3.199,
+    )
+    return rows_frame([{**row, "brand": "SAMS"}])
+
+
+def test_release_notes_name_no_chain_and_count_coverage_per_feed(tmp_path):
+    """The notes describe a dataset that spans chains, so their headings name
+    none, and the coverage table counts per feed: counted per country, the
+    Sam's capture on the 29th would hide the day Costco's feed missed."""
+    store = open_store(f"local:{tmp_path / 'releases'}")
+    cfg = stub_config(tmp_path)
+    seed_month(
+        store,
+        "2026-08",
+        {
+            "2026-08-29": _sams_rows("2026-08-29T1817Z"),
+            "2026-08-30": _us_rows("2026-08-30T1817Z", 3.899),
+            "2026-08-31": pl.concat([_us_rows("2026-08-31T1817Z"), _sams_rows("2026-08-31T1817Z")]),
+        },
+        captures={
+            "2026-08-29T1817Z": {
+                "status": _status("2026-08-29T1817Z"),
+                "rows_by_capture_date": {"2026-08-29": 1},
+            },
+            "2026-08-30T1817Z": {
+                "status": _status("2026-08-30T1817Z"),
+                "rows_by_capture_date": {"2026-08-30": 2},
+            },
+            "2026-08-31T1817Z": {
+                "status": _status("2026-08-31T1817Z"),
+                "rows_by_capture_date": {"2026-08-31": 3},
+            },
+        },
+        work=tmp_path / "seed-08",
+    )
+
+    close_periods(store, cfg, now=datetime(2027, 1, 5, 3, 17, tzinfo=UTC), issues=RecordingIssues())
+
+    month = store.get_release("data-2026-08").body
+    assert month.startswith("# Warehouse-club gas prices 2026-08\n")
+    assert "| date | US-COSTCO | US-SAMS |" in month
+    assert "| 2026-08-29 | 0 | 1 |" in month
+    assert "| 2026-08-30 | 1 | 0 |" in month
+    assert "| 2026-08-31 | 1 | 1 |" in month
+    assert store.get_release("data-2026").body.startswith("# Warehouse-club gas prices 2026\n")
+    assert store.get_release("current").body.startswith("# Current warehouse-club gas prices\n")
+    for tag in ("data-2026-08", "data-2026", "current"):
+        body = store.get_release(tag).body
+        assert "Costco gas prices" not in body
+        # The notice is still every configured chain's, as notice_text() gives it.
+        assert body.rstrip().endswith(cfg.site.notice_text())
+
+
 def test_month_close_refreshes_current_manifest_closed_months_in_the_same_run(tmp_path):
     """Finding 2 (spec review round 4): the data rebuild runs while the month is
     still prerelease (so an interrupted close simply retries), which means
@@ -311,7 +370,13 @@ def test_close_periods_blocks_a_month_whose_daily_file_disagrees_with_the_manife
     assert result.closed_months == []
     assert store.get_release("data-2026-08").prerelease is True
     assert issues.opened[0][0] == "Period close blocked: 2026-08"
-    assert "manifest records 99" in issues.opened[0][1]
+    body = issues.opened[0][1]
+    assert "manifest records 99" in body
+    # No later publish rewrites a day like this, so the issue must say what
+    # does rather than promise that the month will close on its own.
+    assert "**Actions -> Rebuild -> Run workflow**" in body
+    assert "Set `scope` to `month` and `value` to `2026-08`" in body
+    assert "once the next `publish` has reconciled it" not in body
 
 
 def test_a_close_refuses_a_capture_grain_that_lost_rows_the_daily_files_hold(tmp_path, monkeypatch):

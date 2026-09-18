@@ -187,6 +187,59 @@ def test_success_keeps_the_issue_open_until_the_entry_resolves(tmp_path):
     assert "close: Publish failing" in third.actions
 
 
+class BodyIssues(Issues):
+    """The dry-mode helper, keeping each issue's body as well as its action."""
+
+    def __init__(self) -> None:
+        super().__init__(None, None)
+        self.bodies: dict[str, str] = {}
+
+    def ensure_open(self, title: str, body: str, labels: list[str] | None = None) -> None:
+        self.bodies[title] = body
+        super().ensure_open(title, body, labels)
+
+
+def test_publish_failing_leads_with_the_captures_once_publish_succeeds_again(tmp_path):
+    """Issue #1 read "`publish` has failed 0 time(s) in a row." above the very
+    table that explained why it was open: a later publish had succeeded and
+    reset the counter, and only the unpublished capture kept the issue open."""
+    earlier = {
+        "capture_id": "2026-09-15T1217Z",
+        "run_id": 122,
+        "run_url": "https://github.com/coatless-data/club-gas-prices/actions/runs/122",
+    }
+    path = _status(
+        tmp_path,
+        publish={"outcome": "failure", "consecutive_failures": 1, "unpublished": [earlier]},
+    )
+    recovered = BodyIssues()
+
+    run_alerts(
+        path,
+        publish_outcome="success",
+        close_outcome="success",
+        store=_store(tmp_path),
+        issues=recovered,
+        now=NOW,
+    )
+
+    body = recovered.bodies["Publish failing"]
+    assert body.startswith("1 capture(s) never reached their month release")
+    assert "failed 0 time(s)" not in body
+    assert "| `2026-09-15T1217Z` |" in body
+
+    failing = BodyIssues()
+    run_alerts(
+        _status(tmp_path, publish={"outcome": "failure", "consecutive_failures": 1}),
+        publish_outcome="failure",
+        close_outcome="skipped",
+        store=_store(tmp_path),
+        issues=failing,
+        now=NOW,
+    )
+    assert failing.bodies["Publish failing"].startswith("`publish` has failed 2 time(s) in a row.")
+
+
 def test_close_outcome_is_recorded(tmp_path, issues):
     result = run_alerts(
         _status(tmp_path),

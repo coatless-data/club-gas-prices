@@ -196,12 +196,26 @@ def _blocking_reasons(store, tag: str) -> list[str]:
 
 
 def _blocked_body(month: str, reasons: list[str], now: datetime) -> str:
+    """Say what clears the refusal, because most reasons never clear on their own.
+
+    Only an orphan bundle does: the next `publish` merges it (§8.5 step 0).
+    Nothing that runs on a schedule reliably repairs a day whose daily file is
+    missing or disagrees with the manifest, so telling the reader to wait for
+    one would leave the month open until somebody noticed.
+    """
     lines = "\n".join(f"- {reason}" for reason in reasons)
     return (
         f"`close-periods` refused to close `data-{month}` at {_stamp(now)}.\n\n"
         f"Reasons:\n{lines}\n\n"
-        "The month closes on its own once the next `publish` has reconciled it "
-        "(§8.5 step 0). This issue closes automatically when the month closes."
+        "A bundle with no manifest entry is merged by the next `publish` that "
+        "succeeds (§8.5 step 0), and the month closes on the `close-periods` after "
+        "it. No other reason clears on its own:\n\n"
+        "1. Open **Actions -> Rebuild -> Run workflow**.\n"
+        f"2. Set `scope` to `month` and `value` to `{month}`.\n"
+        "3. The run rewrites each day's file and its manifest entries from the "
+        "stored bundles, and the next `close-periods` closes the month.\n\n"
+        "A reason still listed after the rebuild needs a look by hand. This issue "
+        "closes automatically when the month closes."
     )
 
 
@@ -307,26 +321,41 @@ def _read_daily_files(store, tag: str, work: Path) -> tuple[pl.DataFrame, dict[s
 
 
 def _month_body(month: str, captures: pl.DataFrame, cfg, *, now: datetime) -> str:
-    lines = [f"# Costco gas prices {month}", "", "## Coverage (captures per day)", ""]
+    """The closed month's release notes, with its coverage counted per feed.
+
+    Per feed rather than per country: two chains share a country, and a
+    per-country count would hide one chain's missing captures behind the
+    other's.
+    """
+    lines = [
+        f"# Warehouse-club gas prices {month}",
+        "",
+        "## Coverage (captures per day, by feed)",
+        "",
+    ]
     if captures.is_empty():
         lines.append("_No rows._")
     else:
         coverage = (
-            captures.select("capture_date", "country", "capture_id")
+            captures.select(
+                "capture_date",
+                pl.concat_str(["country", "brand"], separator="-").alias("feed"),
+                "capture_id",
+            )
             .unique()
-            .group_by(["capture_date", "country"])
+            .group_by(["capture_date", "feed"])
             .agg(pl.len().alias("captures"))
         )
         wide = (
-            coverage.pivot(on="country", index="capture_date", values="captures")
+            coverage.pivot(on="feed", index="capture_date", values="captures")
             .fill_null(0)
             .sort("capture_date")
         )
-        countries = [c for c in wide.columns if c != "capture_date"]
-        lines.append("| date | " + " | ".join(countries) + " |")
-        lines.append("|---" * (len(countries) + 1) + "|")
+        feeds = sorted(c for c in wide.columns if c != "capture_date")
+        lines.append("| date | " + " | ".join(feeds) + " |")
+        lines.append("|---" * (len(feeds) + 1) + "|")
         for row in wide.iter_rows(named=True):
-            cells = " | ".join(str(row[c]) for c in countries)
+            cells = " | ".join(str(row[c]) for c in feeds)
             lines.append(f"| {row['capture_date']} | {cells} |")
     lines += [
         "",
@@ -548,7 +577,7 @@ def _newest_capture_by_feed(statuses: dict[str, dict]) -> dict[str, str]:
 
 def _current_body(cfg) -> str:
     return (
-        "# Current Costco gas prices\n\n"
+        "# Current warehouse-club gas prices\n\n"
         "All-time files at both grains, the latest snapshot, the station and FX "
         f"tables, and `manifest.json`.\n\nSchema: {SCHEMA_URL}\n\n{cfg.site.notice_text()}\n"
     )
@@ -733,7 +762,7 @@ def _refresh_current_periods(store, *, token: str) -> None:
 def _year_body(year: str, months: list[str], cfg) -> str:
     listed = "\n".join(f"- `{tag}`" for tag in months)
     return (
-        f"# Costco gas prices {year}\n\n"
+        f"# Warehouse-club gas prices {year}\n\n"
         f"Concatenated from the closed month releases:\n\n{listed}\n\n"
         f"- `club-gas-{year}.parquet`, `club-gas-{year}.csv.gz` — daily grain\n"
         f"- `club-gas-{year}-captures.parquet` — capture grain\n"

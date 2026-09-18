@@ -369,6 +369,39 @@ def test_an_older_capture_does_not_move_the_stored_status(tmp_path: Path, cfg):
     assert set(stations["status"].to_list()) == {"active"}
 
 
+def test_recovering_an_older_capture_after_a_newer_one_still_lets_the_month_close(
+    tmp_path: Path, cfg
+):
+    """Rebuild with scope=artifact publishes a recovered capture after the ones
+    that ran behind it. When the newer capture was the day's last, nothing else
+    rewrote the day's entry, so the month manifest went on recording the newer
+    capture's smaller row count for a daily file that now held both -- and the
+    month close refused the month until someone ran Rebuild month by hand."""
+    store = LocalReleaseStore(tmp_path / "releases")
+    newer = make_capture_dir(tmp_path / "captures", "2026-09-15T1817Z", DAY1, prices=PRICES)
+    older = make_capture_dir(
+        tmp_path / "captures",
+        "2026-09-15T0017Z",
+        datetime(2026, 9, 15, 0, 17, tzinfo=UTC),
+        prices=[("Chungli", "95", "regular", 29.0)],
+    )
+
+    publish(store, newer, cfg, now=NOW)
+    publish(store, older, cfg, now=NOW)
+    result = rollup.close_periods(store, cfg, now=datetime(2026, 10, 1, 3, 17, tzinfo=UTC))
+
+    assert result.blocked_months == []
+    assert result.closed_months == ["2026-09"]
+    manifest = json.loads(
+        store.download("data-2026-09", "manifest-2026-09.json", tmp_path / "m.json").read_text()
+    )
+    recorded = {
+        cid: entry["daily_files"]["2026-09-15"]["rows"]
+        for cid, entry in manifest["captures"].items()
+    }
+    assert recorded == {"2026-09-15T0017Z": 6, "2026-09-15T1817Z": 6}
+
+
 DAY2 = datetime(2026, 9, 16, 0, 17, tzinfo=UTC)
 
 
@@ -849,6 +882,71 @@ def test_current_missing_only_manifest_json_raises(tmp_path: Path, cfg):
         store.download("current", "club-gas-all-captures.parquet", tmp_path / "ac.parquet")
     )
     assert captures_all.height == 5
+
+
+class DownloadLogStore:
+    """LocalReleaseStore that remembers every asset it was asked to download."""
+
+    def __init__(self, inner):
+        self._inner = inner
+        self.downloads: list[tuple[str, str]] = []
+
+    def download(self, tag, name, dest):
+        self.downloads.append((tag, name))
+        return self._inner.download(tag, name, dest)
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+
+def test_publish_does_not_download_the_csv_mirror_it_rewrites(tmp_path: Path, cfg):
+    """`club-gas-all.csv.gz` is rebuilt from `club-gas-all.parquet` on every
+    publish and never read, and it is the largest file in `current`."""
+    store = DownloadLogStore(LocalReleaseStore(tmp_path / "releases"))
+    captures = tmp_path / "captures"
+    first = make_capture_dir(captures, "2026-09-15T1817Z", DAY1, prices=PRICES)
+    second = make_capture_dir(
+        captures, "2026-09-16T0017Z", DAY2, prices=[("Chungli", "95", "regular", 30.9)]
+    )
+    publish(store, first, cfg, now=NOW)
+    store.downloads.clear()
+
+    publish(store, second, cfg, now=NOW)
+
+    read = {name for tag, name in store.downloads if tag == "current"}
+    assert "club-gas-all.csv.gz" not in read
+    assert {
+        "club-gas-all.parquet",
+        "club-gas-all-captures.parquet",
+        "club-gas-latest.csv",
+        "stations.csv",
+        "fx.csv",
+        "manifest.json",
+    } <= read
+    mirror = pl.read_csv(
+        store.download("current", "club-gas-all.csv.gz", tmp_path / "all.csv.gz"),
+        schema=rollup.DAILY_SCHEMA,
+    )
+    assert sorted(mirror["capture_id"].unique().to_list()) == [
+        "2026-09-15T1817Z",
+        "2026-09-16T0017Z",
+    ]
+
+
+def test_current_missing_only_the_csv_mirror_still_raises(tmp_path: Path, cfg):
+    """Not downloading the mirror must not take it out of the completeness guard."""
+    store = LocalReleaseStore(tmp_path / "releases")
+    captures = tmp_path / "captures"
+    a_dir = make_capture_dir(captures, "2026-09-15T1817Z", DAY1, prices=PRICES)
+    publish(store, a_dir, cfg, now=NOW)
+    mirror = next(a for a in store.list_assets("current") if a.name == "club-gas-all.csv.gz")
+    store.delete("current", mirror.id)
+
+    b_dir = make_capture_dir(
+        captures, "2026-09-16T0017Z", DAY2, prices=[("Chungli", "95", "regular", 30.9)]
+    )
+    with pytest.raises(StorageError, match=re.escape("missing club-gas-all.csv.gz")):
+        publish(store, b_dir, cfg, now=NOW)
 
 
 def test_publish_recovers_an_interrupted_replace_before_merging(tmp_path: Path, cfg):

@@ -45,18 +45,21 @@ from .store import (
 
 BUNDLE_RE = re.compile(r"^capture-(?P<capture_id>.+)\.tar\.gz$")
 
-# The seven `current` assets publish reads back before rewriting them (spec 8.2).
-# `club-gas-all.csv.gz` belongs here too: this function writes it, so leaving it out
-# would let a half-replaced copy slip past the completeness guard below.
+# The six `current` assets publish reads back before rewriting them (spec 8.2).
 CURRENT_INPUT_ASSETS = (
     "club-gas-all.parquet",
-    "club-gas-all.csv.gz",
     "club-gas-all-captures.parquet",
     "club-gas-latest.csv",
     "stations.csv",
     "fx.csv",
     "manifest.json",
 )
+# Rewritten in full from `club-gas-all.parquet` on every publish and never read,
+# so it is not downloaded: it is the largest file in `current` and grows with all
+# of history. It still counts in the completeness guard in `_update_current`, by
+# name only, so a copy left beside an otherwise empty `current` is still read as
+# corruption rather than as a first publish that would overwrite it.
+CURRENT_UNREAD_ASSETS = ("club-gas-all.csv.gz",)
 ROW_KEY = ["capture_id", "station_key", "grade_raw"]
 
 
@@ -542,10 +545,20 @@ def merge_capture(
         .iter_rows()
     }
     entry["bundle"] = {"sha256": captured.bundle_sha256, "rows": captured.rows.height}
-    entry.setdefault("daily_files", {})[day] = {
-        "sha256": sha256_file(out_daily),
-        "rows": merged.height,
-    }
+    # The day's file holds every capture of the day, so every capture the manifest
+    # records for the day is given the new file's digest and row count, not just
+    # this one. The month close trusts the greatest capture id's entry, and a
+    # capture recovered after the day's last one (Rebuild scope=artifact) used to
+    # leave that entry describing a file with fewer rows, which blocked the month
+    # until someone ran Rebuild month by hand. Correcting the record here,
+    # rather than having the close look for the entry whose digest matches the
+    # file, keeps the rule `rebuild` and the manifest rebuild above already
+    # follow, so every entry for a day describes the file that is really there.
+    # Only existing entries are touched: an entry is `_reconcile`'s commit
+    # marker, so one must never appear for a capture that is not merged yet.
+    daily_info = {"sha256": sha256_file(out_daily), "rows": merged.height}
+    for capture_id in [*recorded, captured.capture_id]:
+        manifest["captures"][capture_id].setdefault("daily_files", {})[day] = daily_info
     manifest_name = f"manifest-{month}.json"
     manifest_path = scratch / f"{tag}-out-{manifest_name}"
     manifest_path.write_text(json.dumps(manifest, indent=1, sort_keys=True), encoding="utf-8")
@@ -571,12 +584,14 @@ def _update_current(
             local[name] = store.download("current", name, scratch / f"current-in-{name}")
         except AssetNotFound:
             missing.append(name)
+    listed = {asset.name for asset in store.list_assets("current")}
+    missing += [name for name in CURRENT_UNREAD_ASSETS if name not in listed]
     # First-publish means the whole of `current` is absent, not just manifest.json:
     # a lone missing manifest.json alongside real data in the other six assets is
     # corruption, not a fresh start, and rebuilding from empty would silently
     # discard that history (spec review Finding 3). Task 15's full `current`
     # rebuild is the repair path for that state, not this function.
-    if len(missing) == len(CURRENT_INPUT_ASSETS):
+    if len(missing) == len(CURRENT_INPUT_ASSETS) + len(CURRENT_UNREAD_ASSETS):
         first = True
     elif missing:
         raise StorageError("current is incomplete: missing " + ", ".join(sorted(missing)))

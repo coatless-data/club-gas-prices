@@ -111,8 +111,21 @@ def _publish_issue(status: dict, issues: Issues, now: datetime, publish_outcome:
 
 def _publish_failing_body(status: dict, now: datetime) -> str:
     publish = status.get("publish", {})
+    failures = int(publish.get("consecutive_failures") or 0)
+    unpublished = publish.get("unpublished") or []
+    # The issue also opens, and stays open, for unpublished captures alone, once a
+    # later publish has succeeded and reset the counter. "Failed 0 time(s) in a
+    # row" would then contradict the title and hide why the issue is open, so the
+    # captures lead instead.
+    if failures:
+        lead = f"`publish` has failed {failures} time(s) in a row."
+    else:
+        lead = (
+            f"{len(unpublished)} capture(s) never reached their month release, "
+            "though `publish` is no longer failing."
+        )
     lines = [
-        f"`publish` has failed {publish.get('consecutive_failures', 0)} time(s) in a row.",
+        lead,
         "",
         f"- Latest capture: `{status.get('capture_id')}`",
         f"- Checked at: {now:%Y-%m-%dT%H:%MZ}",
@@ -120,7 +133,6 @@ def _publish_failing_body(status: dict, now: datetime) -> str:
         "### Captures whose bundle never reached its month release",
         "",
     ]
-    unpublished = publish.get("unpublished") or []
     if unpublished:
         lines += ["| capture_id | run |", "| --- | --- |"]
         for entry in unpublished:
