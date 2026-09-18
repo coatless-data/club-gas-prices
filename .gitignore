@@ -4,6 +4,7 @@ __pycache__/
 .venv/
 .pytest_cache/
 .ruff_cache/
+.coverage
 *.egg-info/
 build/
 dist/
@@ -12,7 +13,7 @@ dist/
 # Kept locally, never published.
 docs/
 
-# `costco-gas site-data` output, checked locally against the dashboard.
+# `club-gas site-data` output, checked locally against the dashboard.
 site/data/
 
 # Local capture output and downloaded release state
