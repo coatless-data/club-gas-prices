@@ -269,7 +269,7 @@ requests. At most one request per second per host.
 | AU-COSTCO | `www.costco.com.au/rest/v2/australia/stores?fields=FULL&...` |
 | JP-COSTCO | `www.costco.co.jp/rest/v2/japan/stores?fields=FULL&...` |
 | TW-COSTCO | `www.costco.com.tw/rest/v2/taiwan/stores?fields=FULL&...` |
-| US-SAMS | `www.samsclub.com/api/node/vivaldi/browse/v2/clubfinder/list` for the roster, then the `HyperLocalPagesTempo` GraphQL query per club for prices. **Off** in `config/feeds.toml`. The collector's one request to Sam's Club so far, the roster from a GitHub-hosted runner on 2026-09-17, was refused by the site's bot protection with HTTP 412, and it has not been re-tested since. For the six clubs checked that day, the roster's `gasPrices` field ran 31-43% below the price on each club's page, so only the per-club query gives a current price. |
+| US-SAMS | `www.samsclub.com/api/node/vivaldi/browse/v2/clubfinder/list` for the roster, then the `HyperLocalPagesTempo` GraphQL query per club for prices. **Off** in `config/feeds.toml`. Sam's Club's bot protection (PerimeterX) refused the collector's roster request with HTTP 412 from a GitHub-hosted runner on 2026-09-17 and again from a home connection on 2026-09-18, so it is the collector's requests that are refused, not GitHub's servers. The feed stays off unless Sam's Club permits automated access. For the six clubs checked on 2026-09-17, the roster's `gasPrices` field ran 31-43% below the price on each club's page, so only the per-club query gives a current price. |
 | FX | `api.frankfurter.dev/v2/rates?base=USD&quotes=CAD,MXN,GBP,AUD,JPY,TWD`, then `cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@<date>/v1/currencies/usd.json` |
 
 No source publishes a timestamp with its prices, prices change during the day, and the

@@ -230,3 +230,15 @@ def test_the_contact_address_is_spelled_out_for_people_not_harvesters():
     """The whole address is never written into the repository (test_contact.py
     holds that line), so a reader gets it with the @ and the dot in words."""
     assert "support [at] caffeinatedmath [dot] com" in flowed()
+
+
+def test_the_sams_row_says_why_the_feed_is_off_and_what_would_change_it():
+    """It said the refused request "has not been re-tested since" for a while
+    after the re-test, from a second network, was refused the same way."""
+    sources = readme().split("## Sources", 1)[1]
+    row = next(line for line in sources.splitlines() if line.startswith("| US-SAMS |"))
+    assert "**Off**" in row
+    assert "HTTP 412" in row
+    assert "GitHub-hosted runner on 2026-09-17" in row
+    assert "home connection on 2026-09-18" in row
+    assert "stays off unless Sam's Club permits automated access" in row

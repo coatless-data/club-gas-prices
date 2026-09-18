@@ -12,21 +12,20 @@
 country = "US"
 brand = "SAMS"
 
-# OFF, because the collector's one recorded request to Sam's Club was refused.
+# OFF, because Sam's Club's bot protection refuses the collector's requests.
 #
 # On 2026-09-17 a dry capture on a GitHub-hosted runner sent a single request,
 # the clubfinder roster below, with the project User-Agent. It answered HTTP 412
 # with a PerimeterX challenge body --
 # {"redirectUrl":"/are-you-human?...","appId":"PXsLC3j22K"} -- and the sweep
-# stopped there. The requests that answered 200 during development were not
-# that request: they were Tempo price requests, sent from a residential address
-# with a browser User-Agent. Origin, endpoint and User-Agent all differ between
-# the two, so which of them was refused is not known, and the collector's
-# request has not been re-tested since.
+# stopped there. On 2026-09-18 the collector sent the same roster request from
+# a home connection and was refused the same way: HTTP 412, PerimeterX. Two
+# networks gave one answer, so it is the collector's requests that are refused,
+# not GitHub's servers.
 #
-# The source, its tests and its fixtures stay. Turning this back on is one line;
-# it needs a route the operator is entitled to use, and a dry run of the
-# collector's own requests from that route first.
+# The source, its tests and its fixtures stay. The feed stays off unless Sam's
+# Club permits automated access; turning it back on is then one line, after a
+# dry run of the collector's own requests.
 enabled = false
 
 # The roster: every US club in one request, with coordinates and the grades each

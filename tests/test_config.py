@@ -554,12 +554,12 @@ def test_every_extra_id_row_names_a_brand(cfg):
 
 
 def test_a_feed_can_be_turned_off(cfg):
-    """A feed the operator has no working route to is off, not broken.
+    """A feed whose source refuses the collector is off, not broken.
 
-    The collector's one recorded request to Sam's Club, the roster from a
-    GitHub-hosted runner, was answered with HTTP 412 and a PerimeterX challenge.
-    Leaving the feed on would fail every capture and open an issue four times a
-    day for a condition no retry fixes.
+    Sam's Club answered the collector's roster request with HTTP 412 and a
+    PerimeterX challenge from a GitHub-hosted runner on 2026-09-17 and from a
+    home connection on 2026-09-18. Leaving the feed on would fail every capture
+    and open an issue four times a day for a condition no retry fixes.
     """
     assert cfg.feeds["US-SAMS"].enabled is False
 

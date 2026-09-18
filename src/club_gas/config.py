@@ -273,7 +273,7 @@ class FeedConfig:
     brand: str
     url: str
     floor: int
-    # A feed the operator has no working route to is off, not broken: it is
+    # A feed whose source refuses the collector is off, not broken: it is
     # `skipped` in the status, opens no issue, and does not sink the capture.
     enabled: bool = True
     price_url: str | None = None
