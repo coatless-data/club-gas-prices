@@ -51,7 +51,8 @@ HOST = "www.samsclub.com"
 # never sent. `deadline_exceeded` is the marker fetch() leaves where the budget
 # ran out; `host_abandoned` is the client declining a host it has given up on.
 DEADLINE = "deadline_exceeded"
-NOT_SENT = frozenset({DEADLINE, "host_abandoned"})
+ABANDONED = "host_abandoned"
+NOT_SENT = frozenset({DEADLINE, ABANDONED})
 
 DEFAULT_ROSTER_URL = "https://www.samsclub.com/api/node/vivaldi/browse/v2/clubfinder/list"
 DEFAULT_PRICE_URL = "https://www.samsclub.com/orchestra/home/graphql/HyperLocalPagesTempo"
@@ -247,11 +248,10 @@ def _below_regular(prices: tuple[RawPrice, ...]) -> tuple[tuple[RawPrice, ...], 
 
     Mid-grade cannot be cheaper than regular, yet club 6376 lists MIDGRAD at
     2.979 against an UNLEAD of 3.699, in the roster and in the Tempo record
-    alike, and the figure has not moved while the other grades did. The API
-    notes (docs/samsclub-vivaldi-api.md) prescribe dropping any grade below the
-    club's own UNLEAD. The caller warns about each one, because diesel can
-    legitimately dip below regular, and if it ever does here the warning is
-    where it shows.
+    alike, and the figure has not moved while the other grades did. So any
+    grade below the club's own UNLEAD is dropped. The caller warns about each
+    one, because diesel can legitimately dip below regular, and if it ever does
+    here the warning is where it shows.
     """
     regular = next((float(p.price_raw) for p in prices if p.grade_raw == "UNLEAD"), None)
     if regular is None:
@@ -297,7 +297,7 @@ def _price_errors(failed: list[RawResponse], sent: int) -> list[Error]:
     ]
 
 
-def _deadline_response(key: str, url: str, at: datetime) -> RawResponse:
+def _stopped_response(key: str, url: str, at: datetime, error: str) -> RawResponse:
     return RawResponse(
         key=key,
         url=url,
@@ -306,7 +306,7 @@ def _deadline_response(key: str, url: str, at: datetime) -> RawResponse:
         received_at_utc=at,
         elapsed_ms=0,
         body=b"",
-        error=DEADLINE,
+        error=error,
     )
 
 
@@ -333,6 +333,15 @@ class SamsSource:
         for n, club_id in enumerate(ids, start=1):
             url = price_url(cfg["price_url"], club_id, cfg["origin_postcode"])
             if client.abandoned(url):
+                # The client has given up on the host after repeated refusals.
+                # Leave a marker like the deadline's, so parse() -- and a
+                # rebuild -- can tell a sweep stopped by bot protection from
+                # one that asked about every club.
+                responses.append(
+                    _stopped_response(
+                        KEY_PRICES.format(n=n), url, responses[-1].received_at_utc, ABANDONED
+                    )
+                )
                 break
             try:
                 responses.append(
@@ -349,7 +358,9 @@ class SamsSource:
                 # it -- can tell the clubs this sweep never asked about from the
                 # ones that answered without a price.
                 responses.append(
-                    _deadline_response(KEY_PRICES.format(n=n), url, responses[-1].received_at_utc)
+                    _stopped_response(
+                        KEY_PRICES.format(n=n), url, responses[-1].received_at_utc, DEADLINE
+                    )
                 )
                 break
         return responses
@@ -382,12 +393,12 @@ class SamsSource:
         asked: set[str] = set()
         failed: list[RawResponse] = []
         sent = 0
-        cut_short = False
+        stopped_by: str | None = None
         for response in responses:
             if not response.key.startswith(f"{FEED}/02-"):
                 continue
             if response.error in NOT_SENT:
-                cut_short = cut_short or response.error == DEADLINE
+                stopped_by = stopped_by or response.error
                 continue
             sent += 1
             # fetch() numbers its requests by the club's place in this same
@@ -434,10 +445,13 @@ class SamsSource:
             station = _station(by_id[club_id], prices)
             if station is not None:
                 result.stations.append(station)
-        if cut_short:
+        if stopped_by is not None:
+            # Either way the rest of the roster went unasked, and either way
+            # the feed is degraded (checks.DEGRADING_WARNINGS); the code says
+            # which stopped it, because the remedies differ.
             result.warnings.append(
                 Warning(
-                    code="budget_exhausted",
+                    code="budget_exhausted" if stopped_by == DEADLINE else "sweep_abandoned",
                     detail=f"{unreached} of {len(ids)} fuel clubs not reached",
                 )
             )

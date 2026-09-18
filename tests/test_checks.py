@@ -203,15 +203,17 @@ def test_costco_us_keeps_the_country_floor_beside_a_feed_with_its_own():
     assert block["status"] == "degraded"
 
 
-def test_a_sweep_cut_short_by_its_budget_is_degraded_whatever_the_floor_says():
+@pytest.mark.parametrize("code", ["budget_exhausted", "sweep_abandoned"])
+def test_a_sweep_cut_short_is_degraded_whatever_the_floor_says(code: str):
     """479 of 531 clubs clears the floor of 460, so the floor alone reads a
-    truncated sweep as ok. The source's own warning is what degrades it."""
+    truncated sweep as ok. The source's own warning is what degrades it, and
+    it makes no difference whether the budget or bot protection stopped it."""
     block = evaluate_feed(
         "US-SAMS",
         result(
             "US",
             source="sams-clubfinder",
-            warnings=[Warning(code="budget_exhausted", detail="52 of 531 fuel clubs not reached")],
+            warnings=[Warning(code=code, detail="52 of 531 fuel clubs not reached")],
         ),
         normalized("US", 479, source="sams-clubfinder"),
         context(),

@@ -248,6 +248,43 @@ def test_a_sweep_its_budget_cut_short_says_so_and_names_every_club_it_never_aske
     ]
 
 
+def test_a_sweep_the_client_abandoned_partway_says_so_like_a_budget_cut():
+    """Bot protection can refuse late in a sweep as well as early. Once the
+    client gives up on the host the loop stops asking, and the clubs after that
+    point were never asked about -- the same position as a sweep the budget cut
+    short, and it has to read the same way: degraded, naming how many were
+    missed. Without a marker it read `ok` whenever enough clubs had answered."""
+
+    class AbandonsAfterTwo(ScriptedClient):
+        def abandoned(self, url: str) -> bool:
+            return len(self.keys) > 2
+
+    def answer(key: str) -> RawResponse:
+        if key == sams.KEY_ROSTER:
+            return roster_response()
+        if key == sams.KEY_PRICES.format(n=1):
+            return price_response(1)
+        return tempo(2, "8299")
+
+    client = AbandonsAfterTwo(answer)
+    responses = sams.SamsSource().fetch(client, _ctx())
+    result = sams.SamsSource().parse(responses, _ctx())
+
+    assert client.keys == [sams.KEY_ROSTER, *(sams.KEY_PRICES.format(n=n) for n in (1, 2))]
+    # A marker for club 3, as with the deadline, so a rebuild reads it the same.
+    assert (responses[-1].key, responses[-1].error) == (
+        sams.KEY_PRICES.format(n=3),
+        "host_abandoned",
+    )
+    assert result.requests == 3
+    warnings = [(w.code, w.detail) for w in result.warnings if w.code != "below_regular"]
+    assert warnings == [
+        ("not_reached", "8248"),
+        ("not_reached", "4857"),
+        ("sweep_abandoned", "2 of 4 fuel clubs not reached"),
+    ]
+
+
 def test_a_perimeterx_refusal_stops_the_sweep_and_is_named_in_the_errors():
     """Sam's Club refuses with HTTP 412 and a PerimeterX body. Two of those and
     the client leaves the host alone (http.toml signals_before_abandon), rather

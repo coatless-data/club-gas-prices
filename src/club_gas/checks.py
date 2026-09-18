@@ -28,6 +28,9 @@ DEGRADING_WARNINGS = {
     # A sweep that ran out of time before asking about every station. The
     # floor cannot be trusted to catch it: a cut-short sweep can still clear it.
     "budget_exhausted",
+    # The same shortfall when the client gave up on the host after repeated
+    # bot-protection refusals partway through.
+    "sweep_abandoned",
 }
 
 OUT_OF_BOUNDS_SHARE = 0.05
