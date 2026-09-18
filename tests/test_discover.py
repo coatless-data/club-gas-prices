@@ -5,7 +5,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
+import httpx
 import polars as pl
+import pytest
 
 from club_gas.discover import candidate_ids, read_bundle, select_bundle
 from club_gas.store import open_store
@@ -81,24 +83,40 @@ CA_LOOKUP_BODY = [
 POLLED_IDS = ["140", "1680", "1765", "1772", "1793"]
 
 
-def _bundle_bytes(capture_id: str) -> bytes:
+# Both US chains, as stations.csv holds them once Sam's has published. 6376 is
+# a Sam's club number and must neither be swept nor raise the sweep's ceiling.
+STATIONS_USED = (
+    b"station_key,country,brand,source_station_id,name\n"
+    b"US-COSTCO-1364,US,COSTCO,1364,Bradenton\n"
+    b"US-SAMS-6376,US,SAMS,6376,Dallas\n"
+    b"CA-COSTCO-1324,CA,COSTCO,1324,St Johns\n"
+    b"JP-COSTCO-Tomiya,JP,COSTCO,Tomiya,Tomiya\n"
+)
+
+# Bundles written before the US gained a second chain: responses sit under the
+# country code, and stations_used.csv has no brand column.
+LEGACY_STATIONS_USED = (
+    b"station_key,country,source_station_id,name\n"
+    b"US-COSTCO-1364,US,1364,Bradenton\n"
+    b"CA-COSTCO-1324,CA,1324,St Johns\n"
+    b"JP-Tomiya,JP,Tomiya,Tomiya\n"
+)
+
+
+def _bundle_bytes(capture_id: str, *, legacy: bool = False) -> bytes:
     """Build a capture bundle with the members discovery reads (spec 8.2)."""
     capture_json = json.dumps({"capture_id": capture_id, "capture_date": capture_id[:10]})
+    ca, us = ("CA", "US") if legacy else ("CA-COSTCO", "US-COSTCO")
     members = {
         "capture.json": capture_json.encode(),
         "inputs/us_id_set.csv": (
             "source_station_id,id_origin,ecom_state\n"
             + "".join(f"{i},ecom,gas\n" for i in POLLED_IDS)
         ).encode(),
-        "inputs/stations_used.csv": (
-            b"station_key,country,source_station_id,name\n"
-            b"US-COSTCO-1364,US,1364,Bradenton\n"
-            b"CA-COSTCO-1324,CA,1324,St Johns\n"
-            b"JP-Tomiya,JP,Tomiya,Tomiya\n"
-        ),
+        "inputs/stations_used.csv": LEGACY_STATIONS_USED if legacy else STATIONS_USED,
         "responses/shared/ecom-api.body": json.dumps(ECOM_BODY).encode(),
-        "responses/CA/01-lookup.body": json.dumps(CA_LOOKUP_BODY).encode(),
-        "responses/US/03-gasprices.body": b'{"1364":{"regular":"3.999"}}',
+        f"responses/{ca}/01-lookup.body": json.dumps(CA_LOOKUP_BODY).encode(),
+        f"responses/{us}/02-gasprices-001.body": b'{"1364":{"regular":"3.999"}}',
     }
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w:gz") as tar:
@@ -120,7 +138,7 @@ def _entry(capture_id: str, us_status: str) -> dict:
     }
 
 
-def _seed(tmp_path: Path, *, tag="data-2026-10", entries=None, bundles=None):
+def _seed(tmp_path: Path, *, tag="data-2026-10", entries=None, bundles=None, legacy=False):
     store = open_store(f"local:{tmp_path / 'releases'}")
     store.ensure_release(tag, tag, "", True, "false")
     entries = entries if entries is not None else {}
@@ -129,7 +147,7 @@ def _seed(tmp_path: Path, *, tag="data-2026-10", entries=None, bundles=None):
     store.upload_new(tag, manifest, manifest.name)
     for capture_id in bundles or []:
         path = tmp_path / f"capture-{capture_id}.tar.gz"
-        path.write_bytes(_bundle_bytes(capture_id))
+        path.write_bytes(_bundle_bytes(capture_id, legacy=legacy))
         store.upload_new(tag, path, f"capture-{capture_id}.tar.gz")
     return store
 
@@ -169,20 +187,51 @@ def test_no_usable_bundle_returns_none(tmp_path):
     assert select_bundle(store, now=NOW) is None
 
 
-def test_read_bundle_pulls_every_id_source(tmp_path):
+@pytest.mark.parametrize("legacy", [False, True], ids=["feed-dirs", "country-dirs"])
+def test_read_bundle_pulls_every_id_source(tmp_path, legacy):
     store = _seed(
         tmp_path,
         entries={"2026-10-01T0617Z": _entry("2026-10-01T0617Z", "ok")},
         bundles=["2026-10-01T0617Z"],
+        legacy=legacy,
     )
     bundle = read_bundle(store, "data-2026-10", "capture-2026-10-01T0617Z.tar.gz")
     assert bundle.capture_id == "2026-10-01T0617Z"
     assert bundle.polled_ids == {140, 1680, 1765, 1772, 1793}
     assert bundle.us_ecom_ids == {1838}
     assert bundle.ca_ecom_ids == {1775}
+    # Read from responses/CA-COSTCO/ now, and responses/CA/ in older bundles.
     assert bundle.ca_lookup_ids == {1324, 1790}
-    # The Japanese station key is not numeric and the GB warehouse is not counted.
+    # The Japanese station key is not numeric, the GB warehouse is not counted,
+    # and the Sam's club 6376 is not a Costco id.
     assert bundle.station_ids == {1364, 1324}
+
+
+def test_a_sams_club_in_stations_used_never_widens_the_sweep(tmp_path):
+    """One Sam's row lifted the ceiling from 2038 to 6576 before it was filtered."""
+    store = _seed(
+        tmp_path,
+        entries={"2026-10-01T0617Z": _entry("2026-10-01T0617Z", "ok")},
+        bundles=["2026-10-01T0617Z"],
+    )
+    bundle = read_bundle(store, "data-2026-10", "capture-2026-10-01T0617Z.tar.gz")
+    ids = candidate_ids(bundle, SimpleNamespace(us_extra_ids=None))
+    assert 6376 not in bundle.station_ids
+    assert max(ids) == 1838 + 200
+
+
+def test_a_failing_sams_feed_does_not_hide_a_good_costco_bundle(tmp_path):
+    """The country roll-up reads as its worst feed; the sweep is Costco's."""
+    entry = _entry("2026-10-01T0617Z", "failed")
+    entry["status"]["feeds"] = {"US-COSTCO": {"status": "ok"}, "US-SAMS": {"status": "failed"}}
+    newer = _entry("2026-10-01T1217Z", "failed")
+    newer["status"]["feeds"] = {"US-COSTCO": {"status": "failed"}, "US-SAMS": {"status": "ok"}}
+    store = _seed(
+        tmp_path,
+        entries={"2026-10-01T0617Z": entry, "2026-10-01T1217Z": newer},
+        bundles=["2026-10-01T0617Z", "2026-10-01T1217Z"],
+    )
+    assert select_bundle(store, now=NOW) == ("data-2026-10", "capture-2026-10-01T0617Z.tar.gz")
 
 
 def test_candidate_range_runs_to_the_highest_id_plus_200(tmp_path):
@@ -376,3 +425,57 @@ def test_a_non_costco_extra_id_never_widens_the_sweep():
     wide = candidate_ids(bundle, SimpleNamespace(us_extra_ids=with_sams))
 
     assert max(narrow) == max(wide), "a Sam's club number must not set the ceiling"
+
+
+def test_an_oversized_report_is_trimmed_to_fit_and_still_posts(tmp_path, monkeypatch, capsys):
+    """GitHub rejects an issue body over 65,536 characters, and ensure_open can
+    only log the rejection, so a long enough report used to open no issue."""
+    monkeypatch.setenv("GITHUB_REPOSITORY", "o/r")
+    monkeypatch.setenv("GITHUB_RUN_ID", "42")
+    store = _seed(
+        tmp_path,
+        entries={"2026-10-01T0617Z": _entry("2026-10-01T0617Z", "ok")},
+        bundles=["2026-10-01T0617Z"],
+    )
+    # Every id in the sweep answers with a plausible price: about 2,000 rows.
+    prices = {str(value): {"regular": "3.499", "premium": "3.899"} for value in range(1, 2039)}
+    posted: list[str] = []
+
+    def github(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, json=[])
+        body = json.loads(request.content)["body"]
+        if len(body) > 65_536:
+            return httpx.Response(422, json={"message": "body is too long"})
+        posted.append(body)
+        return httpx.Response(201, json={"number": 1})
+
+    issues = Issues("o/r", "token")
+    issues.transport = httpx.MockTransport(github)
+
+    result = discover(store, FakeClient(prices), _cfg(), issues, now=NOW)
+
+    assert len(result.candidates) == 2038 - 6
+    assert len(posted) == 1
+    body = posted[0]
+    listed = body.count("[prices](")
+    assert 0 < listed < len(result.candidates)
+    omitted = len(result.candidates) - listed
+    assert f"**{omitted} more warehouse id(s) did not fit:**" in body
+    assert "https://github.com/o/r/actions/runs/42" in body
+    # The rows it had no room for are in the run log the note points to.
+    log = capsys.readouterr().out
+    last = result.candidates[-1]["warehouse_id"]
+    assert f"[prices]({US_PRICE_URL}?warehouseid={last})" not in body
+    assert f"| {last} | 3.499 | 3.899 |" in log
+
+
+def test_a_report_that_fits_is_posted_whole():
+    from club_gas.discover import BundleInputs, _issue_body
+
+    bundle = BundleInputs("2026-10-01T0617Z", set(), set(), set(), set(), set())
+    candidates = [{"warehouse_id": "1364", "prices": {"regular": "3.999", "premium": "4.629"}}]
+    body, listed = _issue_body(candidates, bundle, NOW, US_PRICE_URL, "https://example/run")
+    assert listed == 1
+    assert "did not fit" not in body
+    assert "| 1364 | 3.999 | 4.629 | - | - |" in body

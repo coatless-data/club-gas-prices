@@ -412,6 +412,44 @@ def test_polled_id_set_uses_the_cache_when_step_one_fails():
     assert {p.ecom_state for p in polled} == {"unavailable"}
 
 
+def test_a_sams_club_in_stations_csv_is_never_polled_at_costco():
+    """stations.csv holds both US chains once Sam's has published. Its ~530
+    club numbers would add some 53 batches to every capture, each asking
+    Costco for warehouses it does not have."""
+    previous = stations_frame(
+        [
+            {
+                "station_key": "US-COSTCO-1364",
+                "country": "US",
+                "source_station_id": "1364",
+                "region": "FL",
+                "last_seen_utc": "2026-09-14T18:17:00Z",
+            },
+            {
+                "station_key": "US-SAMS-6376",
+                "country": "US",
+                "source_station_id": "6376",
+                "region": "TX",
+                "last_seen_utc": "2026-09-14T18:17:00Z",
+            },
+        ]
+    ).with_columns(pl.Series("brand", ["COSTCO", "SAMS"]))
+
+    for ecom in (ecom_ok(), ecom_failed()):
+        ctx = make_ctx(ecom=ecom, previous=previous)
+        polled = {p.source_station_id for p in us.polled_id_set(ctx)}
+        assert "1364" in polled
+        assert "6376" not in polled
+
+    # And no price batch that fetch_us sends carries the club number.
+    ctx = make_ctx(ecom=ecom_failed(), previous=previous)
+    client = FakeClient(lambda key, url: response(key, url, body=b"{}"))
+    us.fetch_us(client, ctx)
+    sent = [url for _, url, _ in client.calls if "AjaxGetGasPricesService" in url]
+    assert sent
+    assert not [url for url in sent if "6376" in url]
+
+
 # --------------------------------------------------------------------------- lookup
 
 

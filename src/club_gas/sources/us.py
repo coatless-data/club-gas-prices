@@ -39,7 +39,8 @@ DEFAULT_LOOKUP_PARAMS = {
 
 # The response key's prefix is the feed id, which is also the bundle directory
 # the rebuild groups on. It is not the country: the US has two chains.
-FEED = "US-COSTCO"
+BRAND = "COSTCO"
+FEED = f"{COUNTRY}-{BRAND}"
 KEY_PRICE = f"{FEED}/02-gasprices-{{n:03d}}"
 KEY_LOOKUP = f"{FEED}/03-lookup-us"
 KEY_TOPUP = f"{FEED}/04-gasprices-fb-{{n:03d}}"
@@ -325,8 +326,14 @@ def _previous_rows(ctx: CaptureContext) -> dict[str, dict[str, Any]]:
         return {}
     if "country" not in frame.columns:
         return {}
+    ours = pl.col("country") == COUNTRY
+    if "brand" in frame.columns:
+        # stations.csv holds both US chains. A Sam's club number is not a Costco
+        # warehouse id, so letting one through here would send it to Costco's
+        # price endpoint with every capture and seed cached metadata from it.
+        ours &= pl.col("brand") == BRAND
     rows: dict[str, dict[str, Any]] = {}
-    for row in frame.filter(pl.col("country") == COUNTRY).iter_rows(named=True):
+    for row in frame.filter(ours).iter_rows(named=True):
         warehouse_id = _clean(row.get("source_station_id"))
         if warehouse_id is None:
             key = _clean(row.get("station_key")) or ""

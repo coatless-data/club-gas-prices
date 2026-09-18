@@ -13,6 +13,7 @@ which carry a ``pull_request`` key and are skipped.
 
 from __future__ import annotations
 
+import os
 import textwrap
 
 import httpx
@@ -20,6 +21,16 @@ import httpx
 GITHUB_API = "https://api.github.com"
 PER_PAGE = 100
 TIMEOUT_S = 30.0
+
+
+def run_url() -> str | None:
+    """This workflow run's page, or None outside GitHub Actions."""
+    server = os.environ.get("GITHUB_SERVER_URL") or "https://github.com"
+    repo = os.environ.get("GITHUB_REPOSITORY")
+    run_id = os.environ.get("GITHUB_RUN_ID")
+    if not repo or not run_id:
+        return None
+    return f"{server}/{repo}/actions/runs/{run_id}"
 
 
 class Issues:

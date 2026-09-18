@@ -21,6 +21,7 @@ from . import checks, schema
 from .config import Config
 from .fx import FxRates, fetch_rates
 from .http import BudgetExceeded, Client
+from .issues import run_url
 from .normalize import normalize
 from .sources import us as us_source
 from .sources.base import (
@@ -176,15 +177,6 @@ def _env_int(name: str) -> int | None:
         return None
 
 
-def _run_url() -> str | None:
-    server = os.environ.get("GITHUB_SERVER_URL") or "https://github.com"
-    repo = os.environ.get("GITHUB_REPOSITORY")
-    run_id = os.environ.get("GITHUB_RUN_ID")
-    if not repo or not run_id:
-        return None
-    return f"{server}/{repo}/actions/runs/{run_id}"
-
-
 def run_capture(
     cfg: Config,
     store: ReleaseStore,
@@ -258,7 +250,7 @@ def run_capture(
     run = {
         "run_id": _env_int("GITHUB_RUN_ID"),
         "run_attempt": _env_int("GITHUB_RUN_ATTEMPT"),
-        "run_url": _run_url(),
+        "run_url": run_url(),
         "git_sha": os.environ.get("GITHUB_SHA"),
         "started_at_utc": _utc_text(started),
         "finished_at_utc": _utc_text(finished),
@@ -436,15 +428,17 @@ def _us_id_set(collected: dict[str, dict]) -> pl.DataFrame:
     hold the polled set. Deriving it from `FetchResult.stations` instead would omit
     every id that answered `{}`, and discovery would re-sweep those ids every month.
 
-    The frame was already computed once, inside `run_country`'s guarded US path,
-    and carried here in `collected["US"]["us_id_set"]`. This function only reads
-    it back -- it must never call `polled_id_frame` itself, because that call
-    would run after `status.json` is already durable and unguarded by the try
-    that isolates one country's failure from the rest of the capture (spec
-    review finding 1, Task 13). US skipped, US failed, or a synthetic result
-    with no `us_id_set` all fall back to an empty, correctly-shaped frame.
+    The frame was already computed once, inside `run_feed`'s guarded US path,
+    and carried here in `collected["US-COSTCO"]["us_id_set"]`. `collected` is
+    keyed by feed, not country: a lookup of "US" finds nothing and leaves the
+    file header-only. This function only reads the frame back -- it must never
+    call `polled_id_frame` itself, because that call would run after
+    `status.json` is already durable and unguarded by the try that isolates one
+    feed's failure from the rest of the capture (spec review finding 1, Task
+    13). US skipped, US failed, or a synthetic result with no `us_id_set` all
+    fall back to an empty, correctly-shaped frame.
     """
-    us = collected.get("US")
+    us = collected.get("US-COSTCO")
     frame = us.get("us_id_set") if us else None
     if frame is None:
         return pl.DataFrame(schema=US_ID_SET_SCHEMA)

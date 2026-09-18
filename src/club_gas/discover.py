@@ -23,7 +23,7 @@ from pathlib import Path
 
 import polars as pl
 
-from .issues import Issues
+from .issues import Issues, run_url
 from .store import AssetNotFound, ReleaseStore, StorageError
 
 US_PRICE_URL = "https://www.costco.com/AjaxGetGasPricesService"
@@ -38,6 +38,14 @@ PRE_OPEN_REGULAR = 3.999
 PRE_OPEN_PREMIUM = 5.999
 ID_COLUMNS = ("source_station_id", "warehouse_id", "station_id", "id")
 STLOC_ID = re.compile(rb'"stlocID"\s*:\s*"?(\d+)')
+# The sweep asks Costco's endpoint, so the feed that matters is Costco's own.
+US_FEED = "US-COSTCO"
+# Bundles keep each feed's responses under its feed id. Those written before
+# the United States gained a second chain used the bare country code.
+CA_RESPONSES = ("/responses/CA-COSTCO/", "/responses/CA/")
+# GitHub refuses an issue body longer than this, and Issues.ensure_open can
+# only log the refusal, so an oversized report would never be seen at all.
+ISSUE_BODY_LIMIT = 65_536
 
 
 @dataclass(frozen=True)
@@ -85,8 +93,16 @@ def _entry_status(entry: dict) -> dict:
 
 
 def _us_status(entry: dict) -> str | None:
-    countries = _entry_status(entry).get("countries") or {}
-    return (countries.get("US") or {}).get("status")
+    """Costco's US feed status, or the country's for entries from before feeds.
+
+    The country roll-up reads as badly as its worst feed, so a failing Sam's
+    feed would otherwise hide every bundle whose Costco capture was fine.
+    """
+    status = _entry_status(entry)
+    feed = (status.get("feeds") or {}).get(US_FEED)
+    if feed is not None:
+        return feed.get("status")
+    return ((status.get("countries") or {}).get("US") or {}).get("status")
 
 
 def select_bundle(store: ReleaseStore, *, now: datetime) -> tuple[str, str] | None:
@@ -149,12 +165,14 @@ def _read_bundle_file(path: Path) -> BundleInputs:
             elif name.endswith("/inputs/us_id_set.csv"):
                 polled |= _ids_from_csv(handle.read())
             elif name.endswith("/inputs/stations_used.csv"):
-                stations |= _ids_from_csv(handle.read(), countries={"US", "CA"})
+                # Costco rows only, for the reason candidate_ids gives.
+                frame = _costco_rows(_read_csv(handle.read()))
+                stations |= _ids_from_frame(frame, countries={"US", "CA"})
             elif "/responses/shared/" in name and name.endswith(".body"):
                 found_us, found_ca = _ecom_ids(handle.read())
                 us_ecom |= found_us
                 ca_ecom |= found_ca
-            elif "/responses/CA/" in name and name.endswith(".body"):
+            elif any(part in name for part in CA_RESPONSES) and name.endswith(".body"):
                 ca_lookup |= {int(match) for match in STLOC_ID.findall(handle.read())}
     return BundleInputs(
         capture_id=capture_id,
@@ -166,13 +184,16 @@ def _read_bundle_file(path: Path) -> BundleInputs:
     )
 
 
-def _ids_from_csv(data: bytes, countries: set[str] | None = None) -> set[int]:
+def _read_csv(data: bytes) -> pl.DataFrame | None:
     try:
-        frame = pl.read_csv(io.BytesIO(data), infer_schema_length=0)
+        return pl.read_csv(io.BytesIO(data), infer_schema_length=0)
     except Exception as exc:  # a malformed input must not stop discovery
         print(f"::warning::could not parse a bundle CSV: {exc}")
-        return set()
-    return _ids_from_frame(frame, countries=countries)
+        return None
+
+
+def _ids_from_csv(data: bytes, countries: set[str] | None = None) -> set[int]:
+    return _ids_from_frame(_read_csv(data), countries=countries)
 
 
 def _ids_from_frame(frame: pl.DataFrame | None, countries: set[str] | None = None) -> set[int]:
@@ -221,10 +242,11 @@ def _costco_rows(frame: pl.DataFrame | None) -> pl.DataFrame | None:
 
 
 def candidate_ids(bundle: BundleInputs, cfg) -> list[int]:
-    # Costco rows only. `highest` drives a range() sweep against Costco's price
-    # endpoint, so one Sam's-shaped row -- four digits in the 4700-8300 band --
-    # would lift it from ~2,100 ids to ~6,800, roughly 470 extra batched
-    # requests a month against the endpoint we are already trying to slim.
+    # Costco rows only, here and in the bundle's stations. `highest` drives a
+    # range() sweep against Costco's price endpoint, so one Sam's-shaped row --
+    # four digits in the 4700-8300 band -- would lift it from ~2,100 ids to
+    # ~6,800, roughly 470 extra batched requests a month against the endpoint
+    # we are already trying to slim.
     extras = _ids_from_frame(_costco_rows(getattr(cfg, "us_extra_ids", None)))
     known = (
         bundle.us_ecom_ids
@@ -304,8 +326,53 @@ def _payload(response) -> dict | None:
     return payload
 
 
-def _issue_body(candidates: list[dict], bundle: BundleInputs, now: datetime, url: str) -> str:
-    lines = [
+def _candidate_row(candidate: dict, url: str) -> str:
+    prices = candidate["prices"]
+    other = (
+        ", ".join(
+            f"{key}={value}"
+            for key, value in sorted(prices.items())
+            if key not in ("regular", "premium", "diesel")
+        )
+        or "-"
+    )
+    link = f"{url}?warehouseid={candidate['warehouse_id']}"
+    row = [
+        candidate["warehouse_id"],
+        str(prices.get("regular", "-")),
+        str(prices.get("premium", "-")),
+        str(prices.get("diesel", "-")),
+        other,
+        f"[prices]({link})",
+    ]
+    return "| " + " | ".join(row) + " |"
+
+
+def _size(text: str) -> int:
+    # UTF-8 bytes are never fewer than the characters GitHub counts, so a body
+    # that fits by this measure fits by GitHub's.
+    return len(text.encode("utf-8"))
+
+
+def _omitted_note(count: int, run: str | None) -> str:
+    where = (
+        f"[the Discover run that wrote this]({run})" if run else "the Discover run that wrote this"
+    )
+    return (
+        f"**{count} more warehouse id(s) did not fit:** GitHub caps an issue body at "
+        f"{ISSUE_BODY_LIMIT:,} characters. Every candidate is listed in the log of {where}."
+    )
+
+
+def _issue_body(
+    candidates: list[dict], bundle: BundleInputs, now: datetime, url: str, run: str | None = None
+) -> tuple[str, int]:
+    """The issue body, and how many of the candidates it lists.
+
+    Rows are dropped from the end until the body fits GitHub's limit, and a
+    note in their place says how many and where the whole list is.
+    """
+    head = [
         f"The monthly sweep of `AjaxGetGasPricesService` on {now:%Y-%m-%d} found "
         f"{len(candidates)} warehouse id(s) that price fuel but are not polled.",
         "",
@@ -314,34 +381,28 @@ def _issue_body(candidates: list[dict], bundle: BundleInputs, now: datetime, url
         "| warehouse id | regular | premium | diesel | other grades | check |",
         "| --- | --- | --- | --- | --- | --- |",
     ]
-    for candidate in candidates:
-        prices = candidate["prices"]
-        other = (
-            ", ".join(
-                f"{key}={value}"
-                for key, value in sorted(prices.items())
-                if key not in ("regular", "premium", "diesel")
-            )
-            or "-"
-        )
-        link = f"{url}?warehouseid={candidate['warehouse_id']}"
-        row = [
-            candidate["warehouse_id"],
-            str(prices.get("regular", "-")),
-            str(prices.get("premium", "-")),
-            str(prices.get("diesel", "-")),
-            other,
-            f"[prices]({link})",
-        ]
-        lines.append("| " + " | ".join(row) + " |")
-    lines += [
+    foot = [
         "",
         "Add the real stations to `config/us_extra_ids.csv` with `brand` (COSTCO -- these"
         " ids are swept against Costco's endpoint), `name`, `city`, `region`,",
         "`postcode`, `lat`, `lon`, `timezone` and `note`, then close this issue.",
         "Ignore the rows that turn out to be placeholders.",
     ]
-    return "\n".join(lines)
+    rows = [_candidate_row(candidate, url) for candidate in candidates]
+    body = "\n".join(head + rows + foot)
+    if _size(body) <= ISSUE_BODY_LIMIT:
+        return body, len(rows)
+    # Room for the note at its longest, since fewer omitted ids never make it
+    # longer; each row then costs its own length plus one line break.
+    budget = ISSUE_BODY_LIMIT - _size("\n".join([*head, "", _omitted_note(len(rows), run), *foot]))
+    listed = 0
+    for row in rows:
+        budget -= _size(row) + 1
+        if budget < 0:
+            break
+        listed += 1
+    note = _omitted_note(len(rows) - listed, run)
+    return "\n".join([*head, *rows[:listed], "", note, *foot]), listed
 
 
 def _candidate_sort_key(candidate: dict) -> int:
@@ -388,7 +449,16 @@ def discover(store: ReleaseStore, client, cfg, issues: Issues, *, now: datetime)
     candidates.sort(key=_candidate_sort_key)
     if candidates:
         title = f"US station discovery {now:%Y-%m}"
-        issues.ensure_open(title, _issue_body(candidates, bundle, now, url))
+        body, listed = _issue_body(candidates, bundle, now, url, run_url())
+        if listed < len(candidates):
+            # The issue points here for the rows it had no room for.
+            print(
+                f"::warning::the discovery issue lists {listed} of {len(candidates)} "
+                "candidates; every candidate follows"
+            )
+            for candidate in candidates:
+                print(_candidate_row(candidate, url))
+        issues.ensure_open(title, body)
     print(
         f"discover: bundle {bundle.capture_id}, {len(ids)} candidate ids, "
         f"{len(candidates)} reported"

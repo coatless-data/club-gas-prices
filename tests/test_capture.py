@@ -377,7 +377,7 @@ def test_us_id_set_is_read_from_collected_and_never_recomputed(monkeypatch):
 
     # US present but its guarded path recorded no frame (e.g. it failed):
     # still an empty frame with the right columns, not a crash.
-    us_failed = capture_module._us_id_set({"US": {"us_id_set": None}})
+    us_failed = capture_module._us_id_set({"US-COSTCO": {"us_id_set": None}})
     assert us_failed.height == 0
     assert us_failed.columns == list(capture_module.US_ID_SET_SCHEMA)
 
@@ -391,8 +391,35 @@ def test_us_id_set_is_read_from_collected_and_never_recomputed(monkeypatch):
             "ecom_state": ["gas"],
         }
     )
-    carried = capture_module._us_id_set({"US": {"us_id_set": frame}})
+    carried = capture_module._us_id_set({"US-COSTCO": {"us_id_set": frame}})
     assert carried.equals(frame)
+
+
+def test_the_bundle_records_every_us_id_the_capture_polled(workspace: Path):
+    """Discover subtracts this file from its sweep, so a header-only file makes
+    every polled Costco station look new. `collected` is keyed by feed, so a
+    lookup by country finds nothing."""
+    cfg = load_config(workspace)
+    store = LocalReleaseStore(workspace / "releases")
+    client = Client(cfg.http, transport=make_transport())
+
+    run_capture(
+        cfg,
+        store,
+        workspace / "out",
+        countries=["US"],
+        force_fallback=set(),
+        now=NOW,
+        client=client,
+    )
+
+    with tarfile.open(workspace / "out" / "capture" / "bundle.tar.gz", "r:gz") as tar:
+        polled = pl.read_csv(tar.extractfile("inputs/us_id_set.csv"), infer_schema_length=0)
+
+    assert polled.columns == list(capture_module.US_ID_SET_SCHEMA)
+    assert polled.height > 0
+    # 1364 has gas in the ecom-api fixture, and 1680 is a config extra.
+    assert {"1364", "1680"} <= set(polled["source_station_id"].to_list())
 
 
 def test_a_bundle_failure_is_recorded_as_a_warning_and_never_fatal(workspace: Path, monkeypatch):
