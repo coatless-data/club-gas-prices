@@ -288,3 +288,6 @@ Without a key it falls back to OpenStreetMap tiles: © OpenStreetMap contributor
 
 The code is MIT licensed. The data files carry no license claim and include the notice
 above; they are derived from the retailers' public websites.
+
+Questions, corrections, or a retailer asking for a change to what is collected: write to
+support [at] caffeinatedmath [dot] com.

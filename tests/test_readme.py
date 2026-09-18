@@ -224,3 +224,9 @@ def test_no_link_points_into_the_gitignored_docs_directory():
     import re
 
     assert re.findall(r"(?<![\w./-])docs/\S*", readme()) == []
+
+
+def test_the_contact_address_is_spelled_out_for_people_not_harvesters():
+    """The whole address is never written into the repository (test_contact.py
+    holds that line), so a reader gets it with the @ and the dot in words."""
+    assert "support [at] caffeinatedmath [dot] com" in flowed()

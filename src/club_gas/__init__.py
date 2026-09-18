@@ -1,4 +1,4 @@
-"""Collect Costco fuel prices worldwide and publish them as GitHub Releases."""
+"""Collect posted fuel prices at warehouse-club gas stations and publish them as GitHub Releases."""
 
 from importlib.metadata import PackageNotFoundError, version
 

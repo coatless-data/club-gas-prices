@@ -1,7 +1,7 @@
 [project]
 name = "club-gas-prices"
 version = "0.1.0"
-description = "Collect Costco fuel prices worldwide and publish them as GitHub Releases."
+description = "Collect posted fuel prices at warehouse-club gas stations and publish them as GitHub Releases."
 readme = "README.md"
 requires-python = ">=3.13,<3.14"
 license = "MIT"
