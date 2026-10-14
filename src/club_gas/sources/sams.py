@@ -65,6 +65,11 @@ NOT_SENT = frozenset({DEADLINE, ABANDONED})
 REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 # The fuel record an unknown club returns, in place of a real one.
 INVALID_STORE = "INVALID STORE"
+# The name each fuel gradeId carries on the fuel-centre pages. An entry whose
+# name contradicts its gradeId is mislabeled: on 2026-10-14 club 8268 listed its
+# mid-grade (gradeId 14, "Mid-Grade") under the name UNLEAD. A gradeId not in
+# this table is taken at its name.
+GRADE_NAMES = {11: "UNLEAD", 13: "MID CLR", 14: "MIDGRAD", 16: "PREMIUM", 21: "DIESEL"}
 
 DEFAULT_SITEMAP_URL = "https://www.samsclub.com/sitemap_locators.xml"
 # `{club_id}` is filled per club. The bare id resolves without a city slug.
@@ -188,10 +193,17 @@ def _has_hours(node: dict) -> bool | None:
     return any(isinstance(day, dict) and not day.get("closed") for day in hours)
 
 
-def _prices(block: dict | None) -> tuple[RawPrice, ...]:
+def _prices(block: dict | None) -> tuple[tuple[RawPrice, ...], list[tuple[int, RawPrice]]]:
+    """The club's fuel prices, with every entry named against its gradeId split off.
+
+    A mislabeled entry is set aside with its gradeId rather than kept: it would
+    give the club two rows for one grade, and if it came first it would stand in
+    for the club's real price of that grade.
+    """
     if not block:
-        return ()
+        return (), []
     out: list[RawPrice] = []
+    mislabeled: list[tuple[int, RawPrice]] = []
     for entry in block.get("prices") or []:
         if not isinstance(entry, dict) or entry.get("type") != "fuel":
             continue
@@ -199,8 +211,13 @@ def _prices(block: dict | None) -> tuple[RawPrice, ...]:
         value = _as_float(entry.get("price"))
         if not isinstance(label, str) or value is None or value <= 0:
             continue
-        out.append(RawPrice(grade_raw=label, price_raw=f"{value:.3f}"))
-    return tuple(out)
+        price = RawPrice(grade_raw=label, price_raw=f"{value:.3f}")
+        grade_id = entry.get("gradeId")
+        if GRADE_NAMES.get(grade_id, label) != label:
+            mislabeled.append((grade_id, price))
+            continue
+        out.append(price)
+    return tuple(out), mislabeled
 
 
 def _below_regular(prices: tuple[RawPrice, ...]) -> tuple[tuple[RawPrice, ...], list[RawPrice]]:
@@ -393,7 +410,15 @@ class SamsSource:
                 # The page named a club the key did not; recover it from the
                 # record id, e.g. "CPF_FUELPRICE_PROD_6376" -> "6376".
                 club_id = str(block.get("id") or "").rsplit("_", 1)[-1] or None
-            prices, dropped = _below_regular(_prices(block))
+            prices, mislabeled = _prices(block)
+            for grade_id, price in mislabeled:
+                result.warnings.append(
+                    Warning(
+                        code="mislabeled_grade",
+                        detail=f"{club_id}:{grade_id}={price.grade_raw}@{price.price_raw}",
+                    )
+                )
+            prices, dropped = _below_regular(prices)
             for price in dropped:
                 result.warnings.append(
                     Warning(

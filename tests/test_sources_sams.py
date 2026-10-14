@@ -38,6 +38,7 @@ def fuel_page(
     prices: dict[str, float],
     *,
     record_id: str | None = None,
+    entries: list[dict] | None = None,
     name: str = "Test Sam's Club",
     city: str = "Dallas",
     state: str = "TX",
@@ -49,13 +50,17 @@ def fuel_page(
     """A fuel-centre page's bytes: the `__NEXT_DATA__` the parser reads, minimal.
 
     `record_id` overrides the storeFuelPrices id (e.g. "INVALID STORE"); it
-    defaults to the club's own, as "CPF_FUELPRICE_PROD_<id>".
+    defaults to the club's own, as "CPF_FUELPRICE_PROD_<id>". `entries` replaces
+    the price list built from `prices` with raw entries, for a record a dict
+    cannot express (a repeated name, a gradeId).
     """
     block = {
         "countryCode": "US",
         "id": record_id or f"CPF_FUELPRICE_PROD_{club_id}",
         "metadata": {"dateCreated": "2026-09-18T08:15:34.337Z", "createdBy": "CPF_STORAGE"},
-        "prices": [{"name": k, "price": v, "type": "fuel"} for k, v in prices.items()],
+        "prices": entries
+        if entries is not None
+        else [{"name": k, "price": v, "type": "fuel"} for k, v in prices.items()],
     }
     store_details = {"capabilities": [{"timeZone": tz}, {"timeZone": tz}]}
     next_data = {
@@ -334,6 +339,67 @@ def test_a_grade_priced_below_the_clubs_own_regular_is_dropped():
     assert [(w.code, w.detail) for w in result.warnings] == [
         ("below_regular", "6376:MIDGRAD=2.979")
     ]
+
+
+def _entry(grade_id: int, name: str, price: float, display: str) -> dict:
+    return {
+        "price": price,
+        "gradeId": grade_id,
+        "displayName": display,
+        "name": name,
+        "type": "fuel",
+    }
+
+
+def test_a_grade_named_against_its_grade_id_is_dropped():
+    """Club 8268's record listed its mid-grade (gradeId 14, "Mid-Grade") under
+    the name UNLEAD, at the same price as its real regular, so the club carried
+    two UNLEAD rows and the capture failed its key check. The mislabeled entry
+    is dropped and named in a warning; the real regular stays."""
+    entries = [
+        _entry(11, "UNLEAD", 3.499, "Unleaded"),
+        _entry(14, "UNLEAD", 3.499, "Mid-Grade"),
+        _entry(16, "PREMIUM", 4.099, "Premium"),
+    ]
+    result = sams.SamsSource().parse(
+        [sitemap_response(["8268"]), club_response("8268", {}, entries=entries)], _ctx()
+    )
+    station = next(s for s in result.stations if s.source_station_id == "8268")
+    assert [(p.grade_raw, p.price_raw) for p in station.prices] == [
+        ("UNLEAD", "3.499"),
+        ("PREMIUM", "4.099"),
+    ]
+    assert [(w.code, w.detail) for w in result.warnings] == [
+        ("mislabeled_grade", "8268:14=UNLEAD@3.499")
+    ]
+
+
+def test_a_mislabeled_entry_listed_first_never_becomes_the_regular():
+    """Which entry is the real UNLEAD comes from its gradeId, not its place in
+    the list, so a mislabeled entry ahead of the real one is still the one
+    dropped."""
+    entries = [
+        _entry(14, "UNLEAD", 3.499, "Mid-Grade"),
+        _entry(11, "UNLEAD", 3.519, "Unleaded"),
+    ]
+    result = sams.SamsSource().parse(
+        [sitemap_response(["8268"]), club_response("8268", {}, entries=entries)], _ctx()
+    )
+    station = next(s for s in result.stations if s.source_station_id == "8268")
+    assert [(p.grade_raw, p.price_raw) for p in station.prices] == [("UNLEAD", "3.519")]
+
+
+def test_a_grade_id_the_parser_does_not_know_is_taken_at_its_name():
+    entries = [_entry(11, "UNLEAD", 3.499, "Unleaded"), _entry(99, "E85", 3.899, "E85")]
+    result = sams.SamsSource().parse(
+        [sitemap_response(["8268"]), club_response("8268", {}, entries=entries)], _ctx()
+    )
+    station = next(s for s in result.stations if s.source_station_id == "8268")
+    assert [(p.grade_raw, p.price_raw) for p in station.prices] == [
+        ("UNLEAD", "3.499"),
+        ("E85", "3.899"),
+    ]
+    assert result.warnings == []
 
 
 def test_with_no_regular_to_compare_against_every_grade_stays():
