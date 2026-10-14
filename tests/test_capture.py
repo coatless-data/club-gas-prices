@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import shutil
 import tarfile
@@ -592,6 +593,67 @@ def test_a_raising_source_fails_only_that_country_and_records_its_traceback(
     # The capture still produced a durable status.json and returned normally
     # (no exception escaped run_capture; the CLI would exit 0).
     assert (workspace / "out" / "capture" / "status.json").exists()
+    assert result.all_failed is False
+
+
+def test_rows_failing_the_schema_fail_only_their_own_feed(workspace: Path, monkeypatch):
+    """A feed whose rows break the row key fails alone, like one that raises.
+
+    On 2026-10-14 one Sam's club carried two UNLEAD rows; the key check ran
+    after run_feed's guard, so the SchemaError escaped and every feed in the
+    capture was lost. Here JP's parse repeats one price, so its rows carry a
+    duplicate key, and TW must still publish.
+    """
+    jp_body = (FIXTURES / "jp_stores.json").read_bytes()
+    jp_source = capture_module.SOURCES["JP-COSTCO"]
+    parse = jp_source.parse
+
+    def parse_with_a_repeated_price(responses, ctx):
+        result = parse(responses, ctx)
+        first = result.stations[0]
+        result.stations[0] = dataclasses.replace(first, prices=(*first.prices, first.prices[0]))
+        return result
+
+    monkeypatch.setattr(jp_source, "parse", parse_with_a_repeated_price)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        bodies = {
+            "api.frankfurter.dev": FX_BODY,
+            "www.costco.com.tw": TW_BODY,
+            "www.costco.co.jp": jp_body,
+        }
+        if request.url.host in bodies:
+            return httpx.Response(
+                200,
+                content=bodies[request.url.host],
+                headers={"Content-Type": "application/json"},
+            )
+        return httpx.Response(404, content=b"{}")
+
+    cfg = load_config(workspace)
+    client = Client(cfg.http, transport=httpx.MockTransport(handler))
+
+    result = run_capture(
+        cfg,
+        LocalReleaseStore(workspace / "releases"),
+        workspace / "out",
+        countries=["TW", "JP"],
+        force_fallback=set(),
+        now=NOW,
+        client=client,
+    )
+
+    jp_block = result.status["feeds"]["JP-COSTCO"]
+    assert jp_block["status"] == "failed"
+    assert [e["code"] for e in jp_block["errors"]] == ["exception"]
+    assert jp_block["errors"][0]["detail"].startswith("SchemaError: duplicate key")
+    jp_dir = workspace / "out" / "feeds" / "JP-COSTCO"
+    assert "SchemaError" in (jp_dir / "traceback.txt").read_text(encoding="utf-8")
+    assert pl.read_csv(jp_dir / "rows.csv.gz").height == 0
+
+    assert result.status["feeds"]["TW-COSTCO"]["status"] == "ok"
+    rows = pl.read_csv(workspace / "out" / "capture" / "rows.csv.gz")
+    assert set(rows["country"].unique().to_list()) == {"TW"}
     assert result.all_failed is False
 
 

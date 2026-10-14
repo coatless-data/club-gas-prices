@@ -315,6 +315,9 @@ def run_feed(
         result = source.parse(responses, ctx)
         result.warnings.extend(extra)
         normalized = normalize(result, fx, ctx)
+        # The rows are written after this guard, and the write validates them; a
+        # bad row must fail this feed here, not escape and take the capture down.
+        schema.validate_rows(normalized.rows)
         if fid == "US-COSTCO":
             us_id_set = us_source.polled_id_frame(ctx)
     except Exception as exc:  # isolation is the point
