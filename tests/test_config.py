@@ -228,7 +228,7 @@ def test_us_extra_ids_table(cfg):
         "note",
     ]
     ids = df["source_station_id"].to_list()
-    assert ids == ["1680", "1765", "1772"]
+    assert ids == ["1680", "1765", "1772", "1875"]
     # ecom-api does not list these ids at all, so the CSV is their only source
     # of coordinates and timezone: a null here means normalize drops them.
     assert df["name"].null_count() == 0
@@ -245,23 +245,35 @@ def test_us_extra_ids_table(cfg):
     assert chandler["lat"] == 33.3062
     assert chandler["lon"] == -111.8413
     assert chandler["timezone"] == "America/Phoenix"
+    # #1772 is the standalone gas station; its coordinates are Costco's own,
+    # from salesLocations.json, which lists it while warehouses.json does not.
     mission_viejo = df.filter(df["source_station_id"] == "1772").row(0, named=True)
     assert mission_viejo["region"] == "CA"
-    assert mission_viejo["lat"] == 33.6103
-    assert mission_viejo["lon"] == -117.689
+    assert mission_viejo["lat"] == 33.588125
+    assert mission_viejo["lon"] == -117.673325
     assert mission_viejo["timezone"] == "America/Los_Angeles"
-    # #1772's identity is reported, not confirmed, and the note says so.
-    assert "unverified" in mission_viejo["note"]
+    assert "Standalone Gas Station" in mission_viejo["note"]
+    # #1875 is #375's gas station under a new id, so it sits on #375's pin.
+    kansas_city = df.filter(df["source_station_id"] == "1875").row(0, named=True)
+    assert kansas_city["region"] == "MO"
+    assert kansas_city["lat"] == 39.06731066
+    assert kansas_city["lon"] == -94.58122881
+    assert kansas_city["timezone"] == "America/Chicago"
 
 
-def test_station_links_table_starts_empty(cfg):
-    assert cfg.station_links.columns == [
+def test_station_links_table(cfg):
+    links = cfg.station_links
+    assert links.columns == [
         "old_station_key",
         "new_station_key",
         "effective_date",
         "note",
     ]
-    assert cfg.station_links.height == 0
+    assert dict(zip(links["old_station_key"], links["new_station_key"], strict=True)) == {
+        "US-COSTCO-375": "US-COSTCO-1875",
+        "US-COSTCO-132": "US-COSTCO-1684",
+    }
+    assert links["note"].null_count() == 0
 
 
 def test_site_config(cfg):
@@ -432,7 +444,7 @@ def test_fetch_view_keeps_only_what_a_request_needs(cfg):
     assert us.fallback_params["countryCode"] == "US"
     assert fetch.countries["GB"].params["fields"] == "FULL"
     assert fetch.http.max_attempts == 3
-    assert fetch.us_extra_ids.height == 3
+    assert fetch.us_extra_ids.height == cfg.us_extra_ids.height > 0
     # Interpretation config is blanked so that replaying an old capture cannot
     # accidentally reuse the grades or bounds stored with it.
     assert fetch.grades.map("US", "COSTCO", "regular") is None
@@ -465,6 +477,7 @@ def test_interp_view_keeps_only_what_reading_a_response_needs(cfg):
         "effective_date",
         "note",
     ]
+    assert interp.station_links.height == cfg.station_links.height > 0
     # Fetch config is blanked: a rebuild must never re-request anything.
     assert us.url == ""
     assert us.params == {}
