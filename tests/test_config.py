@@ -76,7 +76,9 @@ def test_us_fetch_parameters(cfg):
     # Only the first 10 ids of an AjaxGetGasPricesService request are processed.
     assert us.batch_size == 10
     assert us.seen_within_days == 30
-    assert us.ecom_url == ("https://ecom-api.costco.com/core/warehouse-locator/v1/warehouses.json")
+    assert us.ecom_url == (
+        "https://ecom-api.costco.com/core/warehouse-locator/v1/salesLocations.json"
+    )
     assert us.ecom_client_identifier == "7c71124c-7bf1-44db-bc9d-498584cd66e5"
     assert us.ecom_params["latitude"] == "0"
     assert us.ecom_params["limit"] == "5000"
@@ -439,7 +441,9 @@ def test_fetch_view_keeps_only_what_a_request_needs(cfg):
     assert us.url == "https://www.costco.com/AjaxGetGasPricesService"
     assert us.batch_size == 10
     assert us.seen_within_days == 30
-    assert us.ecom_url == ("https://ecom-api.costco.com/core/warehouse-locator/v1/warehouses.json")
+    assert us.ecom_url == (
+        "https://ecom-api.costco.com/core/warehouse-locator/v1/salesLocations.json"
+    )
     assert us.ecom_client_identifier == "7c71124c-7bf1-44db-bc9d-498584cd66e5"
     assert us.fallback_params["countryCode"] == "US"
     assert fetch.countries["GB"].params["fields"] == "FULL"

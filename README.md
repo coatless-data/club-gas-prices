@@ -165,10 +165,12 @@ columns are null for that capture and the prices are still published. USD rows u
 
 **Placeholders and pre-opening prices.** Sources publish prices for warehouses that
 have no gas station or have not opened. Rows are dropped when the warehouse has no gas
-service, when its opening date is after the capture date, when the station has no gas
-hours, when the price cannot be parsed, or when the price falls outside the per-unit
-sanity bounds that reject placeholders such as the Canadian `.959`. Every drop is
-counted by reason in the capture status.
+service, when its gas station's opening date is after the capture date, when the station
+has no gas hours, when the price cannot be parsed, or when the price falls outside the
+per-unit sanity bounds that reject placeholders such as the Canadian `.959`. Every drop
+is counted by reason in the capture status. A Costco gas station usually opens weeks
+before its warehouse, so the date that counts is the one Costco gives the gas station,
+and the warehouse's is used only when there is none.
 
 **UTC days and local dates.** `capture_date` is a UTC date and is what the daily files
 are keyed by. `local_date` is the same instant in the station's own timezone. For Japan,
@@ -262,8 +264,8 @@ requests. At most one request per second per host.
 
 | Feed | Endpoint |
 |---|---|
-| US-COSTCO | `ecom-api.costco.com/core/warehouse-locator/v1/warehouses.json` for metadata, then `www.costco.com/AjaxGetGasPricesService?warehouseid=<10 ids>` for prices. Falls back to `www.costco.ca/AjaxWarehouseBrowseLookupView?...&countryCode=US`. |
-| CA-COSTCO | `www.costco.ca/AjaxWarehouseBrowseLookupView?hasGas=true&populateWarehouseDetails=true&countryCode=CA`. Falls back to `www.costco.ca/AjaxGetGasPricesService`. |
+| US-COSTCO | `ecom-api.costco.com/core/warehouse-locator/v1/salesLocations.json` for metadata, including standalone gas stations and each gas station's opening date, then `www.costco.com/AjaxGetGasPricesService?warehouseid=<10 ids>` for prices. Falls back to `www.costco.ca/AjaxWarehouseBrowseLookupView?...&countryCode=US`. |
+| CA-COSTCO | `www.costco.ca/AjaxWarehouseBrowseLookupView?hasGas=true&populateWarehouseDetails=true&countryCode=CA`, with coordinates, timezone and the gas station's opening date from the same `salesLocations.json`. Falls back to `www.costco.ca/AjaxGetGasPricesService`. |
 | MX-COSTCO | `www.costco.com.mx/rest/v2/mexico/stores?fields=FULL&...` |
 | GB-COSTCO | `www.costco.co.uk/rest/v2/uk/stores?fields=FULL&...` |
 | AU-COSTCO | `www.costco.com.au/rest/v2/australia/stores?fields=FULL&...` |

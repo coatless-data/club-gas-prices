@@ -103,7 +103,7 @@ LEGACY_STATIONS_USED = (
 )
 
 
-def _bundle_bytes(capture_id: str, *, legacy: bool = False) -> bytes:
+def _bundle_bytes(capture_id: str, *, legacy: bool = False, ecom: dict | None = None) -> bytes:
     """Build a capture bundle with the members discovery reads (spec 8.2)."""
     capture_json = json.dumps({"capture_id": capture_id, "capture_date": capture_id[:10]})
     ca, us = ("CA", "US") if legacy else ("CA-COSTCO", "US-COSTCO")
@@ -114,7 +114,7 @@ def _bundle_bytes(capture_id: str, *, legacy: bool = False) -> bytes:
             + "".join(f"{i},ecom,gas\n" for i in POLLED_IDS)
         ).encode(),
         "inputs/stations_used.csv": LEGACY_STATIONS_USED if legacy else STATIONS_USED,
-        "responses/shared/ecom-api.body": json.dumps(ECOM_BODY).encode(),
+        "responses/shared/ecom-api.body": json.dumps(ECOM_BODY if ecom is None else ecom).encode(),
         f"responses/{ca}/01-lookup.body": json.dumps(CA_LOOKUP_BODY).encode(),
         f"responses/{us}/02-gasprices-001.body": b'{"1364":{"regular":"3.999"}}',
     }
@@ -138,7 +138,9 @@ def _entry(capture_id: str, us_status: str) -> dict:
     }
 
 
-def _seed(tmp_path: Path, *, tag="data-2026-10", entries=None, bundles=None, legacy=False):
+def _seed(
+    tmp_path: Path, *, tag="data-2026-10", entries=None, bundles=None, legacy=False, ecom=None
+):
     store = open_store(f"local:{tmp_path / 'releases'}")
     store.ensure_release(tag, tag, "", True, "false")
     entries = entries if entries is not None else {}
@@ -147,7 +149,7 @@ def _seed(tmp_path: Path, *, tag="data-2026-10", entries=None, bundles=None, leg
     store.upload_new(tag, manifest, manifest.name)
     for capture_id in bundles or []:
         path = tmp_path / f"capture-{capture_id}.tar.gz"
-        path.write_bytes(_bundle_bytes(capture_id, legacy=legacy))
+        path.write_bytes(_bundle_bytes(capture_id, legacy=legacy, ecom=ecom))
         store.upload_new(tag, path, f"capture-{capture_id}.tar.gz")
     return store
 
@@ -205,6 +207,22 @@ def test_read_bundle_pulls_every_id_source(tmp_path, legacy):
     # The Japanese station key is not numeric, the GB warehouse is not counted,
     # and the Sam's club 6376 is not a Costco id.
     assert bundle.station_ids == {1364, 1324}
+
+
+def test_read_bundle_reads_sales_locations(tmp_path):
+    """Captures from 2026-11 store salesLocations.json; older ones warehouses.json."""
+    sales = json.loads(
+        (Path(__file__).parent / "fixtures" / "costco_sales_locations.json").read_text()
+    )
+    store = _seed(
+        tmp_path,
+        entries={"2026-10-01T0617Z": _entry("2026-10-01T0617Z", "ok")},
+        bundles=["2026-10-01T0617Z"],
+        ecom=sales,
+    )
+    bundle = read_bundle(store, "data-2026-10", "capture-2026-10-01T0617Z.tar.gz")
+    assert bundle.us_ecom_ids == {1364, 140, 1808, 1772, 1799, 120, 729}
+    assert bundle.ca_ecom_ids == {1790, 1324}
 
 
 def test_a_sams_club_in_stations_used_never_widens_the_sweep(tmp_path):

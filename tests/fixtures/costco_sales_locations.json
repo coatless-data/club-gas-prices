@@ -1,0 +1,423 @@
+{
+ "context": {
+  "messageName": "SalesLocationSearchResponse",
+  "statusMessage": {
+   "statusCode": "Success"
+  },
+  "lastPage": true
+ },
+ "salesLocations": [
+  {
+   "salesLocationId": "1364",
+   "name": [
+    {
+     "value": "Bradenton",
+     "localeCode": "en-US"
+    }
+   ],
+   "type": {
+    "code": "Sales Location"
+   },
+   "subType": {
+    "code": "Warehouse"
+   },
+   "address": {
+    "line1": "805 LIGHTHOUSE DRIVE",
+    "city": "BRADENTON",
+    "territory": "FL",
+    "postalCode": "34212-2168",
+    "countryName": "US",
+    "latitude": 27.49462445,
+    "longitude": -82.47014406
+   },
+   "timeZone": "America/New_York",
+   "openingDate": "2019-08-21",
+   "services": [
+    {
+     "code": "food"
+    },
+    {
+     "code": "gas",
+     "openingDate": "2019-08-21"
+    },
+    {
+     "code": "hearing"
+    },
+    {
+     "code": "optical"
+    },
+    {
+     "code": "pharmacy"
+    },
+    {
+     "code": "auto"
+    },
+    {
+     "code": "specialty_item"
+    }
+   ]
+  },
+  {
+   "salesLocationId": "140",
+   "name": [
+    {
+     "value": "Kona",
+     "localeCode": "en-US"
+    }
+   ],
+   "type": {
+    "code": "Sales Location"
+   },
+   "subType": {
+    "code": "Warehouse"
+   },
+   "address": {
+    "line1": "73-5600 MAIAU ST",
+    "city": "KAILUA KONA",
+    "territory": "HI",
+    "postalCode": "96740-2630",
+    "countryName": "US",
+    "latitude": 19.68545677,
+    "longitude": -156.0168782
+   },
+   "timeZone": "Pacific/Honolulu",
+   "openingDate": "1993-11-22",
+   "services": [
+    {
+     "code": "food"
+    },
+    {
+     "code": "gas",
+     "openingDate": "2001-03-28"
+    },
+    {
+     "code": "hearing"
+    },
+    {
+     "code": "optical"
+    },
+    {
+     "code": "pharmacy"
+    },
+    {
+     "code": "auto"
+    },
+    {
+     "code": "specialty_item"
+    },
+    {
+     "code": "diesel"
+    }
+   ]
+  },
+  {
+   "salesLocationId": "1808",
+   "name": [
+    {
+     "value": "Franklin",
+     "localeCode": "en-US"
+    }
+   ],
+   "type": {
+    "code": "Sales Location"
+   },
+   "subType": {
+    "code": "Warehouse"
+   },
+   "address": {
+    "line1": "7829 S 27TH ST",
+    "city": "FRANKLIN",
+    "territory": "WI",
+    "postalCode": "53132-9497",
+    "countryName": "US",
+    "latitude": 42.904198,
+    "longitude": -87.952885
+   },
+   "timeZone": "America/Chicago",
+   "openingDate": "2026-11-24",
+   "services": [
+    {
+     "code": "food"
+    },
+    {
+     "code": "gas",
+     "openingDate": "2026-11-05"
+    },
+    {
+     "code": "hearing"
+    },
+    {
+     "code": "optical"
+    },
+    {
+     "code": "pharmacy",
+     "openingDate": "2026-11-25"
+    },
+    {
+     "code": "auto"
+    },
+    {
+     "code": "specialty_item"
+    }
+   ]
+  },
+  {
+   "salesLocationId": "1772",
+   "name": [
+    {
+     "value": "Mission Viejo Gas Station",
+     "localeCode": "en-US"
+    }
+   ],
+   "type": {
+    "code": "Sales Location"
+   },
+   "subType": {
+    "code": "Standalone Gas Station"
+   },
+   "address": {
+    "line1": "25732 EL PASEO",
+    "city": "MISSION VIEJO",
+    "territory": "CA",
+    "postalCode": "92691-6902",
+    "countryName": "US",
+    "latitude": 33.588125,
+    "longitude": -117.673325
+   },
+   "timeZone": "America/Los_Angeles",
+   "openingDate": "2026-06-24",
+   "services": []
+  },
+  {
+   "salesLocationId": "1799",
+   "name": [
+    {
+     "value": "Newport News",
+     "localeCode": "en-US"
+    }
+   ],
+   "type": {
+    "code": "Sales Location"
+   },
+   "subType": {
+    "code": "Warehouse"
+   },
+   "address": {
+    "line1": "12490 JEFFERSON AVE",
+    "city": "NEWPORT NEWS",
+    "territory": "VA",
+    "postalCode": "23602-4529",
+    "countryName": "US",
+    "latitude": 37.126888,
+    "longitude": -76.508036
+   },
+   "timeZone": "America/New_York",
+   "openingDate": "2027-02-16",
+   "services": [
+    {
+     "code": "food"
+    },
+    {
+     "code": "gas",
+     "openingDate": "2026-11-24"
+    },
+    {
+     "code": "hearing"
+    },
+    {
+     "code": "optical"
+    },
+    {
+     "code": "pharmacy",
+     "openingDate": "2026-11-24"
+    },
+    {
+     "code": "auto"
+    },
+    {
+     "code": "specialty_item"
+    }
+   ]
+  },
+  {
+   "salesLocationId": "120",
+   "name": [
+    {
+     "value": "Hawaii Kai",
+     "localeCode": "en-US"
+    }
+   ],
+   "type": {
+    "code": "Sales Location"
+   },
+   "subType": {
+    "code": "Warehouse"
+   },
+   "address": {
+    "line1": "333 A KEAHOLE STREET",
+    "city": "HONOLULU",
+    "territory": "HI",
+    "postalCode": "96825-3406",
+    "countryName": "US",
+    "latitude": 21.28392317,
+    "longitude": -157.7100014
+   },
+   "timeZone": "Pacific/Honolulu",
+   "openingDate": "1992-09-03",
+   "services": [
+    {
+     "code": "food"
+    },
+    {
+     "code": "hearing"
+    },
+    {
+     "code": "optical"
+    },
+    {
+     "code": "pharmacy"
+    },
+    {
+     "code": "auto"
+    },
+    {
+     "code": "specialty_item"
+    }
+   ]
+  },
+  {
+   "salesLocationId": "729",
+   "name": [
+    {
+     "value": "Hackensack Bus Ctr",
+     "localeCode": "en-US"
+    }
+   ],
+   "type": {
+    "code": "Sales Location"
+   },
+   "subType": {
+    "code": "Business Center"
+   },
+   "address": {
+    "line1": "80 S RIVER ST",
+    "city": "HACKENSACK",
+    "territory": "NJ",
+    "postalCode": "07601-6954",
+    "countryName": "US",
+    "latitude": 40.87639008,
+    "longitude": -74.03887121
+   },
+   "timeZone": "America/New_York",
+   "openingDate": "2016-03-15",
+   "services": [
+    {
+     "code": "specialty_item"
+    }
+   ]
+  },
+  {
+   "salesLocationId": "1790",
+   "name": [
+    {
+     "value": "Lloydminster",
+     "localeCode": "en-US"
+    }
+   ],
+   "type": {
+    "code": "Sales Location"
+   },
+   "subType": {
+    "code": "Warehouse"
+   },
+   "address": {
+    "line1": "1703 75 AVE",
+    "city": "LLOYDMINSTER",
+    "territory": "AB",
+    "postalCode": "T9V 3V8",
+    "countryName": "CA",
+    "latitude": 53.2983537,
+    "longitude": -110.05428
+   },
+   "timeZone": "America/Edmonton",
+   "openingDate": "2026-11-19",
+   "services": [
+    {
+     "code": "food"
+    },
+    {
+     "code": "gas",
+     "openingDate": "2026-10-14"
+    },
+    {
+     "code": "hearing"
+    },
+    {
+     "code": "optical"
+    },
+    {
+     "code": "pharmacy"
+    },
+    {
+     "code": "auto"
+    }
+   ]
+  },
+  {
+   "salesLocationId": "1324",
+   "name": [
+    {
+     "value": "St Johns",
+     "localeCode": "en-US"
+    }
+   ],
+   "type": {
+    "code": "Sales Location"
+   },
+   "subType": {
+    "code": "Warehouse"
+   },
+   "address": {
+    "line1": "75 DANNY DR",
+    "city": "ST JOHNS",
+    "territory": "NL",
+    "postalCode": "A1H 0N4",
+    "countryName": "CA",
+    "latitude": 47.50731997,
+    "longitude": -52.83506698
+   },
+   "timeZone": "America/St_Johns",
+   "openingDate": "1995-09-12",
+   "services": [
+    {
+     "code": "food"
+    },
+    {
+     "code": "gas",
+     "openingDate": "2011-06-29"
+    },
+    {
+     "code": "hearing"
+    },
+    {
+     "code": "optical"
+    },
+    {
+     "code": "pharmacy"
+    },
+    {
+     "code": "auto"
+    },
+    {
+     "code": "specialty_item"
+    },
+    {
+     "code": "oil"
+    },
+    {
+     "code": "propane"
+    }
+   ]
+  }
+ ]
+}

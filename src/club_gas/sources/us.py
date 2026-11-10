@@ -11,7 +11,7 @@ from urllib.parse import urlencode
 import polars as pl
 
 from club_gas.http import BudgetExceeded
-from club_gas.sources import costco_lookup
+from club_gas.sources import costco_ecom, costco_lookup
 from club_gas.sources.base import (
     CaptureContext,
     Error,
@@ -238,6 +238,8 @@ class EcomWarehouse:
     lat: float | None
     lon: float | None
     timezone: str | None
+    # When the station starts selling fuel, which is usually weeks before its
+    # warehouse opens; see costco_ecom.
     opening_date: date | None
     has_gas: bool
 
@@ -248,21 +250,15 @@ def parse_ecom(response: RawResponse | None) -> dict[str, EcomWarehouse] | None:
         return None
     try:
         payload = json.loads(response.body.decode("utf-8", "replace"))
-        warehouses = payload["warehouses"]
-    except (json.JSONDecodeError, KeyError, TypeError, UnicodeError):
+    except (json.JSONDecodeError, UnicodeError):
         return None
-    if not isinstance(warehouses, list):
+    found = costco_ecom.locations(payload)
+    if found is None:
         return None
     index: dict[str, EcomWarehouse] = {}
-    for item in warehouses:
-        if not isinstance(item, dict):
-            continue
-        warehouse_id = _clean(item.get("warehouseId"))
-        if warehouse_id is None:
-            continue
+    for warehouse_id, item in found:
         address = item.get("address") or {}
         names = item.get("name") or []
-        services = item.get("services") or []
         index[warehouse_id] = EcomWarehouse(
             warehouse_id=warehouse_id,
             country=_clean(address.get("countryName")) or "",
@@ -275,8 +271,8 @@ def parse_ecom(response: RawResponse | None) -> dict[str, EcomWarehouse] | None:
             lat=_as_float(address.get("latitude")),
             lon=_as_float(address.get("longitude")),
             timezone=_clean(item.get("timeZone")),
-            opening_date=_iso_date(item.get("openingDate")),
-            has_gas=any(_clean(s.get("code")) == "gas" for s in services if isinstance(s, dict)),
+            opening_date=costco_ecom.fuel_opening_date(item),
+            has_gas=costco_ecom.sells_gas(item),
         )
     return index
 

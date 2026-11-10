@@ -24,6 +24,7 @@ from pathlib import Path
 import polars as pl
 
 from .issues import Issues, run_url
+from .sources import costco_ecom
 from .store import AssetNotFound, ReleaseStore, StorageError
 
 US_PRICE_URL = "https://www.costco.com/AjaxGetGasPricesService"
@@ -217,17 +218,12 @@ def _ecom_ids(body: bytes) -> tuple[set[int], set[int]]:
         payload = json.loads(body)
     except ValueError:
         return set(), set()
-    if not isinstance(payload, dict):
-        return set(), set()
     us: set[int] = set()
     ca: set[int] = set()
-    for warehouse in payload.get("warehouses") or []:
-        if not isinstance(warehouse, dict):
-            continue
-        raw = str(warehouse.get("warehouseId", "")).strip()
+    for raw, location in costco_ecom.locations(payload) or []:
         if not raw.isdigit():
             continue
-        country = str((warehouse.get("address") or {}).get("countryName") or "").strip().upper()
+        country = str((location.get("address") or {}).get("countryName") or "").strip().upper()
         if country == "US":
             us.add(int(raw))
         elif country == "CA":
