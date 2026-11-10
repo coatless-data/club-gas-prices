@@ -10,7 +10,7 @@ from urllib.parse import urlencode, urlsplit
 
 import polars as pl
 
-from club_gas.sources import costco_lookup
+from club_gas.sources import costco_ecom, costco_lookup
 
 from ..config import CountryConfig
 from ..http import BudgetExceeded, Client
@@ -355,7 +355,7 @@ class CaSource:
 
 
 def ecom_index(shared: dict[str, RawResponse]) -> dict[str, dict[str, Any]]:
-    """warehouseId -> warehouse, from this capture's ecom-api response."""
+    """Location id -> location, from this capture's ecom-api response."""
     response = shared.get("ecom-api")
     if response is None or response.error or response.status != 200:
         return {}
@@ -363,12 +363,7 @@ def ecom_index(shared: dict[str, RawResponse]) -> dict[str, dict[str, Any]]:
         payload = json.loads(response.body)
     except (ValueError, UnicodeDecodeError):
         return {}
-    out: dict[str, dict[str, Any]] = {}
-    for warehouse in (payload.get("warehouses") if isinstance(payload, dict) else None) or []:
-        warehouse_id = warehouse.get("warehouseId")
-        if warehouse_id is not None:
-            out[str(warehouse_id)] = warehouse
-    return out
+    return dict(costco_ecom.locations(payload) or [])
 
 
 def _lookup_station(
@@ -382,10 +377,14 @@ def _lookup_station(
     region = _clean(entry.get("state"))
     lat = _as_float(entry.get("latitude"))
     lon = _as_float(entry.get("longitude"))
+    # The lookup's openDate is the warehouse's; gas usually opens weeks
+    # earlier, and ecom-api's salesLocations dates the gas service itself.
+    opening_date = parse_open_date(entry.get("openDate"))
     tz, tz_origin = None, None
 
     warehouse = ecom.get(station_id)
     if warehouse is not None:
+        opening_date = costco_ecom.fuel_opening_date(warehouse) or opening_date
         address = warehouse.get("address") or {}
         if address.get("latitude") is not None:
             lat = _as_float(address.get("latitude"))
@@ -416,7 +415,7 @@ def _lookup_station(
         lat=lat,
         lon=lon,
         timezone=tz,
-        opening_date=parse_open_date(entry.get("openDate")),
+        opening_date=opening_date,
         has_hours=bool(entry.get("gasStationHours")),
         prices=_prices(entry.get("gasPrices")),
     )

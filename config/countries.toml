@@ -32,7 +32,10 @@ closed_after_days = 45
 # AjaxGetGasPricesService processes only the first 10 ids of a request.
 batch_size = 10
 seen_within_days = 30
-ecom_url = "https://ecom-api.costco.com/core/warehouse-locator/v1/warehouses.json"
+# salesLocations, not warehouses.json: it also lists standalone gas stations and
+# sites before they open, and dates the gas service separately from the
+# warehouse. See src/club_gas/sources/costco_ecom.py.
+ecom_url = "https://ecom-api.costco.com/core/warehouse-locator/v1/salesLocations.json"
 # A public id embedded in Costco's own front end; required by ecom-api.
 ecom_client_identifier = "7c71124c-7bf1-44db-bc9d-498584cd66e5"
 fallback_url = "https://www.costco.ca/AjaxWarehouseBrowseLookupView"

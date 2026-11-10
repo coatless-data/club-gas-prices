@@ -343,6 +343,39 @@ def test_parse_ecom_reads_the_fields_the_spec_uses():
     assert index["1324"].country == "CA"
 
 
+def sales_locations_ok() -> RawResponse:
+    return response(
+        "shared/01-ecom-api",
+        "https://ecom-api.costco.com/core/warehouse-locator/v1/salesLocations.json",
+        fixture="costco_sales_locations.json",
+    )
+
+
+def test_parse_ecom_reads_sales_locations():
+    index = us.parse_ecom(sales_locations_ok())
+    assert index["1364"].name == "Bradenton"
+    assert index["1364"].timezone == "America/New_York"
+    assert index["1790"].country == "CA"
+    assert us.ecom_state(index, "1364") == "gas"
+    assert us.ecom_state(index, "120") == "no_gas"
+
+
+def test_a_stations_opening_date_is_when_its_gas_opened():
+    """Gas usually opens weeks before its warehouse. Franklin's opened 2026-11-05
+    and its warehouse on 2026-11-24, so the station is live from the 5th."""
+    index = us.parse_ecom(sales_locations_ok())
+    assert index["1808"].opening_date == date(2026, 11, 5)
+    assert index["1799"].opening_date == date(2026, 11, 24)
+
+
+def test_a_standalone_gas_station_is_polled_from_ecom():
+    ctx = make_ctx(ecom=sales_locations_ok(), extras=EXTRAS.clear())
+    polled = {p.source_station_id: p for p in us.polled_id_set(ctx)}
+    assert polled["1772"].id_origin == "ecom"
+    assert polled["1772"].ecom_state == "gas"
+    assert us.parse_ecom(sales_locations_ok())["1772"].opening_date == date(2026, 6, 24)
+
+
 def test_parse_ecom_returns_none_for_a_failed_step_one():
     assert us.parse_ecom(ecom_failed()) is None
     assert us.parse_ecom(response("shared/01-ecom-api", "u", body=b"", status=401)) is None

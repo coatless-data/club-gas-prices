@@ -240,6 +240,26 @@ def test_ecom_api_supplies_coordinates_and_timezone():
     assert vaudreuil.timezone == "America/Toronto"  # QC, from the province table
 
 
+SALES_BODY = (FIXTURES / "costco_sales_locations.json").read_bytes()
+
+
+def test_the_gas_opening_date_from_ecom_wins_over_the_lookups_warehouse_date():
+    """The lookup's openDate is the warehouse's. Lloydminster's gas opened on
+    2026-10-14, five weeks before its warehouse, and was dropped as not_open."""
+    result, _ = run(serve(LOOKUP_BODY), shared={"ecom-api": ecom_response(SALES_BODY)})
+
+    lloydminster = station(result, "1790")
+    assert lloydminster.opening_date == date(2026, 10, 14)
+    assert source_filter_reason(lloydminster, date(2026, 10, 13)) == "not_open"
+    # The fixture's lookup, from 2026-09-15, lists no gas hours yet, so the next
+    # filter in line is what stops it once the gas date has passed.
+    assert source_filter_reason(lloydminster, date(2026, 10, 14)) == "no_hours"
+    # Coordinates and timezone still come from ecom-api in the new shape.
+    assert station(result, "1324").timezone == "America/St_Johns"
+    # #1813 is not in this ecom-api response, so the lookup's date stands.
+    assert station(result, "1813").opening_date == date(2027, 4, 1)
+
+
 def test_stations_csv_timezone_wins_over_the_province_table():
     previous = stations_frame([cached_row("1213", timezone="America/Montreal")])
 

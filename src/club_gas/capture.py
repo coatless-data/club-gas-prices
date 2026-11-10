@@ -41,7 +41,7 @@ STATUS_PATH = Path("status/latest.json")
 
 # Shared warehouse locator for US and CA (spec 4.2, 5.3). The client-identifier
 # is a public id from Costco's front end; configurable via countries.toml.
-ECOM_API_URL = "https://ecom-api.costco.com/core/warehouse-locator/v1/warehouses.json"
+ECOM_API_URL = "https://ecom-api.costco.com/core/warehouse-locator/v1/salesLocations.json"
 ECOM_API_PARAMS = {"latitude": "0", "longitude": "0", "limit": "5000"}
 ECOM_CLIENT_IDENTIFIER = "7c71124c-7bf1-44db-bc9d-498584cd66e5"
 
