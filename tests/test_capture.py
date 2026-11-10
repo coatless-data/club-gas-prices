@@ -904,13 +904,15 @@ def test_a_feed_with_its_own_budget_is_not_bound_by_the_countrys(workspace: Path
         client=client,
     )
 
+    # The roster is the sitemap's two clubs plus feeds.toml's extra_ids.
+    clubs = sorted({"6376", "8248", *cfg.feeds["US-SAMS"].extra_ids}, key=int)
     sent = [entry["key"] for entry in client.log if entry["key"].startswith("US-SAMS/")]
-    assert sent == ["US-SAMS/01-sitemap", "US-SAMS/02-6376", "US-SAMS/02-8248"]
+    assert sent == ["US-SAMS/01-sitemap", *(f"US-SAMS/02-{club}" for club in clubs)]
     block = result.status["feeds"]["US-SAMS"]
-    assert block["requests"] == 3
+    assert block["requests"] == 1 + len(clubs)
     assert "budget_exhausted" not in {w["code"] for w in block["warnings"]}
-    # Both sitemap clubs sell fuel, so both become stations.
-    assert block["stations"] == 2
+    # The transport serves a fuel page for every club, so each becomes a station.
+    assert block["stations"] == len(clubs)
 
 
 def test_a_disabled_feed_is_never_dispatched(monkeypatch):

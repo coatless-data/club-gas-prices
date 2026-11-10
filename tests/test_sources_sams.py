@@ -28,6 +28,13 @@ CAPTURED_AT = datetime(2026, 9, 18, 16, 45, tzinfo=UTC)
 PERIMETERX = (FIXTURES / "blocks" / "perimeterx_412.json").read_bytes()
 
 
+OPEN = [{"day": "Monday", "start": "06:00", "end": "22:00", "closed": False}]
+CLOSED = [
+    {"day": day, "start": None, "end": None, "closed": True}
+    for day in ("Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday")
+]
+
+
 def sitemap(ids: list[str]) -> bytes:
     locs = "".join(f"<loc>https://www.samsclub.com/club/{i}-city-tx</loc>" for i in ids)
     return f'<?xml version="1.0"?><urlset>{locs}</urlset>'.encode()
@@ -46,8 +53,13 @@ def fuel_page(
     tz: str | None = "America/Chicago",
     lat: float = 32.921881,
     lon: float = -96.843062,
+    club_hours: list[dict] | None = None,
+    fuel_hours: list[dict] | None = None,
 ) -> bytes:
     """A fuel-centre page's bytes: the `__NEXT_DATA__` the parser reads, minimal.
+
+    `club_hours` replaces the club's open Monday; `fuel_hours`, when given,
+    adds the GAS_SAMS service with those hours.
 
     `record_id` overrides the storeFuelPrices id (e.g. "INVALID STORE"); it
     defaults to the club's own, as "CPF_FUELPRICE_PROD_<id>". `entries` replaces
@@ -89,8 +101,17 @@ def fuel_page(
                                 "country": "US",
                             },
                             "geoPoint": {"latitude": lat, "longitude": lon},
-                            "operationalHours": [
-                                {"day": "Monday", "start": "06:00", "end": "22:00", "closed": False}
+                            "operationalHours": OPEN if club_hours is None else club_hours,
+                            "services": []
+                            if fuel_hours is None
+                            else [
+                                {"name": "PHARMACY", "operationalHours": []},
+                                {
+                                    "name": "GAS_SAMS",
+                                    "displayName": "Sam's Fuel Station",
+                                    "open24Hours": False,
+                                    "operationalHours": fuel_hours,
+                                },
                             ],
                         }
                     }
@@ -148,8 +169,14 @@ class ScriptedClient:
         return self.answer(key)
 
 
-def _ctx():
-    return SimpleNamespace(fetch_config=SimpleNamespace(feeds={}), capture_date=None)
+def _ctx(extra_ids: tuple[str, ...] = (), timezones: dict[str, str] | None = None):
+    feeds = {sams.FEED: SimpleNamespace(extra_ids=extra_ids)} if extra_ids else {}
+    us = SimpleNamespace(timezone_for_region=lambda region: (timezones or {}).get(region))
+    return SimpleNamespace(
+        fetch_config=SimpleNamespace(feeds=feeds),
+        interp_config=SimpleNamespace(countries={"US": us}),
+        capture_date=None,
+    )
 
 
 # --------------------------------------------------------------------- roster
@@ -205,6 +232,110 @@ def test_the_sweep_asks_the_sitemap_then_every_club_without_following_redirects(
     # The sitemap may follow redirects; every club request must not.
     assert client.follow_redirects == [True, False, False]
     assert len(responses) == 3
+
+
+def test_extra_ids_are_swept_with_the_sitemaps_clubs_in_numeric_order():
+    """Sam's sitemaps lag new clubs, so feeds.toml names the ones they miss."""
+
+    def answer(key):
+        if key == sams.KEY_SITEMAP:
+            return sitemap_response(["6376", "8248"])
+        return club_response(key.split("-")[-1], {"UNLEAD": 3.5})
+
+    client = ScriptedClient(answer)
+    sams.SamsSource().fetch(client, _ctx(extra_ids=("7718", "8248")))
+
+    # 8248 is in the sitemap as well and is asked about once.
+    assert client.keys == [
+        sams.KEY_SITEMAP,
+        sams.KEY_CLUB.format(club_id="6376"),
+        sams.KEY_CLUB.format(club_id="7718"),
+        sams.KEY_CLUB.format(club_id="8248"),
+    ]
+
+
+def test_extra_ids_are_not_swept_when_the_sitemap_fails():
+    """Without the roster the feed fails anyway; asking about two clubs would
+    only spend requests on a capture that cannot publish."""
+    client = ScriptedClient(lambda key: response(sams.KEY_SITEMAP, PERIMETERX, status=412))
+    sams.SamsSource().fetch(client, _ctx(extra_ids=("7718",)))
+    assert client.keys == [sams.KEY_SITEMAP]
+
+
+def test_an_extra_id_the_budget_never_reached_is_named():
+    def answer(key):
+        if key == sams.KEY_SITEMAP:
+            return sitemap_response(["4857"])
+        if key == sams.KEY_CLUB.format(club_id="4857"):
+            return club_response("4857", {"UNLEAD": 3.5})
+        raise BudgetExceeded("country-US")
+
+    ctx = _ctx(extra_ids=("7718", "8300"))
+    responses = sams.SamsSource().fetch(ScriptedClient(answer), ctx)
+    result = sams.SamsSource().parse(responses, ctx)
+
+    assert [(w.code, w.detail) for w in result.warnings] == [
+        ("not_reached", "7718"),
+        ("not_reached", "8300"),
+        ("budget_exhausted", "2 of 3 clubs not reached"),
+    ]
+
+
+def test_a_new_club_whose_fuel_station_opened_first_has_hours():
+    """Visalia and Tomball, 2026-11-10: the club lists no open day yet, its
+    Sam's Fuel Station does. The station is selling fuel."""
+    result = sams.SamsSource().parse(
+        [
+            sitemap_response(["7718"]),
+            club_response("7718", {"UNLEAD": 4.749}, club_hours=[], fuel_hours=OPEN),
+        ],
+        _ctx(),
+    )
+    assert result.stations[0].has_hours is True
+
+
+def test_an_open_club_whose_fuel_hours_read_closed_keeps_its_hours():
+    """Bartlett, Florence and Springfield list their fuel station closed every
+    day, yet their prices moved 19 to 43 times between 2026-09-19 and 2026-11-10.
+    Either list showing an open day is enough."""
+    result = sams.SamsSource().parse(
+        [
+            sitemap_response(["6260"]),
+            club_response("6260", {"UNLEAD": 3.399}, club_hours=OPEN, fuel_hours=CLOSED),
+        ],
+        _ctx(),
+    )
+    assert result.stations[0].has_hours is True
+
+
+def test_a_club_and_fuel_station_both_closed_has_no_hours():
+    result = sams.SamsSource().parse(
+        [
+            sitemap_response(["4868"]),
+            club_response("4868", {"UNLEAD": 3.049}, club_hours=CLOSED, fuel_hours=CLOSED),
+        ],
+        _ctx(),
+    )
+    assert result.stations[0].has_hours is False
+
+
+def test_a_page_without_a_timezone_takes_its_states_with_a_warning():
+    """Visalia's page carried no IANA zone on 2026-11-10."""
+    result = sams.SamsSource().parse(
+        [sitemap_response(["7718"]), club_response("7718", {"UNLEAD": 4.749}, tz=None, state="CA")],
+        _ctx(timezones={"CA": "America/Los_Angeles"}),
+    )
+    assert result.stations[0].timezone == "America/Los_Angeles"
+    assert [(w.code, w.detail) for w in result.warnings] == [("timezone_from_region", "7718")]
+
+
+def test_a_page_without_a_timezone_in_a_state_the_table_lacks_stays_none():
+    result = sams.SamsSource().parse(
+        [sitemap_response(["7718"]), club_response("7718", {"UNLEAD": 4.749}, tz=None, state="ZZ")],
+        _ctx(timezones={"CA": "America/Los_Angeles"}),
+    )
+    assert result.stations[0].timezone is None
+    assert result.warnings == []
 
 
 def test_a_non_fuel_club_redirects_and_is_skipped_without_a_warning():

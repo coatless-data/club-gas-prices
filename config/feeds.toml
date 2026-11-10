@@ -35,6 +35,17 @@ url = "https://www.samsclub.com/sitemap_locators.xml"
 # non-fuel club 307s to /club/<id>, which the source leaves unfollowed and skips.
 price_url = "https://www.samsclub.com/club/{club_id}/fuel-center"
 
+# Clubs to ask about although the sitemap does not list them yet. Both of Sam's
+# sitemaps (sitemap_locators.xml and sitemap_hyperlocals.xml) lag new clubs by
+# weeks, while a new club's fuel station often opens before the club. Find the
+# id from the club's own samsclub.com pages (/club/<id>/bakery and the like).
+# An id the sitemap also lists is asked about once, so a row can stay after the
+# sitemap catches up; remove it then to keep this list short.
+extra_ids = [
+  "4868", # Tomball TX: fuel station opened ~2026-11-05, club 2026-11-19
+  "7718", # Visalia CA: fuel station opened ~2026-10-26, club not yet open
+]
+
 # This feed's own floor, in place of countries.US's, which counts Costco's
 # stations. About 531 of ~604 clubs sell fuel; set below that so a short sweep
 # is degraded rather than a silent partial. A sweep its budget cut short reads
@@ -42,9 +53,11 @@ price_url = "https://www.samsclub.com/club/{club_id}/fuel-center"
 floor = 460
 
 # Seconds for the sweep, in place of http.toml's country budget of 480, which
-# does not fit it. The sweep is 1 sitemap + ~604 club requests, all to
-# www.samsclub.com, which http.toml paces at one per 1.0 s: about 605 s. A
+# does not fit it. The sweep is 1 sitemap + ~604 club requests + extra_ids, all
+# to www.samsclub.com, which http.toml paces at one per 1.0 s: about 607 s. A
 # non-fuel club's 307 is near-instant but still takes a pacing slot, so the
-# count, not the bytes, sets the pace. 715 s leaves ~110 s (18%) for slow pages
+# count, not the bytes, sets the pace. 715 s leaves ~108 s (18%) for slow pages
 # and retries and stays under the 720 s capture budget every feed runs inside.
+# Each extra id costs a second of that; tests/test_config.py fails once the
+# list leaves less than 15%.
 budget_s = 715.0

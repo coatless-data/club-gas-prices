@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import shutil
 from pathlib import Path
 
@@ -599,15 +600,47 @@ def test_a_feeds_floor_is_interpretation_and_its_urls_are_fetch_config(cfg):
         None,
     )
     assert cfg.feeds["US-SAMS"].floor == 460
+    # Which clubs to ask about is fetch config too.
+    assert fetch.extra_ids == cfg.feeds["US-SAMS"].extra_ids != ()
+    assert interp.extra_ids == ()
+
+
+def test_the_sams_feed_names_new_clubs_its_sitemap_does_not_list_yet(cfg):
+    """Both of Sam's sitemaps lagged two clubs whose fuel stations were open on
+    2026-11-10: Visalia CA (#7718) and Tomball TX (#4868)."""
+    assert cfg.feeds["US-SAMS"].extra_ids == ("4868", "7718")
+
+
+def _set_extra_ids(config_dir: Path, line: str) -> None:
+    """Replace feeds.toml's whole extra_ids list, comments and all, with `line`."""
+    path = config_dir / "config" / "feeds.toml"
+    text = path.read_text(encoding="utf-8")
+    replaced, count = re.subn(r"(?ms)^extra_ids = \[.*?^\]\n", line, text)
+    assert count == 1
+    path.write_text(replaced, encoding="utf-8")
+
+
+def test_a_feeds_extra_ids_default_to_none(config_copy: Path):
+    _set_extra_ids(config_copy, "")
+    assert load_config(config_copy).feeds["US-SAMS"].extra_ids == ()
+
+
+@pytest.mark.parametrize("bad", ['["7718", "visalia"]', '["7718", "7718"]', '"7718"'])
+def test_a_feeds_extra_ids_must_be_distinct_numeric_ids(config_copy: Path, bad: str):
+    _set_extra_ids(config_copy, f"extra_ids = {bad}\n")
+    with pytest.raises(ConfigError, match="extra_ids"):
+        load_config(config_copy)
 
 
 def test_the_sams_budget_fits_its_sweep_inside_the_capture(cfg):
-    """feeds.toml's arithmetic, pinned: 1 sitemap + ~604 club requests, one per
-    min_interval_seconds on one host, inside the capture budget that bounds every
-    feed thread. The country budget does not fit it, which is why the feed has
-    its own. The sweep is large enough that the headroom is 18%, not the 24% a
-    smaller feed can afford, but the pacing floor still clears with room."""
-    requests = 1 + 604
+    """feeds.toml's arithmetic, pinned: 1 sitemap + ~604 club requests + the
+    extra_ids, one per min_interval_seconds on one host, inside the capture
+    budget that bounds every feed thread. The country budget does not fit it,
+    which is why the feed has its own. The sweep is large enough that the
+    headroom is 18%, not the 24% a smaller feed can afford, but the pacing floor
+    still clears with room. A long extra_ids list would eat that headroom, and
+    this test is where it shows."""
+    requests = 1 + 604 + len(cfg.feeds["US-SAMS"].extra_ids)
     budget = cfg.feeds["US-SAMS"].budget_s
 
     assert cfg.http.budget_seconds("country") < requests * cfg.http.min_interval_seconds

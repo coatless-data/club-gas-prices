@@ -262,6 +262,8 @@ class FeedConfig:
     params: dict[str, str] = field(default_factory=dict)
     # Per-feed budget override when the default country budget is too short.
     budget_s: float | None = None
+    # Station ids to ask about although the feed's roster does not list them.
+    extra_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -349,7 +351,13 @@ class Config:
             # A feed's floor is read from here, exactly like a country's.
             feeds={
                 fid: replace(
-                    feed, url="", price_url=None, origin_postcode=None, params={}, budget_s=None
+                    feed,
+                    url="",
+                    price_url=None,
+                    origin_postcode=None,
+                    params={},
+                    budget_s=None,
+                    extra_ids=(),
                 )
                 for fid, feed in self.feeds.items()
             },
@@ -569,6 +577,7 @@ def _load_feeds(path: Path) -> dict[str, FeedConfig]:
                 ),
                 params={str(k): str(v) for k, v in (spec.get("params") or {}).items()},
                 budget_s=(float(spec["budget_s"]) if "budget_s" in spec else None),
+                extra_ids=_extra_ids(spec.get("extra_ids", []), f"{path}: feed {fid}"),
             )
         except (KeyError, TypeError, ValueError) as exc:
             raise ConfigError(f"{path}: feed {fid}: {exc}") from exc
@@ -578,6 +587,18 @@ def _load_feeds(path: Path) -> dict[str, FeedConfig]:
                 "the dispatch key, the bundle directory and the response-key prefix"
             )
     return feeds
+
+
+def _extra_ids(value: object, where: str) -> tuple[str, ...]:
+    """A feed's extra station ids: a list of distinct numeric strings."""
+    if not isinstance(value, list):
+        raise ConfigError(f"{where}: extra_ids must be a list of ids, not {value!r}")
+    ids = tuple(str(item).strip() for item in value)
+    if not all(item.isdigit() for item in ids):
+        raise ConfigError(f"{where}: extra_ids must be numeric station ids: {list(ids)}")
+    if len(set(ids)) != len(ids):
+        raise ConfigError(f"{where}: extra_ids lists an id twice: {list(ids)}")
+    return ids
 
 
 def _load_site(path: Path) -> SiteConfig:

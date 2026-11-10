@@ -9,7 +9,9 @@ source reads two public pages, on paths robots.txt permits:
 
 `sitemap_locators.xml` lists every club as `/club/<id>-<city>-<st>`. Deduplicated
 by id it is the roster -- about 604 clubs. It says nothing about fuel; that is
-the fuel-centre page's job.
+the fuel-centre page's job. It also lags new clubs by weeks, and a new club's
+fuel station often opens before the club, so the feed's `extra_ids` in
+config/feeds.toml are added to it.
 
 `/club/<id>/fuel-center` is one club per request. A club that sells fuel answers
 200 with `initialTempoData` (the `storeFuelPrices` record and the club's IANA
@@ -75,6 +77,9 @@ DEFAULT_SITEMAP_URL = "https://www.samsclub.com/sitemap_locators.xml"
 # `{club_id}` is filled per club. The bare id resolves without a city slug.
 DEFAULT_CLUB_URL = "https://www.samsclub.com/club/{club_id}/fuel-center"
 
+# The fuel station's entry among the club's services, with its own hours.
+FUEL_SERVICE = "GAS_SAMS"
+
 _CLUB_ID_RE = re.compile(r"/club/(\d+)")
 _NEXTDATA_RE = re.compile(rb'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', re.DOTALL)
 
@@ -106,6 +111,19 @@ def club_ids(sitemap_text: str | None) -> list[str]:
         return []
     seen = {m.group(1) for m in _CLUB_ID_RE.finditer(sitemap_text)}
     return sorted(seen, key=int)
+
+
+def roster(sitemap_text: str | None, extra_ids: tuple[str, ...] = ()) -> list[str]:
+    """The sitemap's clubs plus the configured extras, in numeric order.
+
+    Empty when the sitemap lists nothing: without it the feed fails, and asking
+    about the extras alone would spend requests on a capture that cannot
+    publish.
+    """
+    listed = club_ids(sitemap_text)
+    if not listed:
+        return []
+    return sorted(set(listed) | set(extra_ids), key=int)
 
 
 def _nextdata(body: bytes) -> dict | None:
@@ -186,11 +204,38 @@ def node_detail(page_props: dict) -> dict:
     return node if isinstance(node, dict) else {}
 
 
-def _has_hours(node: dict) -> bool | None:
-    hours = node.get("operationalHours")
+def _open_some_day(entry: Any) -> bool | None:
+    """Whether a club or service lists an open day; None when it lists no hours."""
+    if not isinstance(entry, dict):
+        return None
+    if entry.get("open24Hours") is True:
+        return True
+    hours = entry.get("operationalHours")
     if not isinstance(hours, list):
         return None
     return any(isinstance(day, dict) and not day.get("closed") for day in hours)
+
+
+def _has_hours(node: dict) -> bool | None:
+    """Whether the club or its fuel station lists an open day.
+
+    Either alone misleads. A new club lists no open day while its fuel station,
+    open first, does: Visalia (#7718) and Tomball (#4868) on 2026-11-10. And
+    three open clubs list their fuel station closed every day while their prices
+    move several times a week: Bartlett (#6260), Florence (#8133) and
+    Springfield (#8215). So a station has no hours only when neither does.
+    """
+    services = node.get("services")
+    fuel = next(
+        (
+            service
+            for service in (services if isinstance(services, list) else [])
+            if isinstance(service, dict) and service.get("name") == FUEL_SERVICE
+        ),
+        None,
+    )
+    verdicts = [v for v in (_open_some_day(node), _open_some_day(fuel)) if v is not None]
+    return any(verdicts) if verdicts else None
 
 
 def _prices(block: dict | None) -> tuple[tuple[RawPrice, ...], list[tuple[int, RawPrice]]]:
@@ -328,7 +373,7 @@ class SamsSource:
             return responses
         responses.append(sitemap)
 
-        for club_id in club_ids(_text(sitemap)):
+        for club_id in roster(_text(sitemap), cfg["extra_ids"]):
             url = club_url(cfg["club_url"], club_id)
             key = KEY_CLUB.format(club_id=club_id)
             if client.abandoned(url):
@@ -365,7 +410,7 @@ class SamsSource:
             requests=sum(1 for r in responses if r.error not in NOT_SENT),
         )
         sitemap_response = next((r for r in responses if r.key == KEY_SITEMAP), None)
-        ids = club_ids(_text(sitemap_response))
+        ids = roster(_text(sitemap_response), _feed_cfg(ctx)["extra_ids"])
         if not ids:
             result.errors.append(
                 Error(
@@ -430,9 +475,17 @@ class SamsSource:
                 if club_id is not None:
                     result.warnings.append(Warning(code="no_current_price", detail=club_id))
                 continue
-            result.stations.append(
-                _station(club_id or "", node_detail(props), iana_timezone(props), prices)
-            )
+            node = node_detail(props)
+            timezone = iana_timezone(props)
+            if timezone is None:
+                # Visalia's page carried no zone on 2026-11-10; normalize would
+                # drop the station as no_timezone without one.
+                timezone = _region_timezone(ctx, (node.get("address") or {}).get("state"))
+                if timezone is not None:
+                    result.warnings.append(
+                        Warning(code="timezone_from_region", detail=club_id or "")
+                    )
+            result.stations.append(_station(club_id or "", node, timezone, prices))
             if club_id is not None:
                 priced.add(club_id)
         result.errors.extend(_price_errors(failed, sent))
@@ -465,7 +518,18 @@ def _feed_cfg(ctx: CaptureContext) -> dict:
     return {
         "sitemap_url": get("url", DEFAULT_SITEMAP_URL),
         "club_url": get("price_url", DEFAULT_CLUB_URL),
+        "extra_ids": tuple(get("extra_ids", ())),
     }
+
+
+def _region_timezone(ctx: CaptureContext, region: str | None) -> str | None:
+    """The US region table, as the Costco US feed falls back to it."""
+    countries = getattr(getattr(ctx, "interp_config", None), "countries", None) or {}
+    resolver = getattr(countries.get(COUNTRY), "timezone_for_region", None)
+    if resolver is None or not region:
+        return None
+    zone = str(resolver(region) or "").strip()
+    return zone or None
 
 
 __all__ = [
@@ -479,5 +543,6 @@ __all__ = [
     "fuel_price_block",
     "iana_timezone",
     "node_detail",
+    "roster",
     "store_fuel_prices",
 ]
