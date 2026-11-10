@@ -1,4 +1,5 @@
 brand,source_station_id,name,city,region,postcode,lat,lon,timezone,note
 COSTCO,1680,Camarillo,Camarillo,CA,93010-9122,34.2164,-119.0376,America/Los_Angeles,Prices live on 2026-09-15; the costco.ca lookup shows openDate Oct 30 2026 and no gas hours
 COSTCO,1765,Chandler Business Center,Chandler,AZ,,33.3062,-111.8413,America/Phoenix,Business Center priced 4.999 regular on 2026-09-15 but absent from ecom-api
-COSTCO,1772,Mission Viejo,Mission Viejo,CA,,33.6103,-117.6890,America/Los_Angeles,Priced 5.849 regular on 2026-09-15; reported as a standalone Mission Viejo CA gas station but unverified - name and coordinates to be confirmed
+COSTCO,1772,Mission Viejo Gas Station,Mission Viejo,CA,92691-6902,33.588125,-117.673325,America/Los_Angeles,Costco's first standalone gas station at 25732 El Paseo; opened 2026-06-24; absent from warehouses.json but listed by ecom-api salesLocations.json as subType Standalone Gas Station (checked 2026-11-10)
+COSTCO,1875,Kansas City Bus Ctr,Kansas City,MO,64111-1119,39.06731066,-94.58122881,America/Chicago,Gas station of the Midtown warehouse (#375 at 241 E Linwood Blvd) which closed 2026-10-01 to become a Business Center; the gas station stayed open and prices under 1875; salesLocations.json gives openingDate 2027-04-01 for the Business Center so keep this row or that date will drop the live station
