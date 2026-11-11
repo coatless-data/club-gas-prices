@@ -531,7 +531,7 @@ def _checkout(tmp_path: Path, text: str | None = WATCH_HEADER + ON_HOLD) -> Simp
     return cfg
 
 
-def _sweep(tmp_path, cfg, prices=None, issues=None):
+def _sweep(tmp_path, cfg, prices=None, issues=None, watch=True):
     store = _seed(
         tmp_path,
         entries={"2026-10-01T0617Z": _entry("2026-10-01T0617Z", "ok")},
@@ -539,7 +539,9 @@ def _sweep(tmp_path, cfg, prices=None, issues=None):
     )
     if prices is None:
         prices = json.loads(FIXTURE.read_text(encoding="utf-8"))
-    return discover(store, FakeClient(prices), cfg, issues or RecordingIssues(), now=NOW)
+    return discover(
+        store, FakeClient(prices), cfg, issues or RecordingIssues(), now=NOW, watch=watch
+    )
 
 
 def test_a_new_candidate_is_recorded_on_hold_from_the_next_capture(tmp_path):
@@ -617,3 +619,15 @@ def test_the_issue_says_how_to_turn_a_station_on_and_what_is_still_held(tmp_path
 def test_without_a_checkout_nothing_is_written(tmp_path):
     result = _sweep(tmp_path, _cfg())
     assert result.watched == []
+
+
+def test_without_watch_nothing_is_written_and_the_issue_says_how_to_add_them(tmp_path):
+    """A maintainer running discover on their own machine keeps their working tree."""
+    cfg = _checkout(tmp_path)
+    issues = RecordingIssues()
+    result = _sweep(tmp_path, cfg, issues=issues, watch=False)
+    assert result.watched == []
+    assert (cfg.root / "config" / "watch.csv").read_text(encoding="utf-8") == (
+        WATCH_HEADER + ON_HOLD
+    )
+    assert "`config/watch.csv`" in issues.bodies[0]

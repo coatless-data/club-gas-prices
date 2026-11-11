@@ -405,7 +405,9 @@ def append_watch(path: Path, candidates: list[dict], now: datetime) -> None:
         handle.write(buffer.getvalue())
 
 
-def _watch_text(candidates: list[dict], watched: list[str], on_hold: list[dict]) -> list[str]:
+def _watch_text(
+    candidates: list[dict], watched: list[str], unwatched: list[str], on_hold: list[dict]
+) -> list[str]:
     """The issue's closing lines: what was recorded, and how to publish it."""
     lines = [""]
     if watched:
@@ -413,11 +415,16 @@ def _watch_text(candidates: list[dict], watched: list[str], on_hold: list[dict])
             f"{len(watched)} new id(s) above are now in `config/watch.csv` with status "
             "`hold`: every capture records their prices without publishing them."
         )
-        if len(watched) < len(candidates) and len(watched) == MAX_NEW_WATCH:
+        if unwatched and len(watched) == MAX_NEW_WATCH:
             lines.append(
                 f"Only the first {MAX_NEW_WATCH} of {len(candidates)} were added; add the "
                 "rest by hand if they turn out to be real."
             )
+    elif unwatched:
+        lines.append(
+            f"{len(unwatched)} id(s) above are not in `config/watch.csv`. Add the real ones "
+            "there with status `hold` to record their prices until you decide."
+        )
     held_before = [row for row in on_hold if row["source_station_id"] not in set(watched)]
     if held_before:
         listed = ", ".join(
@@ -427,11 +434,11 @@ def _watch_text(candidates: list[dict], watched: list[str], on_hold: list[dict])
     lines += [
         "",
         "To publish a real station, set its `status` to `on` in `config/watch.csv` and its",
-        "`publish_from` to the first capture date whose prices are real. If Costco's",
-        "locator does not list it, also add it to `config/us_extra_ids.csv` with `brand`",
-        "(COSTCO), `name`, `city`, `region`, `postcode`, `lat`, `lon`, `timezone` and",
-        "`note`. Then run the Rebuild workflow (scope `month`) for each month since",
-        "`publish_from`, so the captures it was held in are published too.",
+        "`publish_from` to the first `capture_date` (a UTC date) whose prices are real.",
+        "If Costco's locator does not list it, also add it to `config/us_extra_ids.csv`",
+        "with `brand` (COSTCO), `name`, `city`, `region`, `postcode`, `lat`, `lon`,",
+        "`timezone` and `note`. Then run the Rebuild workflow (scope `month`) for each",
+        "month since `publish_from`, so the captures it was held in are published too.",
         "Delete the rows that turn out to be placeholders, then close this issue.",
     ]
     return lines
@@ -445,6 +452,7 @@ def _issue_body(
     run: str | None = None,
     *,
     watched: list[str] | None = None,
+    unwatched: list[str] | None = None,
     on_hold: list[dict] | None = None,
 ) -> tuple[str, int]:
     """The issue body, and how many of the candidates it lists.
@@ -461,7 +469,7 @@ def _issue_body(
         "| warehouse id | regular | premium | diesel | other grades | check |",
         "| --- | --- | --- | --- | --- | --- |",
     ]
-    foot = _watch_text(candidates, watched or [], on_hold or [])
+    foot = _watch_text(candidates, watched or [], unwatched or [], on_hold or [])
     rows = [_candidate_row(candidate, url) for candidate in candidates]
     body = "\n".join(head + rows + foot)
     if _size(body) <= ISSUE_BODY_LIMIT:
@@ -484,7 +492,14 @@ def _candidate_sort_key(candidate: dict) -> int:
     return int(warehouse_id) if warehouse_id.isdigit() else 0
 
 
-def discover(store: ReleaseStore, client, cfg, issues: Issues, *, now: datetime) -> DiscoverResult:
+def discover(
+    store: ReleaseStore, client, cfg, issues: Issues, *, now: datetime, watch: bool = False
+) -> DiscoverResult:
+    """Sweep, report, and with `watch` append the new candidates to config/watch.csv.
+
+    `watch` is the Discover workflow's flag: a run on a maintainer's machine
+    leaves their working tree alone.
+    """
     selected = select_bundle(store, now=now)
     if selected is None:
         print(
@@ -521,12 +536,23 @@ def discover(store: ReleaseStore, client, cfg, issues: Issues, *, now: datetime)
             )
 
     candidates.sort(key=_candidate_sort_key)
-    on_hold = [row for row in _watch_rows(cfg) if row.get("status") == "hold"]
-    watched = _start_watching(cfg, candidates, now)
+    rows = _watch_rows(cfg)
+    on_hold = [row for row in rows if row.get("status") == "hold"]
+    known = {str(row["source_station_id"]) for row in rows}
+    new = [c for c in candidates if c["warehouse_id"] not in known]
+    watched = _start_watching(cfg, new, now) if watch else []
+    unwatched = [c["warehouse_id"] for c in new if c["warehouse_id"] not in set(watched)]
     if candidates:
         title = f"US station discovery {now:%Y-%m}"
         body, listed = _issue_body(
-            candidates, bundle, now, url, run_url(), watched=watched, on_hold=on_hold
+            candidates,
+            bundle,
+            now,
+            url,
+            run_url(),
+            watched=watched,
+            unwatched=unwatched,
+            on_hold=on_hold,
         )
         if listed < len(candidates):
             # The issue points here for the rows it had no room for.
@@ -545,16 +571,13 @@ def discover(store: ReleaseStore, client, cfg, issues: Issues, *, now: datetime)
 
 
 def _start_watching(cfg, candidates: list[dict], now: datetime) -> list[str]:
-    """Append the candidates not already watched to the checkout's watch.csv.
+    """Append up to MAX_NEW_WATCH unwatched candidates to the checkout's watch.csv.
 
     Returns the ids added. Without a checkout (no `cfg.root`) nothing is written.
     """
     root = getattr(cfg, "root", None)
-    if root is None:
-        return []
-    known = {str(row["source_station_id"]) for row in _watch_rows(cfg)}
-    new = [c for c in candidates if c["warehouse_id"] not in known][:MAX_NEW_WATCH]
-    if not new:
+    new = candidates[:MAX_NEW_WATCH]
+    if root is None or not new:
         return []
     path = Path(root) / "config" / "watch.csv"
     try:

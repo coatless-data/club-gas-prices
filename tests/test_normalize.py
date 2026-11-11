@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import dataclasses
 from datetime import UTC, date, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -24,6 +25,7 @@ from club_gas.schema import (
     STATION_SCHEMA,
     round_fx_columns,
     round_price_columns,
+    validate_held,
 )
 from club_gas.sources.base import CaptureContext, FetchResult, RawPrice, RawStation
 
@@ -1003,3 +1005,36 @@ def test_a_station_with_nothing_to_record_is_not_held():
 def test_an_empty_country_returns_a_typed_held_frame():
     out = normalize(fetch_result("MX", "costco-occ", []), fx_rates(), context())
     assert dict(out.held.schema) == HELD_SCHEMA
+
+
+def test_a_held_station_whose_rows_break_the_schema_is_skipped_with_a_warning():
+    """Held rows must never cost published rows: a gated station with no name
+    used to be dropped silently, and must not now fail its whole feed."""
+    unnamed = station("9999", [("regular", "3.099")], has_hours=False)
+    unnamed = dataclasses.replace(unnamed, name=None)
+    result = fetch_result(
+        "US",
+        "costco-us-gasprices",
+        [unnamed, station("1838", [("regular", "3.599")], opening_date=date(2026, 10, 2))],
+    )
+    out = normalize(result, fx_rates(), context())
+    assert held_ids(out) == [("1838", "not_open")]
+    assert reasons(out.drops) == ["no_hours", "not_open"]
+    invalid = [w for w in out.warnings if w.code == "held_rows_invalid"]
+    assert [w.detail.split(":")[0] for w in invalid] == ["9999"]
+    validate_held(out.held)
+
+
+def test_a_second_held_station_with_the_same_key_is_skipped_with_a_warning():
+    result = fetch_result(
+        "US",
+        "costco-us-gasprices",
+        [
+            station("1838", [("regular", "3.599")], opening_date=date(2026, 10, 2)),
+            station("1838", [("regular", "3.699")], opening_date=date(2026, 10, 2)),
+        ],
+    )
+    out = normalize(result, fx_rates(), context())
+    assert out.held["price"].to_list() == [3.599]
+    assert [w.code for w in out.warnings if w.code == "held_rows_invalid"] == ["held_rows_invalid"]
+    validate_held(out.held)

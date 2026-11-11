@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import polars as pl
 
 from club_gas.fx import FxRates
-from club_gas.schema import HELD_SCHEMA, ROW_SCHEMA, STATION_SCHEMA
+from club_gas.schema import HELD_SCHEMA, ROW_SCHEMA, STATION_SCHEMA, SchemaError, validate_held
 from club_gas.sources.base import CaptureContext, FetchResult, RawStation, Warning
 
 LITRES_PER_US_GALLON = 3.785411784
@@ -348,26 +348,48 @@ def normalize(result: FetchResult, fx: FxRates, ctx: CaptureContext) -> Normaliz
     held_records: list[dict] = []
     station_records: list[dict] = []
 
+    held_keys: set[str] = set()
+
     def hold(station: RawStation, station_key: str, reason: str) -> None:
         """Record a station's rows without publishing them.
 
         Its price-level drops and warnings are discarded: these stations were
         dropped before price parsing until held stations existed, and the
         status checks must keep seeing the counts they saw then.
+
+        Its rows are checked here, one station at a time, so that a held
+        station with bad data -- no name, say -- is skipped with a warning
+        instead of failing the feed's published rows along with it.
         """
         unit = _price_unit(station, country_cfg)
         surviving, _, _ = _surviving_prices(
             station, station_key, country, brand, unit, country_cfg, grades, set()
         )
-        for record in _price_records(
-            station, station_key, country, brand, unit, surviving, result, fx, ctx
-        ):
-            held_records.append({**record, "hold_reason": reason})
+        records = [
+            {**record, "hold_reason": reason}
+            for record in _price_records(
+                station, station_key, country, brand, unit, surviving, result, fx, ctx
+            )
+        ]
+        if not records:
+            return
+        sid = station.source_station_id
+        if station_key in held_keys:
+            warnings.append(Warning(code="held_rows_invalid", detail=f"{sid}: held twice"))
+            return
+        try:
+            validate_held(pl.DataFrame(records, schema=HELD_SCHEMA))
+        except SchemaError as exc:
+            warnings.append(Warning(code="held_rows_invalid", detail=f"{sid}: {exc}"))
+            return
+        held_keys.add(station_key)
+        held_records.extend(records)
 
     for station in result.stations:
         sid = station.source_station_id
         station_key = f"{country}-{brand}-{sid}"
         publish_from = turned_on.get(sid)
+        # capture_date is the capture's UTC date, the column publish_from names.
         is_on = publish_from is not None and publish_from <= ctx.capture_date
 
         # Step 1: the source filter. A station watch.csv has turned on skips the

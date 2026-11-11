@@ -139,9 +139,9 @@ def test_discover_conventions_and_settings():
     assert "permissions:\n  contents: write\n  issues: write\n" in text
     assert '- cron: "41 3 2 * *"' in text
     assert "    timeout-minutes: 20\n" in text
-    # `discover` takes only an optional --root, which defaults to the working
-    # directory, so the workflow passes no flag at all.
-    assert "run: uv run club-gas discover\n" in text
+    # --root defaults to the working directory; --watch appends the new ids to
+    # config/watch.csv, which only the workflow should do.
+    assert "run: uv run club-gas discover --watch\n" in text
     # discover only reads releases, so it must never claim the writer flag.
     assert "CLUB_GAS_WRITER" not in text
 
@@ -152,7 +152,7 @@ def test_discover_commits_the_ids_it_starts_watching():
     push is rebased rather than reset, so the appended rows survive it."""
     text = read("discover.yml")
     assert "ref: ${{ github.event.repository.default_branch || github.ref_name }}" in text
-    discover_at = text.index("run: uv run club-gas discover\n")
+    discover_at = text.index("run: uv run club-gas discover --watch\n")
     commit_at = text.index("- name: Commit config/watch.csv\n")
     assert discover_at < commit_at
     step = text[commit_at:]
