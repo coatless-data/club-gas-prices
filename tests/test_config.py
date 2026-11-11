@@ -231,7 +231,7 @@ def test_us_extra_ids_table(cfg):
         "note",
     ]
     ids = df["source_station_id"].to_list()
-    assert ids == ["1680", "1765", "1772", "1875"]
+    assert ids == ["1680", "1765", "1772", "1875", "1165"]
     # ecom-api does not list these ids at all, so the CSV is their only source
     # of coordinates and timezone: a null here means normalize drops them.
     assert df["name"].null_count() == 0
@@ -719,10 +719,12 @@ def test_watch_table(cfg):
         "note",
     ]
     rows = {(r["feed"], r["source_station_id"]): r for r in cfg.watch.iter_rows(named=True)}
-    # The one candidate from issue #5 nobody has identified: recorded, not published.
-    assert rows[("US-COSTCO", "1165")]["status"] == "hold"
+    # Issue #5's last candidate, identified as the DC gas station and turned on.
+    # It also has a us_extra_ids.csv row, which gives it a location and timezone.
+    assert rows[("US-COSTCO", "1165")]["status"] == "on"
     assert rows[("US-COSTCO", "1165")]["detected"] == "2026-11-02"
-    assert rows[("US-COSTCO", "1165")]["publish_from"] is None
+    assert rows[("US-COSTCO", "1165")]["publish_from"] == "2026-11-11"
+    assert "1165" in cfg.us_extra_ids["source_station_id"].to_list()
 
 
 def test_watch_csv_is_optional(config_copy: Path):

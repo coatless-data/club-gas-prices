@@ -1,2 +1,2 @@
 feed,source_station_id,detected,status,publish_from,note
-US-COSTCO,1165,2026-11-02,hold,,Found by the 2026-11-02 sweep (issue #5) at regular 3.829 premium 4.779; 3.659/4.799 on 2026-11-11 so the price is maintained; absent from salesLocations.json and the costco.ca US lookup on 2026-11-11 and no web page names the id; needs a verified location before it can get a us_extra_ids.csv row
+US-COSTCO,1165,2026-11-02,on,2026-11-11,Found by the 2026-11-02 sweep (issue #5); identified on 2026-11-11 as the gas station of the DC warehouse (#1120) and given a us_extra_ids.csv row; publish_from is the first capture_date that polled it as a watched id
