@@ -6,6 +6,7 @@ import pytest
 from club_gas.schema import (
     FX_SCHEMA,
     FX_SORT,
+    HELD_SCHEMA,
     ROW_SCHEMA,
     ROW_SORT,
     STATION_SCHEMA,
@@ -14,6 +15,7 @@ from club_gas.schema import (
     cast_to_schema,
     empty_frame,
     read_csv,
+    read_held_csv_gz,
     read_rows_csv_gz,
     round_fx_columns,
     round_price_columns,
@@ -22,6 +24,7 @@ from club_gas.schema import (
     validate_rows,
     validate_stations,
     write_csv,
+    write_held_csv_gz,
     write_parquet,
     write_rows_csv_gz,
 )
@@ -474,3 +477,26 @@ def test_write_parquet_validates_sort_by_columns_exist(tmp_path):
     with pytest.raises(SchemaError, match="sort_by columns not in frame: nonexistent"):
         write_parquet(df, tmp_path / "never-written.parquet", sort_by=["nonexistent"])
     assert not (tmp_path / "never-written.parquet").exists()
+
+
+def held_frame(*rows: dict[str, object]) -> pl.DataFrame:
+    return pl.DataFrame(list(rows), schema=dict(HELD_SCHEMA), orient="row")
+
+
+def test_held_rows_are_price_rows_with_a_reason():
+    assert list(HELD_SCHEMA) == [*ROW_SCHEMA, "hold_reason"]
+    assert HELD_SCHEMA["hold_reason"] == pl.String()
+
+
+def test_held_csv_gz_round_trips(tmp_path):
+    df = held_frame({**row(), "hold_reason": "not_open"}, {**us_row(), "hold_reason": "watch"})
+    path = write_held_csv_gz(df, tmp_path / "held.csv.gz")
+    back = read_held_csv_gz(path)
+    assert back.schema == pl.Schema(HELD_SCHEMA)
+    assert back["hold_reason"].to_list() == ["not_open", "watch"]
+    assert back["price_usd_per_gallon"].to_list() == [3.6568, 3.999]
+
+
+def test_held_csv_gz_refuses_a_row_with_no_reason(tmp_path):
+    with pytest.raises(SchemaError, match="hold_reason"):
+        write_held_csv_gz(held_frame({**row(), "hold_reason": None}), tmp_path / "held.csv.gz")

@@ -155,6 +155,8 @@ def test_rebuild_stamps_the_manifest_with_the_git_sha_and_config_shas(tmp_path, 
         "config/grades.csv",
         "config/station_links.csv",
         "config/countries.toml",
+        "config/watch.csv",
+        "config/us_extra_ids.csv",
     }
     assert entry["rows_by_capture_date"] == {"2026-09-01": 3}
     assert entry["daily_files"]["2026-09-01"]["rows"] == 3
@@ -522,3 +524,84 @@ def test_a_response_group_no_source_claims_refuses_the_rebuild(tmp_path, monkeyp
 
     with pytest.raises(RuntimeError, match="which no source claims"):
         rebuild(store, cfg, scope="month", value="2026-09", now=NOW)
+
+
+US_PRICES = (
+    b'{"1364":{"premium":"4.629","regular":"3.999"},"1838":{"premium":"4.199","regular":"3.599"}}'
+)
+
+
+def _us_capture_transport():
+    """The US locator fixture, one price body for every batch, and the rates."""
+    ecom = (REPO_ROOT / "tests" / "fixtures" / "us_ecom_warehouses.json").read_bytes()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        host = request.url.host
+        if host == "api.frankfurter.dev":
+            return httpx.Response(200, content=FX_BODY)
+        if host == "ecom-api.costco.com":
+            return httpx.Response(200, content=ecom)
+        if host == "www.costco.com":
+            return httpx.Response(200, content=US_PRICES, headers={"Content-Type": "text/html"})
+        return httpx.Response(404, content=b"{}")
+
+    return httpx.MockTransport(handler)
+
+
+def _turn_on(checkout: Path, line: str) -> None:
+    with (checkout / "config" / "watch.csv").open("a", encoding="utf-8") as handle:
+        handle.write(line + "\n")
+
+
+@pytest.mark.parametrize(
+    ("line", "published"),
+    [
+        (None, False),
+        ("US-COSTCO,1838,2026-09-01,on,2026-09-01,real prices before its opening date", True),
+        ("US-COSTCO,1838,2026-09-01,on,2026-09-02,the first capture was a placeholder", False),
+    ],
+)
+def test_turning_a_held_station_on_publishes_the_captures_it_was_held_in(
+    tmp_path, monkeypatch, line, published
+):
+    """The point of holding: Lees Summit (1838) opens 2026-10-02 by its listed
+    date, so the 2026-09-01 capture held it. A watch.csv row made afterwards
+    turns it on, and a rebuild publishes what that capture recorded -- from
+    publish_from on, never before it."""
+    monkeypatch.delenv("GITHUB_RUN_ID", raising=False)
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    checkout = checkout_with_config(tmp_path)
+    (checkout / "status").mkdir(exist_ok=True)
+    monkeypatch.chdir(checkout)
+    store = open_store(f"local:{tmp_path / 'releases'}")
+    cfg = load_config(checkout)
+    result = run_capture(
+        cfg,
+        store,
+        tmp_path / "out",
+        countries=["US"],
+        force_fallback=set(),
+        now=CAPTURE_NOW,
+        client=Client(cfg.http, transport=_us_capture_transport()),
+    )
+    assert result.status["feeds"]["US-COSTCO"]["held"]["1838"] == "not_open"
+    seed_month(
+        store,
+        "2026-09",
+        bundles={CAPTURE_ID: result.out / "bundle.tar.gz"},
+        work=tmp_path / "seed",
+    )
+
+    if line is not None:
+        _turn_on(checkout, line)
+    rebuild(store, load_config(checkout), scope="month", value="2026-09", now=NOW)
+
+    rows = _daily(store, "data-2026-09", "2026-09-01", tmp_path, "held.csv.gz")
+    keys = set(rows["station_key"].to_list())
+    assert "US-COSTCO-1364" in keys
+    assert ("US-COSTCO-1838" in keys) is published
+    if published:
+        regular = rows.filter(
+            (pl.col("station_key") == "US-COSTCO-1838") & (pl.col("grade_raw") == "regular")
+        )
+        assert regular["price"].to_list() == [3.599]

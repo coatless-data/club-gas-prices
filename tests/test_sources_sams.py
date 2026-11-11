@@ -14,9 +14,10 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import httpx
+import polars as pl
 import pytest
 
-from club_gas.config import HttpConfig
+from club_gas.config import WATCH_SCHEMA, HttpConfig
 from club_gas.http import BudgetExceeded, Client
 from club_gas.sources import sams
 from club_gas.sources.base import RawResponse
@@ -169,11 +170,29 @@ class ScriptedClient:
         return self.answer(key)
 
 
-def _ctx(extra_ids: tuple[str, ...] = (), timezones: dict[str, str] | None = None):
+def _ctx(
+    extra_ids: tuple[str, ...] = (),
+    timezones: dict[str, str] | None = None,
+    watch: list[tuple[str, str]] | None = None,
+):
     feeds = {sams.FEED: SimpleNamespace(extra_ids=extra_ids)} if extra_ids else {}
     us = SimpleNamespace(timezone_for_region=lambda region: (timezones or {}).get(region))
+    watched = pl.DataFrame(
+        [
+            {
+                "feed": feed,
+                "source_station_id": sid,
+                "detected": "2026-11-10",
+                "status": "hold",
+                "publish_from": None,
+                "note": None,
+            }
+            for feed, sid in (watch or [])
+        ],
+        schema=WATCH_SCHEMA,
+    )
     return SimpleNamespace(
-        fetch_config=SimpleNamespace(feeds=feeds),
+        fetch_config=SimpleNamespace(feeds=feeds, watch=watched),
         interp_config=SimpleNamespace(countries={"US": us}),
         capture_date=None,
     )
@@ -279,6 +298,43 @@ def test_an_extra_id_the_budget_never_reached_is_named():
         ("not_reached", "8300"),
         ("budget_exhausted", "2 of 3 clubs not reached"),
     ]
+
+
+def test_watched_clubs_are_swept_with_the_rest_in_numeric_order():
+    """A club found by hand is recorded from the next capture, held until it
+    is turned on."""
+
+    def answer(key):
+        if key == sams.KEY_SITEMAP:
+            return sitemap_response(["6376", "8248"])
+        return club_response(key.split("-")[-1], {"UNLEAD": 3.5})
+
+    client = ScriptedClient(answer)
+    ctx = _ctx(
+        extra_ids=("7718",),
+        watch=[("US-SAMS", "4868"), ("US-SAMS", "8248"), ("US-COSTCO", "1165")],
+    )
+    responses = sams.SamsSource().fetch(client, ctx)
+
+    assert client.keys == [
+        sams.KEY_SITEMAP,
+        sams.KEY_CLUB.format(club_id="4868"),
+        sams.KEY_CLUB.format(club_id="6376"),
+        sams.KEY_CLUB.format(club_id="7718"),
+        sams.KEY_CLUB.format(club_id="8248"),
+    ]
+    origins = {
+        s.source_station_id: s.id_origin for s in sams.SamsSource().parse(responses, ctx).stations
+    }
+    # Only the club nothing else lists is held for being watched; the sitemap's
+    # and the extras' clubs are published as before.
+    assert origins == {"4868": "watch", "6376": "occ", "7718": "occ", "8248": "occ"}
+
+
+def test_watched_clubs_are_not_swept_when_the_sitemap_fails():
+    client = ScriptedClient(lambda key: response(sams.KEY_SITEMAP, PERIMETERX, status=412))
+    sams.SamsSource().fetch(client, _ctx(watch=[("US-SAMS", "4868")]))
+    assert client.keys == [sams.KEY_SITEMAP]
 
 
 def test_a_new_club_whose_fuel_station_opened_first_has_hours():

@@ -11,7 +11,9 @@ source reads two public pages, on paths robots.txt permits:
 by id it is the roster -- about 604 clubs. It says nothing about fuel; that is
 the fuel-centre page's job. It also lags new clubs by weeks, and a new club's
 fuel station often opens before the club, so the feed's `extra_ids` in
-config/feeds.toml are added to it.
+config/feeds.toml are added to it, and so are the US-SAMS rows of
+config/watch.csv. A club only watch.csv names is recorded but held until that
+file turns it on.
 
 `/club/<id>/fuel-center` is one club per request. A club that sells fuel answers
 200 with `initialTempoData` (the `storeFuelPrices` record and the club's IANA
@@ -282,7 +284,11 @@ def _below_regular(prices: tuple[RawPrice, ...]) -> tuple[tuple[RawPrice, ...], 
 
 
 def _station(
-    club_id: str, node: dict, timezone: str | None, prices: tuple[RawPrice, ...]
+    club_id: str,
+    node: dict,
+    timezone: str | None,
+    prices: tuple[RawPrice, ...],
+    id_origin: str = "occ",
 ) -> RawStation:
     address = node.get("address") or {}
     point = node.get("geoPoint") or {}
@@ -292,7 +298,7 @@ def _station(
         # Every club's fuel-centre page resolves from the id alone, with no city
         # slug, so the station page always gets a working link.
         alt_id=str(club_id),
-        id_origin="occ",
+        id_origin=id_origin,
         ecom_state=None,
         name=name,
         name_local=None,
@@ -373,7 +379,7 @@ class SamsSource:
             return responses
         responses.append(sitemap)
 
-        for club_id in roster(_text(sitemap), cfg["extra_ids"]):
+        for club_id in roster(_text(sitemap), (*cfg["extra_ids"], *cfg["watch_ids"])):
             url = club_url(cfg["club_url"], club_id)
             key = KEY_CLUB.format(club_id=club_id)
             if client.abandoned(url):
@@ -410,7 +416,10 @@ class SamsSource:
             requests=sum(1 for r in responses if r.error not in NOT_SENT),
         )
         sitemap_response = next((r for r in responses if r.key == KEY_SITEMAP), None)
-        ids = roster(_text(sitemap_response), _feed_cfg(ctx)["extra_ids"])
+        cfg = _feed_cfg(ctx)
+        ids = roster(_text(sitemap_response), (*cfg["extra_ids"], *cfg["watch_ids"]))
+        # Clubs asked about only because watch.csv names them.
+        watched = set(cfg["watch_ids"]) - set(roster(_text(sitemap_response), cfg["extra_ids"]))
         if not ids:
             result.errors.append(
                 Error(
@@ -485,7 +494,8 @@ class SamsSource:
                     result.warnings.append(
                         Warning(code="timezone_from_region", detail=club_id or "")
                     )
-            result.stations.append(_station(club_id or "", node, timezone, prices))
+            origin = "watch" if club_id in watched else "occ"
+            result.stations.append(_station(club_id or "", node, timezone, prices, origin))
             if club_id is not None:
                 priced.add(club_id)
         result.errors.extend(_price_errors(failed, sent))
@@ -519,7 +529,17 @@ def _feed_cfg(ctx: CaptureContext) -> dict:
         "sitemap_url": get("url", DEFAULT_SITEMAP_URL),
         "club_url": get("price_url", DEFAULT_CLUB_URL),
         "extra_ids": tuple(get("extra_ids", ())),
+        "watch_ids": _watch_ids(ctx),
     }
+
+
+def _watch_ids(ctx: CaptureContext) -> tuple[str, ...]:
+    """The clubs config/watch.csv names for this feed, from the fetch view."""
+    frame = getattr(ctx.fetch_config, "watch", None)
+    if frame is None or not hasattr(frame, "filter") or frame.is_empty():
+        return ()
+    ours = frame.filter(frame["feed"] == FEED)["source_station_id"].to_list()
+    return tuple(sorted({str(i) for i in ours if i}, key=int))
 
 
 def _region_timezone(ctx: CaptureContext, region: str | None) -> str | None:

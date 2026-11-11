@@ -135,7 +135,8 @@ def test_discover_conventions_and_settings():
     text = read("discover.yml")
     assert text.startswith("name: Discover\n")
     assert SERIAL_CONCURRENCY in text
-    assert "permissions:\n  contents: read\n  issues: write\n" in text
+    # contents: write is for the commit of config/watch.csv below, not releases.
+    assert "permissions:\n  contents: write\n  issues: write\n" in text
     assert '- cron: "41 3 2 * *"' in text
     assert "    timeout-minutes: 20\n" in text
     # `discover` takes only an optional --root, which defaults to the working
@@ -143,6 +144,22 @@ def test_discover_conventions_and_settings():
     assert "run: uv run club-gas discover\n" in text
     # discover only reads releases, so it must never claim the writer flag.
     assert "CLUB_GAS_WRITER" not in text
+
+
+def test_discover_commits_the_ids_it_starts_watching():
+    """The sweep appends new ids to config/watch.csv so captures record them;
+    the run commits that file to the branch captures check out, and a rejected
+    push is rebased rather than reset, so the appended rows survive it."""
+    text = read("discover.yml")
+    assert "ref: ${{ github.event.repository.default_branch || github.ref_name }}" in text
+    discover_at = text.index("run: uv run club-gas discover\n")
+    commit_at = text.index("- name: Commit config/watch.csv\n")
+    assert discover_at < commit_at
+    step = text[commit_at:]
+    assert "git add config/watch.csv\n" in step
+    assert 'git push --quiet origin "HEAD:${BRANCH}"' in step
+    assert "git rebase --quiet FETCH_HEAD" in step
+    assert "reset --quiet --hard" not in step
 
 
 def test_rebuild_conventions_and_settings():

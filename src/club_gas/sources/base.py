@@ -54,7 +54,7 @@ class RawPrice:
 class RawStation:
     source_station_id: str
     alt_id: str | None
-    id_origin: Literal["ecom", "extra", "seen", "lookup", "cache", "occ"]
+    id_origin: Literal["ecom", "extra", "seen", "lookup", "cache", "occ", "watch"]
     ecom_state: Literal["gas", "no_gas", "absent", "unavailable"] | None
     name: str
     name_local: str | None = None

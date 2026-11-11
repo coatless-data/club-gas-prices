@@ -150,6 +150,7 @@ def evaluate_feed(
             "requests": 0,
             "duration_s": 0.0,
             "dropped": {},
+            "held": {},
             "warnings": [],
             "errors": [],
         }
@@ -159,12 +160,16 @@ def evaluate_feed(
     warnings = [_as_dict(item) for item in result.warnings]
     errors = [_as_dict(item) for item in result.errors]
     dropped: dict[str, int] = {}
+    held: dict[str, str] = {}
     rows = None
     if normalized is not None:
         warnings += [_as_dict(item) for item in normalized.warnings]
         for drop in normalized.drops:
             dropped[drop.reason] = dropped.get(drop.reason, 0) + 1
         rows = normalized.rows
+        # Which of the dropped stations were recorded anyway, and why.
+        frame = normalized.held.unique(["source_station_id", "hold_reason"])
+        held = dict(sorted(zip(frame["source_station_id"], frame["hold_reason"], strict=True)))
 
     n_rows = 0 if rows is None else rows.height
     n_stations = 0 if rows is None or n_rows == 0 else rows["station_key"].n_unique()
@@ -177,6 +182,7 @@ def evaluate_feed(
         "requests": result.requests,
         "duration_s": _duration_s(result),
         "dropped": dropped,
+        "held": held,
         "warnings": warnings,
         "errors": errors,
     }

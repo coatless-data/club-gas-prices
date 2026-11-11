@@ -3,8 +3,9 @@
 Costco's metadata API does not list every station that sells fuel, and
 relocations change warehouse ids. Once a month this command sweeps the legacy
 price endpoint over the ids nobody polls and reports the ones that answer with
-a plausible US price, so a maintainer can add the real ones to
-``config/us_extra_ids.csv``.
+a plausible US price. Each new one is also appended to ``config/watch.csv`` on
+hold, so captures record its prices from then on without publishing them, and
+a maintainer who finds it real turns it on there (held-stations design).
 
 Everything except the price sweep is read from a single capture bundle, so
 discovery makes no metadata requests of its own.
@@ -12,12 +13,13 @@ discovery makes no metadata requests of its own.
 
 from __future__ import annotations
 
+import csv
 import io
 import json
 import re
 import tarfile
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -47,12 +49,18 @@ CA_RESPONSES = ("/responses/CA-COSTCO/", "/responses/CA/")
 # GitHub refuses an issue body longer than this, and Issues.ensure_open can
 # only log the refusal, so an oversized report would never be seen at all.
 ISSUE_BODY_LIMIT = 65_536
+# Each watched id rides in a price batch of ten, so watching is cheap; the cap
+# is for the month the endpoint answers for a whole range of ids at once.
+MAX_NEW_WATCH = 25
+WATCH_COLUMNS = ("feed", "source_station_id", "detected", "status", "publish_from", "note")
 
 
 @dataclass(frozen=True)
 class DiscoverResult:
     candidates: list[dict]
     skipped_reason: str | None = None
+    # The candidate ids appended to config/watch.csv by this run.
+    watched: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -360,8 +368,84 @@ def _omitted_note(count: int, run: str | None) -> str:
     )
 
 
+def _watch_rows(cfg) -> list[dict]:
+    """config/watch.csv's US-COSTCO rows, as loaded with the config."""
+    frame = getattr(cfg, "watch", None)
+    if not isinstance(frame, pl.DataFrame) or frame.is_empty():
+        return []
+    return [row for row in frame.iter_rows(named=True) if row.get("feed") == US_FEED]
+
+
+def _watch_note(candidate: dict, now: datetime) -> str:
+    prices = " ".join(f"{key}={value}" for key, value in sorted(candidate["prices"].items()))
+    return f"found by the {now:%Y-%m-%d} sweep: {prices}"
+
+
+def append_watch(path: Path, candidates: list[dict], now: datetime) -> None:
+    """Append one `hold` row per candidate, leaving every existing line as written."""
+    existing = path.read_text(encoding="utf-8") if path.exists() else ""
+    buffer = io.StringIO()
+    writer = csv.writer(buffer, lineterminator="\n")
+    if not existing.strip():
+        writer.writerow(WATCH_COLUMNS)
+    elif not existing.endswith("\n"):
+        buffer.write("\n")
+    for candidate in candidates:
+        writer.writerow(
+            [
+                US_FEED,
+                candidate["warehouse_id"],
+                f"{now:%Y-%m-%d}",
+                "hold",
+                "",
+                _watch_note(candidate, now),
+            ]
+        )
+    with path.open("a" if existing.strip() else "w", encoding="utf-8", newline="") as handle:
+        handle.write(buffer.getvalue())
+
+
+def _watch_text(candidates: list[dict], watched: list[str], on_hold: list[dict]) -> list[str]:
+    """The issue's closing lines: what was recorded, and how to publish it."""
+    lines = [""]
+    if watched:
+        lines.append(
+            f"{len(watched)} new id(s) above are now in `config/watch.csv` with status "
+            "`hold`: every capture records their prices without publishing them."
+        )
+        if len(watched) < len(candidates) and len(watched) == MAX_NEW_WATCH:
+            lines.append(
+                f"Only the first {MAX_NEW_WATCH} of {len(candidates)} were added; add the "
+                "rest by hand if they turn out to be real."
+            )
+    held_before = [row for row in on_hold if row["source_station_id"] not in set(watched)]
+    if held_before:
+        listed = ", ".join(
+            f"{row['source_station_id']} (detected {row['detected']})" for row in held_before
+        )
+        lines.append(f"Still on hold in `config/watch.csv`: {listed}.")
+    lines += [
+        "",
+        "To publish a real station, set its `status` to `on` in `config/watch.csv` and its",
+        "`publish_from` to the first capture date whose prices are real. If Costco's",
+        "locator does not list it, also add it to `config/us_extra_ids.csv` with `brand`",
+        "(COSTCO), `name`, `city`, `region`, `postcode`, `lat`, `lon`, `timezone` and",
+        "`note`. Then run the Rebuild workflow (scope `month`) for each month since",
+        "`publish_from`, so the captures it was held in are published too.",
+        "Delete the rows that turn out to be placeholders, then close this issue.",
+    ]
+    return lines
+
+
 def _issue_body(
-    candidates: list[dict], bundle: BundleInputs, now: datetime, url: str, run: str | None = None
+    candidates: list[dict],
+    bundle: BundleInputs,
+    now: datetime,
+    url: str,
+    run: str | None = None,
+    *,
+    watched: list[str] | None = None,
+    on_hold: list[dict] | None = None,
 ) -> tuple[str, int]:
     """The issue body, and how many of the candidates it lists.
 
@@ -377,13 +461,7 @@ def _issue_body(
         "| warehouse id | regular | premium | diesel | other grades | check |",
         "| --- | --- | --- | --- | --- | --- |",
     ]
-    foot = [
-        "",
-        "Add the real stations to `config/us_extra_ids.csv` with `brand` (COSTCO -- these"
-        " ids are swept against Costco's endpoint), `name`, `city`, `region`,",
-        "`postcode`, `lat`, `lon`, `timezone` and `note`, then close this issue.",
-        "Ignore the rows that turn out to be placeholders.",
-    ]
+    foot = _watch_text(candidates, watched or [], on_hold or [])
     rows = [_candidate_row(candidate, url) for candidate in candidates]
     body = "\n".join(head + rows + foot)
     if _size(body) <= ISSUE_BODY_LIMIT:
@@ -443,9 +521,13 @@ def discover(store: ReleaseStore, client, cfg, issues: Issues, *, now: datetime)
             )
 
     candidates.sort(key=_candidate_sort_key)
+    on_hold = [row for row in _watch_rows(cfg) if row.get("status") == "hold"]
+    watched = _start_watching(cfg, candidates, now)
     if candidates:
         title = f"US station discovery {now:%Y-%m}"
-        body, listed = _issue_body(candidates, bundle, now, url, run_url())
+        body, listed = _issue_body(
+            candidates, bundle, now, url, run_url(), watched=watched, on_hold=on_hold
+        )
         if listed < len(candidates):
             # The issue points here for the rows it had no room for.
             print(
@@ -457,6 +539,27 @@ def discover(store: ReleaseStore, client, cfg, issues: Issues, *, now: datetime)
         issues.ensure_open(title, body)
     print(
         f"discover: bundle {bundle.capture_id}, {len(ids)} candidate ids, "
-        f"{len(candidates)} reported"
+        f"{len(candidates)} reported, {len(watched)} added to config/watch.csv"
     )
-    return DiscoverResult(candidates=candidates, skipped_reason=None)
+    return DiscoverResult(candidates=candidates, skipped_reason=None, watched=watched)
+
+
+def _start_watching(cfg, candidates: list[dict], now: datetime) -> list[str]:
+    """Append the candidates not already watched to the checkout's watch.csv.
+
+    Returns the ids added. Without a checkout (no `cfg.root`) nothing is written.
+    """
+    root = getattr(cfg, "root", None)
+    if root is None:
+        return []
+    known = {str(row["source_station_id"]) for row in _watch_rows(cfg)}
+    new = [c for c in candidates if c["warehouse_id"] not in known][:MAX_NEW_WATCH]
+    if not new:
+        return []
+    path = Path(root) / "config" / "watch.csv"
+    try:
+        append_watch(path, new, now)
+    except OSError as exc:
+        print(f"::warning::could not add the candidates to {path}: {exc}")
+        return []
+    return [c["warehouse_id"] for c in new]

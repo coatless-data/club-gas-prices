@@ -11,6 +11,7 @@ import re
 import tomllib
 from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
+from datetime import date
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -62,6 +63,21 @@ US_EXTRA_IDS_SCHEMA: dict[str, pl.DataType] = {
     "timezone": pl.String,
     "note": pl.String,
 }
+
+# Stations to record before they are published (held-stations design). Every
+# column is text: the dates are checked here and parsed where they are used.
+WATCH_SCHEMA: dict[str, pl.DataType] = {
+    "feed": pl.String,
+    "source_station_id": pl.String,
+    "detected": pl.String,
+    "status": pl.String,
+    "publish_from": pl.String,
+    "note": pl.String,
+}
+WATCH_STATUSES = ("hold", "on")
+# Feeds that poll the ids watch.csv names; every one of them numbers its stations.
+NUMBERED_FEEDS = ("US-COSTCO", "US-SAMS")
+_FEED_ID_RE = re.compile(r"([A-Z]{2})-[A-Z]+")
 
 STATION_LINKS_SCHEMA: dict[str, pl.DataType] = {
     "old_station_key": pl.String,
@@ -296,9 +312,12 @@ class Config:
     # Feeds that countries.toml cannot describe, keyed by feed id. Empty is
     # normal: every country whose only chain is Costco is declared there.
     feeds: dict[str, FeedConfig] = field(default_factory=dict)
+    # config/watch.csv. Both views keep it: fetch_view reads which ids to poll,
+    # interp_view whether each one is published.
+    watch: pl.DataFrame = field(default_factory=lambda: pl.DataFrame(schema=WATCH_SCHEMA))
 
     def fetch_view(self) -> Config:
-        """URLs, parameters, HTTP policy and us_extra_ids; nothing else.
+        """URLs, parameters, HTTP policy, us_extra_ids and watch; nothing else.
 
         A rebuild loads this view from the capture bundle, so the bundle's
         stale interpretation tables are blanked rather than used.
@@ -324,11 +343,16 @@ class Config:
         )
 
     def interp_view(self) -> Config:
-        """Grades, units, bounds, region tables, floors, staleness and links.
+        """Grades, units, bounds, region tables, floors, staleness and links,
+        plus the publish decisions in watch.csv and the station metadata in
+        us_extra_ids.csv.
 
         A rebuild loads this view from the live checkout, and hashes those
         files through .root. .http is carried along for convenience; callers
-        read HTTP policy from fetch_view().
+        read HTTP policy from fetch_view(). us_extra_ids and watch stay in
+        both views because each file has a fetch role (which ids to poll, read
+        from fetch_view) and an interpretation role (metadata, and whether a
+        station is published, read from here).
         """
         return replace(
             self,
@@ -347,7 +371,6 @@ class Config:
                 )
                 for code, country in self.countries.items()
             },
-            us_extra_ids=pl.DataFrame(schema=US_EXTRA_IDS_SCHEMA),
             # A feed's floor is read from here, exactly like a country's.
             feeds={
                 fid: replace(
@@ -383,6 +406,7 @@ def load_config(root: Path) -> Config:
         station_links=_read_csv(cfg_dir / "station_links.csv", STATION_LINKS_SCHEMA),
         site=_load_site(cfg_dir / "site.toml"),
         feeds=_load_feeds(cfg_dir / "feeds.toml"),
+        watch=_read_optional_csv(cfg_dir / "watch.csv", WATCH_SCHEMA),
     )
     _validate(cfg)
     return cfg
@@ -406,6 +430,22 @@ def _read_csv(path: Path, schema: dict[str, pl.DataType]) -> pl.DataFrame:
     if missing:
         raise ConfigError(f"{path}: missing columns {missing}")
     return frame.select(list(schema))
+
+
+def _read_optional_csv(path: Path, schema: dict[str, pl.DataType]) -> pl.DataFrame:
+    """Like _read_csv, but a missing file is an empty table.
+
+    For files added after captures began: a rebuild loads each bundle's own
+    config, and the older bundles have no copy.
+    """
+    if not path.is_file():
+        return pl.DataFrame(schema=schema)
+    # Every column as text, so an id keeps its leading zeros and a date its form.
+    frame = pl.read_csv(path, infer_schema=False)
+    missing = [name for name in schema if name not in frame.columns]
+    if missing:
+        raise ConfigError(f"{path}: missing columns {missing}")
+    return frame.select(list(schema)).cast(schema)
 
 
 def _load_http(path: Path) -> HttpConfig:
@@ -710,9 +750,58 @@ def _validate(cfg: Config) -> None:
                 )
             _check_zone(zone, f"us_extra_ids.csv id {station_id}")
 
+    _validate_watch(cfg)
+
     seen: set[str] = set()
     for row in cfg.station_links.iter_rows(named=True):
         old_key = _text(row["old_station_key"])
         if old_key in seen:
             raise ConfigError(f"station_links.csv: duplicate old_station_key {old_key!r}")
         seen.add(old_key)
+
+
+def _iso_date(value: str, where: str) -> date:
+    try:
+        return date.fromisoformat(value)
+    except ValueError as exc:
+        raise ConfigError(f"{where}: {value!r} is not an ISO date (YYYY-MM-DD)") from exc
+
+
+def _validate_watch(cfg: Config) -> None:
+    """config/watch.csv: one row per (feed, station), each with a clear decision."""
+    seen: set[tuple[str, str]] = set()
+    for row in cfg.watch.iter_rows(named=True):
+        feed = _text(row["feed"])
+        station_id = _text(row["source_station_id"])
+        where = f"watch.csv {feed or '?'} {station_id or '?'}"
+        match = _FEED_ID_RE.fullmatch(feed)
+        if match is None:
+            raise ConfigError(f"{where}: feed {feed!r} is not a feed id such as US-COSTCO")
+        if match.group(1) not in cfg.countries:
+            raise ConfigError(f"{where}: feed {feed!r} names a country that is not configured")
+        if not station_id:
+            raise ConfigError(f"watch.csv {feed}: a row has no source_station_id")
+        if feed in NUMBERED_FEEDS and not station_id.isdigit():
+            # These feeds sort, batch and request by number.
+            raise ConfigError(f"{where}: {feed} station ids are numbers")
+        if (feed, station_id) in seen:
+            raise ConfigError(f"{where}: listed more than once")
+        seen.add((feed, station_id))
+        detected = _text(row["detected"])
+        if not detected:
+            raise ConfigError(f"{where}: no detected date")
+        _iso_date(detected, f"{where} detected")
+        status = _text(row["status"])
+        if status not in WATCH_STATUSES:
+            raise ConfigError(
+                f"{where}: status {status!r} must be one of {', '.join(WATCH_STATUSES)}"
+            )
+        publish_from = _text(row["publish_from"])
+        if status == "on":
+            if not publish_from:
+                # Turning a station on without a date would publish everything it
+                # ever answered with, the pre-opening placeholders included.
+                raise ConfigError(f"{where}: status on needs a publish_from date")
+            _iso_date(publish_from, f"{where} publish_from")
+        elif publish_from:
+            raise ConfigError(f"{where}: publish_from is set but status is {status!r}, not on")

@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import polars as pl
 import pytest
 
+from club_gas.config import WATCH_SCHEMA
 from club_gas.http import BudgetExceeded
 from club_gas.sources import us
 from club_gas.sources.base import SOURCES, CaptureContext, RawResponse
@@ -105,6 +106,25 @@ class StubCountry:
 class StubConfig:
     countries: dict
     us_extra_ids: pl.DataFrame
+    watch: pl.DataFrame = field(default_factory=lambda: pl.DataFrame(schema=WATCH_SCHEMA))
+
+
+def watch_frame(*rows: tuple[str, str]) -> pl.DataFrame:
+    """config/watch.csv rows on hold: (feed, id)."""
+    return pl.DataFrame(
+        [
+            {
+                "feed": feed,
+                "source_station_id": sid,
+                "detected": "2026-09-01",
+                "status": "hold",
+                "publish_from": None,
+                "note": None,
+            }
+            for feed, sid in rows
+        ],
+        schema=WATCH_SCHEMA,
+    )
 
 
 def stations_frame(rows: list[dict]) -> pl.DataFrame:
@@ -124,16 +144,22 @@ def make_ctx(
     previous: pl.DataFrame | None = None,
     force_fallback: set[str] | None = None,
     country: StubCountry | None = None,
+    watch: pl.DataFrame | None = None,
+    interp_extras: pl.DataFrame | None = None,
 ) -> CaptureContext:
     config = StubConfig(
         countries={"US": country or StubCountry()},
         us_extra_ids=EXTRAS if extras is None else extras,
+        watch=pl.DataFrame(schema=WATCH_SCHEMA) if watch is None else watch,
     )
+    # A capture reads one checkout through both views; a rebuild reads the
+    # bundle's config as fetch_config and today's checkout as interp_config.
+    interp = config if interp_extras is None else replace(config, us_extra_ids=interp_extras)
     return CaptureContext(
         capture_id=CAPTURE_ID,
         capture_date=CAPTURE_DATE,
         fetch_config=config,
-        interp_config=config,
+        interp_config=interp,
         previous_stations=stations_frame([]) if previous is None else previous,
         previous_fx=pl.DataFrame(),
         previous_status=None,
@@ -524,7 +550,7 @@ def test_parse_lookup_rejects_a_failed_response():
 # --------------------------------------------------------------------------- happy path
 
 
-def happy_ctx() -> CaptureContext:
+def happy_ctx(**kwargs) -> CaptureContext:
     previous = stations_frame(
         [
             {
@@ -538,11 +564,15 @@ def happy_ctx() -> CaptureContext:
             },
         ]
     )
-    return make_ctx(ecom=ecom_ok(), previous=previous)
+    return make_ctx(ecom=ecom_ok(), previous=previous, **kwargs)
 
 
 def happy_result():
-    ctx = happy_ctx()
+    return happy_result_with()
+
+
+def happy_result_with(**kwargs):
+    ctx = happy_ctx(**kwargs)
     batch = response(
         "US-COSTCO/02-gasprices-001",
         "https://www.costco.com/AjaxGetGasPricesService?warehouseid="
@@ -844,3 +874,106 @@ def test_lazy_registry_resolves_us_without_touching_base():
     result = SOURCES["US-COSTCO"].parse(SOURCES["US-COSTCO"].fetch(client, ctx), ctx)
     assert result.country == "US"
     assert result.source == "costco-ca-lookup-us"
+
+
+# --------------------------------------------------------------------------- watched ids
+
+
+WATCHED_BATCH = (
+    b'{"729":{"premium":"4.399","regular":"3.799"},'
+    b'"4242":{"premium":"4.779","regular":"3.829"},'
+    b'"1364":{"premium":"4.629","regular":"3.999"}}'
+)
+
+
+def watched_result(**kwargs):
+    ctx = make_ctx(
+        ecom=ecom_ok(),
+        watch=watch_frame(("US-COSTCO", "729"), ("US-COSTCO", "4242"), ("US-COSTCO", "1364")),
+        **kwargs,
+    )
+    batch = response(
+        "US-COSTCO/02-gasprices-001",
+        "https://www.costco.com/AjaxGetGasPricesService?warehouseid=729_4242_1364",
+        body=WATCHED_BATCH,
+        offset=5,
+    )
+    return us.parse_us([batch], ctx)
+
+
+def test_watched_ids_are_polled_after_the_extras():
+    ctx = make_ctx(
+        ecom=ecom_ok(),
+        watch=watch_frame(
+            ("US-COSTCO", "729"),
+            ("US-COSTCO", "4242"),
+            ("US-COSTCO", "1364"),
+            ("US-SAMS", "6260"),
+        ),
+    )
+    polled = [(p.source_station_id, p.id_origin) for p in us.polled_id_set(ctx)]
+    origins = dict(polled)
+    assert origins["729"] == "watch"
+    assert origins["4242"] == "watch"
+    # Listed with gas, so the locator covers it and the row changes nothing.
+    assert origins["1364"] == "ecom"
+    # A Sam's club number is not a Costco warehouse id.
+    assert "6260" not in origins
+    order = [sid for sid, _ in polled]
+    assert order.index("1772") < order.index("729") < order.index("4242")
+
+
+def test_watched_ids_are_polled_when_step_one_fails():
+    ctx = make_ctx(ecom=ecom_failed(), watch=watch_frame(("US-COSTCO", "4242")))
+    polled = [(p.source_station_id, p.id_origin) for p in us.polled_id_set(ctx)]
+    assert polled[-1] == ("4242", "watch")
+
+
+def test_a_watched_id_takes_the_locators_metadata_even_without_gas():
+    """Business centres and pre-opening sites are listed without gas; their
+    entry still names the place and its timezone."""
+    station = by_id(watched_result())["729"]
+    assert station.id_origin == "watch"
+    assert station.ecom_state == "no_gas"
+    assert station.name == "Hackensack Bus Ctr"
+    assert station.timezone == "America/New_York"
+    assert station.region == "NJ"
+
+
+def test_a_watched_id_nobody_describes_has_no_timezone():
+    station = by_id(watched_result())["4242"]
+    assert station.id_origin == "watch"
+    assert station.ecom_state == "absent"
+    assert station.name == "4242"
+    assert station.timezone is None
+
+
+def test_metadata_comes_from_the_checkouts_extras_row():
+    """A rebuild polls what the bundle's us_extra_ids named, but describes each
+    station with today's row, so a corrected coordinate reaches history."""
+    corrected = pl.DataFrame(
+        {
+            "source_station_id": ["1772", "4242"],
+            "name": ["Mission Viejo Gas Station", "Somewhere"],
+            "city": ["MISSION VIEJO", "SOMEWHERE"],
+            "region": ["CA", "TX"],
+            "postcode": ["92691-6902", None],
+            "lat": [33.588125, 30.0],
+            "lon": [-117.673325, -95.0],
+            "timezone": ["America/Los_Angeles", "America/Chicago"],
+            "note": ["corrected", "identified"],
+        },
+        schema_overrides={"lat": pl.Float64, "lon": pl.Float64, "postcode": pl.Utf8},
+    )
+    result, _ = happy_result_with(interp_extras=corrected)
+    mission_viejo = by_id(result)["1772"]
+    assert mission_viejo.name == "Mission Viejo Gas Station"
+    assert mission_viejo.lat == pytest.approx(33.588125)
+    assert mission_viejo.id_origin == "extra"
+
+    watched = by_id(watched_result(interp_extras=corrected))["4242"]
+    assert watched.name == "Somewhere"
+    assert watched.timezone == "America/Chicago"
+    # Still polled because watch.csv named it, so still not an extra: whether
+    # it is published is watch.csv's decision, not this row's.
+    assert watched.id_origin == "watch"
