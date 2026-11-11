@@ -83,6 +83,11 @@ REQUIRED_ROW_COLUMNS: tuple[str, ...] = (
 ROW_KEY: tuple[str, ...] = ("capture_id", "station_key", "grade_raw")
 ROW_SORT: list[str] = ["capture_id", "country", "station_key", "grade_raw"]
 
+# Rows of a station that was recorded but not published, and why (held-stations
+# design). Never part of a release; kept with the capture and its bundle.
+HELD_SCHEMA: dict[str, pl.DataType] = {**ROW_SCHEMA, "hold_reason": pl.String()}
+REQUIRED_HELD_COLUMNS: tuple[str, ...] = (*REQUIRED_ROW_COLUMNS, "hold_reason")
+
 STATION_SCHEMA: dict[str, pl.DataType] = {
     "station_key": pl.String(),
     "country": pl.String(),
@@ -173,6 +178,11 @@ def validate_rows(df: pl.DataFrame) -> None:
 def validate_stations(df: pl.DataFrame) -> None:
     """Raise SchemaError unless df can be written as stations.csv."""
     _check_schema(df, STATION_SCHEMA, STATION_KEY, ("station_key", "country", "brand", "status"))
+
+
+def validate_held(df: pl.DataFrame) -> None:
+    """Raise SchemaError unless df can be written as held rows."""
+    _check_schema(df, HELD_SCHEMA, ROW_KEY, REQUIRED_HELD_COLUMNS)
 
 
 def validate_fx(df: pl.DataFrame) -> None:
@@ -269,6 +279,19 @@ def read_rows_csv_gz(path: Path) -> pl.DataFrame:
     with gzip.open(Path(path), "rb") as fh:
         raw = fh.read()
     return _read_csv_bytes(raw, ROW_SCHEMA)
+
+
+def write_held_csv_gz(df: pl.DataFrame, path: Path) -> Path:
+    """Validate, round, sort and write held rows as gzipped CSV."""
+    validate_held(df)
+    return _write_gzip(_write_csv_bytes(_prepare(df, HELD_SCHEMA, ROW_SORT)), Path(path))
+
+
+def read_held_csv_gz(path: Path) -> pl.DataFrame:
+    """Read a gzipped CSV of held rows back under HELD_SCHEMA."""
+    with gzip.open(Path(path), "rb") as fh:
+        raw = fh.read()
+    return _read_csv_bytes(raw, HELD_SCHEMA)
 
 
 def write_csv(

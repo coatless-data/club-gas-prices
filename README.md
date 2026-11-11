@@ -172,6 +172,18 @@ is counted by reason in the capture status. A Costco gas station usually opens w
 before its warehouse, so the date that counts is the one Costco gives the gas station,
 and the warehouse's is used only when there is none.
 
+**Held stations.** A station that one of the first three rules stops, or that a capture
+polls only because `config/watch.csv` names it, is recorded but not published. Its rows
+go to `held.csv.gz` in the capture and its bundle, with a `hold_reason`, and the
+feed's `held` entry in the capture status lists it. The monthly Costco sweep appends
+each new id it finds to `watch.csv` with `status` `hold`. Sam's clubs are added there
+by hand. To publish a station once it checks out, set its row's `status` to `on` and
+its `publish_from` to the first capture date whose prices are real. A Costco id that
+Costco's locator does not list also needs a row in `us_extra_ids.csv`. Then run the
+Rebuild workflow for each month since `publish_from`, so the captures it was held in
+are published too. A `hold` row never holds back a station that its feed's own list
+already includes.
+
 **UTC days and local dates.** `capture_date` is a UTC date and is what the daily files
 are keyed by. `local_date` is the same instant in the station's own timezone. For Japan,
 Taiwan and Australia the last capture of a UTC day lands early the next local morning,
@@ -208,6 +220,7 @@ so the two dates differ for part of each day. Charts use `capture_date`.
 │   ├── feeds.toml             # per-feed overrides, including whether a feed runs at all
 │   ├── grades.csv              # brand,country,grade_raw,grade,priority,label,spec,spec_source,spec_source_url
 │   ├── us_extra_ids.csv        # stations that price live but are missing from ecom-api
+│   ├── watch.csv               # stations recorded before they are published (status hold|on)
 │   ├── station_links.csv       # old_station_key,new_station_key,effective_date,note
 │   └── site.toml               # basemap providers, notice text
 ├── status/latest.json         # committed after every non-dry capture
@@ -271,7 +284,7 @@ requests. At most one request per second per host.
 | AU-COSTCO | `www.costco.com.au/rest/v2/australia/stores?fields=FULL&...` |
 | JP-COSTCO | `www.costco.co.jp/rest/v2/japan/stores?fields=FULL&...` |
 | TW-COSTCO | `www.costco.com.tw/rest/v2/taiwan/stores?fields=FULL&...` |
-| US-SAMS | `www.samsclub.com/sitemap_locators.xml` for the club roster, plus the clubs `extra_ids` in `config/feeds.toml` names because the sitemap lags new clubs by weeks, then `/club/<id>/fuel-center` per club, whose page embeds the current prices in its `__NEXT_DATA__`. Read on paths robots.txt permits; a club with no fuel centre redirects and is skipped, and a club is dropped for having no hours only when neither the club nor its fuel station lists an open day. The JSON club-finder's `gasPrices` array is stale — 31-43% below the page price for the six clubs checked on 2026-09-17 — so the fuel-centre page is the source of the current price. |
+| US-SAMS | `www.samsclub.com/sitemap_locators.xml` for the club roster, plus the clubs `extra_ids` in `config/feeds.toml` and the US-SAMS rows of `config/watch.csv` name because the sitemap lags new clubs by weeks, then `/club/<id>/fuel-center` per club, whose page embeds the current prices in its `__NEXT_DATA__`. Read on paths robots.txt permits; a club with no fuel centre redirects and is skipped, and a club is dropped for having no hours only when neither the club nor its fuel station lists an open day. The JSON club-finder's `gasPrices` array is stale — 31-43% below the page price for the six clubs checked on 2026-09-17 — so the fuel-centre page is the source of the current price. |
 | FX | `api.frankfurter.dev/v2/rates?base=USD&quotes=CAD,MXN,GBP,AUD,JPY,TWD`, then `cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@<date>/v1/currencies/usd.json` |
 
 No source publishes a timestamp with its prices, prices change during the day, and the

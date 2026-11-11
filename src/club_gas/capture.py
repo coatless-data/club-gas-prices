@@ -228,8 +228,11 @@ def run_capture(
 
     rows = _concat(collected, "rows", schema.ROW_SCHEMA).sort(schema.ROW_SORT)
     stations = _concat(collected, "stations", schema.STATION_SCHEMA).sort(schema.STATION_SORT)
+    held = _concat(collected, "held", schema.HELD_SCHEMA)
     schema.write_rows_csv_gz(rows, capture_out / "rows.csv.gz")
     stations.write_csv(capture_out / "stations.csv")
+    # Recorded, never published: publish reads rows.csv.gz and ignores this.
+    schema.write_held_csv_gz(held, capture_out / "held.csv.gz")
     # fx.json: rate rows as JSON (spec 4.5), read by publish and rebuild.
     (capture_out / "fx.json").write_text(
         json.dumps(fx.to_json(), indent=1, sort_keys=True), encoding="utf-8"
@@ -270,7 +273,7 @@ def run_capture(
 
 
 def _concat(collected: dict[str, dict], key: str, frame_schema: dict) -> pl.DataFrame:
-    frames = [collected[cc][key] for cc in sorted(collected)]
+    frames = [collected[cc].get(key) for cc in sorted(collected)]
     frames = [f for f in frames if f is not None]
     if not frames:
         return pl.DataFrame(schema=frame_schema)
@@ -318,6 +321,7 @@ def run_feed(
         # The rows are written after this guard, and the write validates them; a
         # bad row must fail this feed here, not escape and take the capture down.
         schema.validate_rows(normalized.rows)
+        schema.validate_held(normalized.held)
         if fid == "US-COSTCO":
             us_id_set = us_source.polled_id_frame(ctx)
     except Exception as exc:  # isolation is the point
@@ -347,8 +351,10 @@ def run_feed(
     rows = normalized.rows if normalized else pl.DataFrame(schema=schema.ROW_SCHEMA)
     stations = normalized.stations if normalized else pl.DataFrame(schema=schema.STATION_SCHEMA)
     drops = normalized.drops if normalized else []
+    held = normalized.held if normalized else pl.DataFrame(schema=schema.HELD_SCHEMA)
     schema.write_rows_csv_gz(rows, directory / "rows.csv.gz")
     stations.write_csv(directory / "stations.csv")
+    schema.write_held_csv_gz(held, directory / "held.csv.gz")
     pl.DataFrame(
         {
             "source_station_id": [d.source_station_id for d in drops],
@@ -364,6 +370,7 @@ def run_feed(
         "block": block,
         "rows": rows,
         "stations": stations,
+        "held": held,
         "result": result,
         "us_id_set": us_id_set,
     }
@@ -463,7 +470,7 @@ def _write_bundle(
     if shared.is_dir():
         shutil.copytree(shared, stage / "responses" / "shared")
 
-    for name in ("fx.json", "status.json", "rows.csv.gz", "stations.csv"):
+    for name in ("fx.json", "status.json", "rows.csv.gz", "stations.csv", "held.csv.gz"):
         shutil.copy2(capture_out / name, stage / name)
 
     bundle = capture_out / "bundle.tar.gz"

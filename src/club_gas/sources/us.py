@@ -299,7 +299,32 @@ class PolledId:
 
 
 def _extra_rows(ctx: CaptureContext) -> dict[str, dict[str, Any]]:
-    frame = getattr(ctx.fetch_config, "us_extra_ids", None)
+    """us_extra_ids.csv as fetch config: the ids it makes us poll as extras."""
+    return _extra_rows_of(ctx.fetch_config)
+
+
+def _extra_metadata(ctx: CaptureContext) -> dict[str, dict[str, Any]]:
+    """us_extra_ids.csv as interpretation config: how each id is described.
+
+    A capture reads the same file through both views. A rebuild reads the
+    bundle's copy for which ids were polled and today's for their metadata, so
+    a corrected row reaches history.
+    """
+    return _extra_rows_of(ctx.interp_config)
+
+
+def _watch_ids(ctx: CaptureContext) -> list[str]:
+    """The ids config/watch.csv names for this feed, polled though no roster lists them."""
+    frame = getattr(ctx.fetch_config, "watch", None)
+    if not isinstance(frame, pl.DataFrame) or frame.is_empty():
+        return []
+    ours = frame.filter(pl.col("feed") == FEED)
+    ids = {_clean(value) for value in ours["source_station_id"].to_list()}
+    return sorted((i for i in ids if i is not None), key=_id_sort)
+
+
+def _extra_rows_of(config: Any) -> dict[str, dict[str, Any]]:
+    frame = getattr(config, "us_extra_ids", None)
     if frame is None or not isinstance(frame, pl.DataFrame) or frame.height == 0:
         return {}
     id_column = next(
@@ -353,6 +378,7 @@ def polled_id_set(ctx: CaptureContext) -> list[PolledId]:
     """The US IDs polled this capture, each tagged with its origin (spec 4.2)."""
     index = parse_ecom(ctx.shared.get(ECOM_SHARED_KEY))
     extras = _extra_rows(ctx)
+    watched = _watch_ids(ctx)
     seen = _seen_ids(ctx)
 
     polled: list[PolledId] = []
@@ -369,6 +395,8 @@ def polled_id_set(ctx: CaptureContext) -> list[PolledId]:
             add(warehouse_id, "cache")
         for warehouse_id in extras:
             add(warehouse_id, "extra")
+        for warehouse_id in watched:
+            add(warehouse_id, "watch")
         return polled
 
     gas_ids = sorted(
@@ -379,6 +407,8 @@ def polled_id_set(ctx: CaptureContext) -> list[PolledId]:
         add(warehouse_id, "ecom")
     for warehouse_id in extras:
         add(warehouse_id, "extra")
+    for warehouse_id in watched:
+        add(warehouse_id, "watch")
     for warehouse_id in seen:
         if ecom_state(index, warehouse_id) != "gas":
             add(warehouse_id, "seen")
@@ -508,6 +538,7 @@ def parse_us(responses: list[RawResponse], ctx: CaptureContext) -> FetchResult:
     states = {p.source_station_id: p.ecom_state for p in polled}
     index = parse_ecom(ctx.shared.get(ECOM_SHARED_KEY))
     extras = _extra_rows(ctx)
+    described = _extra_metadata(ctx)
     previous = _previous_rows(ctx)
 
     warnings: list[Warning] = []
@@ -587,8 +618,16 @@ def parse_us(responses: list[RawResponse], ctx: CaptureContext) -> FetchResult:
         chain: list[Meta] = []
         if state == "gas" and index is not None and warehouse_id in index:
             chain.append(_meta_from_ecom(index[warehouse_id]))
+        if warehouse_id in described:
+            chain.append(_meta_from_row(described[warehouse_id]))
         if is_extra:
             chain.append(_meta_from_row(extras[warehouse_id]))
+        if state == "no_gas" and index is not None and index[warehouse_id].country == COUNTRY:
+            # Business centres are listed without gas, and their entry still
+            # names the place and its timezone -- what a watched id needs to be
+            # held at all. It comes after both us_extra_ids rows, so an extra's
+            # own row still wins every field it fills.
+            chain.append(_meta_from_ecom(index[warehouse_id]))
         if warehouse_id in previous:
             chain.append(_meta_from_row(previous[warehouse_id]))
         if lookup_row is not None:

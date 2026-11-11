@@ -450,6 +450,7 @@ def test_fetch_view_keeps_only_what_a_request_needs(cfg):
     assert fetch.countries["GB"].params["fields"] == "FULL"
     assert fetch.http.max_attempts == 3
     assert fetch.us_extra_ids.height == cfg.us_extra_ids.height > 0
+    assert fetch.watch.height == cfg.watch.height > 0
     # Interpretation config is blanked so that replaying an old capture cannot
     # accidentally reuse the grades or bounds stored with it.
     assert fetch.grades.map("US", "COSTCO", "regular") is None
@@ -493,8 +494,14 @@ def test_interp_view_keeps_only_what_reading_a_response_needs(cfg):
     assert us.ecom_url is None
     assert us.ecom_params == {}
     assert us.ecom_client_identifier is None
-    assert interp.us_extra_ids.height == 0
+    # us_extra_ids.csv is read twice: which ids to poll comes from fetch_view
+    # (the bundle, on a rebuild), each row's metadata from here (the checkout),
+    # so a corrected name or coordinate reaches history.
+    assert interp.us_extra_ids.height == cfg.us_extra_ids.height > 0
     assert interp.us_extra_ids.columns == cfg.us_extra_ids.columns
+    # watch.csv likewise: which ids to poll from fetch_view, whether each one is
+    # published from here.
+    assert interp.watch.height == cfg.watch.height > 0
     assert cfg.countries["US"].url == "https://www.costco.com/AjaxGetGasPricesService"
 
 
@@ -655,9 +662,10 @@ def test_the_sams_budget_fits_its_sweep_inside_the_capture(cfg):
     budget that bounds every feed thread. The country budget does not fit it,
     which is why the feed has its own. The sweep is large enough that the
     headroom is 18%, not the 24% a smaller feed can afford, but the pacing floor
-    still clears with room. A long extra_ids list would eat that headroom, and
-    this test is where it shows."""
-    requests = 1 + 604 + len(cfg.feeds["US-SAMS"].extra_ids)
+    still clears with room. A long extra_ids list, or many US-SAMS rows in
+    watch.csv, would eat that headroom, and this test is where it shows."""
+    watched = cfg.watch.filter(cfg.watch["feed"] == "US-SAMS").height
+    requests = 1 + 604 + len(cfg.feeds["US-SAMS"].extra_ids) + watched
     budget = cfg.feeds["US-SAMS"].budget_s
 
     assert cfg.http.budget_seconds("country") < requests * cfg.http.min_interval_seconds
@@ -688,3 +696,90 @@ def test_a_feed_floor_below_one_is_refused(config_copy: Path):
     path.write_text(text.replace("floor = 460", "floor = 0"), encoding="utf-8")
     with pytest.raises(ConfigError, match="US-SAMS: floor must be at least 1"):
         load_config(config_copy)
+
+
+# --- watch.csv (2026-11-10 held-stations design) ------------------------------
+
+WATCH_HEADER = "feed,source_station_id,detected,status,publish_from,note\n"
+
+
+def _write_watch(config_dir: Path, *lines: str) -> None:
+    (config_dir / "config" / "watch.csv").write_text(
+        WATCH_HEADER + "".join(f"{line}\n" for line in lines), encoding="utf-8"
+    )
+
+
+def test_watch_table(cfg):
+    assert cfg.watch.columns == [
+        "feed",
+        "source_station_id",
+        "detected",
+        "status",
+        "publish_from",
+        "note",
+    ]
+    rows = {(r["feed"], r["source_station_id"]): r for r in cfg.watch.iter_rows(named=True)}
+    # The one candidate from issue #5 nobody has identified: recorded, not published.
+    assert rows[("US-COSTCO", "1165")]["status"] == "hold"
+    assert rows[("US-COSTCO", "1165")]["detected"] == "2026-11-02"
+    assert rows[("US-COSTCO", "1165")]["publish_from"] is None
+
+
+def test_watch_csv_is_optional(config_copy: Path):
+    """Bundles written before watch.csv existed have no copy, and a rebuild
+    loads their config."""
+    (config_copy / "config" / "watch.csv").unlink()
+    cfg = load_config(config_copy)
+    assert cfg.watch.height == 0
+    assert cfg.watch.columns[:2] == ["feed", "source_station_id"]
+
+
+def test_a_watch_row_that_is_on_and_one_on_hold_both_load(config_copy: Path):
+    _write_watch(
+        config_copy,
+        "US-COSTCO,1165,2026-11-02,hold,,swept",
+        "US-SAMS,4868,2026-11-10,on,2026-11-12,Tomball",
+        "CA-COSTCO,1813,2026-11-10,on,2026-11-10,gated by its gas hours",
+    )
+    cfg = load_config(config_copy)
+    assert cfg.watch.height == 3
+
+
+@pytest.mark.parametrize(
+    ("line", "message"),
+    [
+        ("US-COSTCO,,2026-11-02,hold,,", "no source_station_id"),
+        ("US-COSTCO,1165,,hold,,", "detected"),
+        ("US-COSTCO,1165,2026-13-02,hold,,", "detected"),
+        ("US-COSTCO,1165,2026-11-02,paused,,", "status"),
+        ("US-COSTCO,1165,2026-11-02,on,,", "publish_from"),
+        ("US-COSTCO,1165,2026-11-02,on,soon,", "publish_from"),
+        ("US-COSTCO,1165,2026-11-02,hold,2026-11-20,", "publish_from"),
+        ("US-SAMS,club-7718,2026-11-02,hold,,", "numbers"),
+        ("COSTCO-US,1165,2026-11-02,hold,,", "feed"),
+        ("XX-COSTCO,1165,2026-11-02,hold,,", "feed"),
+    ],
+)
+def test_a_malformed_watch_row_is_refused(config_copy: Path, line: str, message: str):
+    _write_watch(config_copy, line)
+    with pytest.raises(ConfigError, match=message):
+        load_config(config_copy)
+
+
+def test_a_station_can_be_watched_only_once_per_feed(config_copy: Path):
+    _write_watch(
+        config_copy,
+        "US-COSTCO,1165,2026-11-02,hold,,",
+        "US-COSTCO,1165,2026-11-09,on,2026-11-09,",
+    )
+    with pytest.raises(ConfigError, match="more than once"):
+        load_config(config_copy)
+
+
+def test_the_same_number_may_be_watched_in_two_feeds(config_copy: Path):
+    _write_watch(
+        config_copy,
+        "US-COSTCO,1165,2026-11-02,hold,,",
+        "US-SAMS,1165,2026-11-02,hold,,",
+    )
+    assert load_config(config_copy).watch.height == 2

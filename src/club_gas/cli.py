@@ -174,7 +174,13 @@ def cmd_discover(args) -> int:
         now=utc_now(),
     )
     print(
-        json.dumps({"candidates": len(result.candidates), "skipped_reason": result.skipped_reason})
+        json.dumps(
+            {
+                "candidates": len(result.candidates),
+                "watched": len(result.watched),
+                "skipped_reason": result.skipped_reason,
+            }
+        )
     )
     return 0
 

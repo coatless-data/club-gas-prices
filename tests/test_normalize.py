@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import polars as pl
 import pytest
 
-from club_gas.config import Bounds
+from club_gas.config import WATCH_SCHEMA, Bounds
 from club_gas.fx import FxRates, FxRow
 from club_gas.normalize import (
     LITRES_PER_US_GALLON,
@@ -18,7 +18,13 @@ from club_gas.normalize import (
     parse_price,
     round_significant,
 )
-from club_gas.schema import ROW_SCHEMA, STATION_SCHEMA, round_fx_columns, round_price_columns
+from club_gas.schema import (
+    HELD_SCHEMA,
+    ROW_SCHEMA,
+    STATION_SCHEMA,
+    round_fx_columns,
+    round_price_columns,
+)
 from club_gas.sources.base import CaptureContext, FetchResult, RawPrice, RawStation
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -808,3 +814,192 @@ def test_a_second_brand_does_not_collide_on_the_same_number():
     assert a["source_station_id"] == b["source_station_id"] == "1364"
     assert a["station_key"] != b["station_key"]
     assert (a["station_key"], b["station_key"]) == ("US-COSTCO-1364", "US-SAMS-1364")
+
+
+# --- held stations (2026-11-10 held-stations design) --------------------------
+
+
+def watch_frame(*rows: tuple[str, str, str, str]) -> pl.DataFrame:
+    """config/watch.csv as Config.watch holds it: (feed, id, status, publish_from)."""
+    return pl.DataFrame(
+        [
+            {
+                "feed": feed,
+                "source_station_id": sid,
+                "detected": "2026-09-01",
+                "status": status,
+                "publish_from": publish_from or None,
+                "note": None,
+            }
+            for feed, sid, status, publish_from in rows
+        ],
+        schema=WATCH_SCHEMA,
+    )
+
+
+def watching(*rows: tuple[str, str, str, str]) -> CaptureContext:
+    interp = interp_config()
+    interp.watch = watch_frame(*rows)
+    return context(interp_config=interp)
+
+
+def held_ids(out) -> list[tuple[str, str]]:
+    return sorted(set(zip(out.held["source_station_id"], out.held["hold_reason"], strict=True)))
+
+
+def test_a_gated_station_is_held_rather_than_discarded():
+    """Franklin WI priced live for days while its opening date gated it out."""
+    result = fetch_result(
+        "US",
+        "costco-us-gasprices",
+        [
+            station(
+                "1838",
+                [("regular", "3.099"), ("premium", "3.699")],
+                opening_date=date(2026, 10, 2),
+            )
+        ],
+    )
+    out = normalize(result, fx_rates(), context())
+    assert out.rows.height == 0
+    assert out.stations.height == 0
+    assert reasons(out.drops) == ["not_open"]
+    assert held_ids(out) == [("1838", "not_open")]
+    assert out.held.columns == list(HELD_SCHEMA)
+    assert dict(out.held.schema) == HELD_SCHEMA
+    held = out.held.filter(pl.col("grade_raw") == "regular").row(0, named=True)
+    assert held["station_key"] == "US-COSTCO-1838"
+    assert held["price"] == 3.099
+    assert held["local_date"] == CAPTURE_DATE
+
+
+def test_every_station_level_gate_holds():
+    result = fetch_result(
+        "US",
+        "costco-us-gasprices",
+        [
+            station("120", [("regular", "3.829")], id_origin="seen", ecom_state="no_gas"),
+            station("1813", [("regular", "3.549")], id_origin="lookup", has_hours=False),
+        ],
+    )
+    out = normalize(result, fx_rates(), context())
+    assert held_ids(out) == [("120", "no_gas_service"), ("1813", "no_hours")]
+    assert out.rows.height == 0
+
+
+def test_a_watched_station_is_held_until_it_is_turned_on():
+    result = fetch_result(
+        "US", "costco-us-gasprices", [station("1165", [("regular", "3.829")], id_origin="watch")]
+    )
+    out = normalize(result, fx_rates(), watching(("US-COSTCO", "1165", "hold", "")))
+    assert out.rows.height == 0
+    assert reasons(out.drops) == ["watch"]
+    assert held_ids(out) == [("1165", "watch")]
+
+
+def test_a_watched_station_with_no_row_in_the_checkout_stays_held():
+    """A rebuild reads the checkout's watch.csv; a row deleted since the capture
+    must not publish the station."""
+    result = fetch_result(
+        "US", "costco-us-gasprices", [station("1165", [("regular", "3.829")], id_origin="watch")]
+    )
+    out = normalize(result, fx_rates(), context())
+    assert held_ids(out) == [("1165", "watch")]
+
+
+def test_turning_a_station_on_publishes_it_from_its_publish_from_date():
+    result = fetch_result(
+        "US", "costco-us-gasprices", [station("1165", [("regular", "3.829")], id_origin="watch")]
+    )
+    on_the_day = normalize(
+        result, fx_rates(), watching(("US-COSTCO", "1165", "on", CAPTURE_DATE.isoformat()))
+    )
+    assert on_the_day.rows["station_key"].to_list() == ["US-COSTCO-1165"]
+    assert on_the_day.stations["station_key"].to_list() == ["US-COSTCO-1165"]
+    assert on_the_day.held.height == 0
+    assert on_the_day.drops == []
+
+    before = normalize(result, fx_rates(), watching(("US-COSTCO", "1165", "on", "2026-09-16")))
+    assert before.rows.height == 0
+    assert held_ids(before) == [("1165", "watch")]
+
+
+def test_turning_a_station_on_skips_the_gates():
+    """Exactly as a us_extra_ids.csv row does, but from interpretation config."""
+    result = fetch_result(
+        "US",
+        "costco-us-gasprices",
+        [
+            station(
+                "1838",
+                [("regular", "3.099")],
+                opening_date=date(2026, 10, 2),
+                has_hours=False,
+                ecom_state="no_gas",
+            )
+        ],
+    )
+    out = normalize(result, fx_rates(), watching(("US-COSTCO", "1838", "on", "2026-09-01")))
+    assert out.rows["station_key"].to_list() == ["US-COSTCO-1838"]
+    assert out.drops == []
+    assert out.warnings == []
+
+
+def test_a_hold_row_never_holds_a_station_its_roster_covers():
+    """A forgotten row must not hide a station once the locator lists it."""
+    result = fetch_result(
+        "US", "costco-us-gasprices", [station("1165", [("regular", "3.829")], ecom_state="gas")]
+    )
+    out = normalize(result, fx_rates(), watching(("US-COSTCO", "1165", "hold", "")))
+    assert out.rows["station_key"].to_list() == ["US-COSTCO-1165"]
+    assert out.held.height == 0
+
+
+def test_a_row_turns_on_only_its_own_feed():
+    sams = fetch_result(
+        "US", "sams-fuel-center", [station("1165", [("regular", "3.829")], id_origin="watch")]
+    )
+    sams.brand = "SAMS"
+    out = normalize(sams, fx_rates(), watching(("US-COSTCO", "1165", "on", "2026-09-01")))
+    assert out.rows.height == 0
+    assert held_ids(out) == [("1165", "watch")]
+
+
+def test_a_held_station_adds_no_price_drops_or_warnings_to_the_status():
+    """Held stations were dropped before price parsing; the checks must see the
+    same counts they saw then, out_of_bounds above all."""
+    result = fetch_result(
+        "US",
+        "costco-us-gasprices",
+        [
+            station(
+                "1838",
+                [("regular", "3.999"), ("premium", "99.0"), ("mystery", "4.1"), ("e85", "x")],
+                opening_date=date(2026, 10, 2),
+            )
+        ],
+    )
+    out = normalize(result, fx_rates(), context())
+    assert reasons(out.drops) == ["not_open"]
+    assert codes(out.warnings) == ["priced_before_open"]
+    assert sorted(out.held["grade_raw"].to_list()) == ["mystery", "regular"]
+
+
+def test_a_station_with_nothing_to_record_is_not_held():
+    result = fetch_result(
+        "US",
+        "costco-us-gasprices",
+        [
+            station("1121", [], opening_date=date(2026, 10, 2)),
+            station("1122", [("regular", "3.999")], id_origin="watch", timezone_name=None),
+            station("1123", [("regular", "3.999")], has_hours=False, timezone_name="Mars/Olympus"),
+        ],
+    )
+    out = normalize(result, fx_rates(), context())
+    assert reasons(out.drops) == ["not_open", "no_timezone", "no_hours"]
+    assert out.held.height == 0
+
+
+def test_an_empty_country_returns_a_typed_held_frame():
+    out = normalize(fetch_result("MX", "costco-occ", []), fx_rates(), context())
+    assert dict(out.held.schema) == HELD_SCHEMA

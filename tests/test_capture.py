@@ -17,6 +17,7 @@ from club_gas import capture as capture_module
 from club_gas.capture import capture_id_for, github_output, run_capture
 from club_gas.config import load_config
 from club_gas.http import Client
+from club_gas.schema import read_held_csv_gz
 from club_gas.store import LocalReleaseStore
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -987,3 +988,53 @@ def test_a_capture_directory_without_the_loose_capture_json_still_loads(workspac
     assert loaded.capture_id == result.capture_id
     assert loaded.capture_date == "2026-09-15"
     assert loaded.rows.height > 0
+
+
+def test_held_rows_are_kept_with_the_capture_and_never_published(workspace: Path):
+    """Lees Summit (1838) opens 2026-10-02 and a watched business centre (729)
+    sells no gas: both are recorded, neither reaches rows.csv.gz."""
+    with (workspace / "config" / "watch.csv").open("a", encoding="utf-8") as handle:
+        handle.write("US-COSTCO,729,2026-09-01,hold,,a business centre that priced fuel\n")
+    cfg = load_config(workspace)
+    store = LocalReleaseStore(workspace / "releases")
+    prices = (
+        b'{"1364":{"premium":"4.629","regular":"3.999"},'
+        b'"1838":{"premium":"5.999","regular":"3.999"},'
+        b'"729":{"premium":"4.399","regular":"3.799"}}'
+    )
+    fixtures = make_transport()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "www.costco.com":
+            return httpx.Response(200, content=prices, headers={"Content-Type": "text/html"})
+        return fixtures.handle_request(request)
+
+    result = run_capture(
+        cfg,
+        store,
+        workspace / "out",
+        countries=["US"],
+        force_fallback=set(),
+        now=NOW,
+        client=Client(cfg.http, transport=httpx.MockTransport(handler)),
+    )
+
+    expected = {"1838": "not_open", "729": "no_gas_service"}
+    assert result.status["feeds"]["US-COSTCO"]["held"] == expected
+    feed_held = read_held_csv_gz(workspace / "out" / "feeds" / "US-COSTCO" / "held.csv.gz")
+    capture_held = read_held_csv_gz(workspace / "out" / "capture" / "held.csv.gz")
+    for held in (feed_held, capture_held):
+        assert dict(zip(held["source_station_id"], held["hold_reason"], strict=True)) == expected
+    assert feed_held.filter(pl.col("source_station_id") == "729")["name"].unique().to_list() == [
+        "Hackensack Bus Ctr"
+    ]
+
+    rows = pl.read_csv(workspace / "out" / "capture" / "rows.csv.gz", infer_schema_length=0)
+    assert set(rows["source_station_id"]) & set(expected) == set()
+    assert "1364" in set(rows["source_station_id"])
+
+    with tarfile.open(workspace / "out" / "capture" / "bundle.tar.gz", "r:gz") as tar:
+        assert "held.csv.gz" in tar.getnames()
+        polled = pl.read_csv(tar.extractfile("inputs/us_id_set.csv"), infer_schema_length=0)
+    origins = dict(zip(polled["source_station_id"], polled["id_origin"], strict=True))
+    assert origins["729"] == "watch"

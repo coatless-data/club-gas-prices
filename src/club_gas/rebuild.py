@@ -1,11 +1,14 @@
 """Rebuild history from stored capture bundles (§8.7).
 
-Fetch-time inputs (URLs, parameters, `us_extra_ids.csv`, `http.toml`, and the
-`inputs/` frames) come from the bundle, so a rebuild can never change which
-stations were polled. Interpretation config (`grades.csv`, `station_links.csv`,
-and the units, bounds, region and timezone tables, floors and `stale_after_days`
-in `countries.toml`) comes from the live checkout, which is what makes a config
-fix reach history. Only `parse` and `normalize` re-run; no request is replayed.
+Fetch-time inputs (URLs, parameters, `http.toml`, the `inputs/` frames, and
+which ids `us_extra_ids.csv` and `watch.csv` make a capture poll) come from the
+bundle, so a rebuild can never change which stations were polled.
+Interpretation config (`grades.csv`, `station_links.csv`, the units, bounds,
+region and timezone tables, floors and `stale_after_days` in `countries.toml`,
+the station metadata in `us_extra_ids.csv`, and which stations `watch.csv` turns
+on) comes from the live checkout, which is what makes a config fix reach
+history -- and what publishes the captures a station was held in once it is
+turned on. Only `parse` and `normalize` re-run; no request is replayed.
 """
 
 from __future__ import annotations
@@ -38,7 +41,13 @@ from .sources.base import SOURCES, CaptureContext, RawResponse
 from .store import AssetNotFound, recover_temporaries, recovery_tags, sha256_file
 
 STATE_ASSET = "rebuild-state.json"
-INTERP_CONFIG_FILES = ("grades.csv", "station_links.csv", "countries.toml")
+INTERP_CONFIG_FILES = (
+    "grades.csv",
+    "station_links.csv",
+    "countries.toml",
+    "watch.csv",
+    "us_extra_ids.csv",
+)
 
 
 @dataclass
@@ -66,6 +75,9 @@ def interp_config_sha256(cfg) -> dict[str, str]:
     out: dict[str, str] = {}
     for name in INTERP_CONFIG_FILES:
         path = cfg.root / "config" / name
+        if not path.is_file():
+            # watch.csv is optional; a missing file is recorded by its absence.
+            continue
         out[f"config/{name}"] = hashlib.sha256(path.read_bytes()).hexdigest()
     return out
 

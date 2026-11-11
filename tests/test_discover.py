@@ -1,5 +1,6 @@
 import io
 import json
+import shutil
 import tarfile
 from datetime import UTC, datetime
 from pathlib import Path
@@ -13,6 +14,7 @@ from club_gas.discover import candidate_ids, read_bundle, select_bundle
 from club_gas.store import open_store
 
 NOW = datetime(2026, 10, 2, 3, 41, tzinfo=UTC)
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 # Trimmed from a real warehouse-locator response captured on 2026-09-15, in which
 # 1838 is the highest US id and 1775 the highest Canadian id.
@@ -274,7 +276,7 @@ def test_candidate_range_runs_to_the_highest_id_plus_200(tmp_path):
     assert len(ids) == 2038 - 6  # 5 polled ids plus the Canadian 1775
 
 
-from club_gas.config import Bounds  # noqa: E402
+from club_gas.config import WATCH_SCHEMA, Bounds, load_config  # noqa: E402
 from club_gas.discover import US_PRICE_URL, discover  # noqa: E402
 from club_gas.issues import Issues  # noqa: E402
 from club_gas.sources.base import RawResponse  # noqa: E402
@@ -497,3 +499,121 @@ def test_a_report_that_fits_is_posted_whole():
     assert listed == 1
     assert "did not fit" not in body
     assert "| 1364 | 3.999 | 4.629 | - | - |" in body
+
+
+# --- watch.csv (2026-11-10 held-stations design) ------------------------------
+
+WATCH_HEADER = "feed,source_station_id,detected,status,publish_from,note\n"
+ON_HOLD = "US-COSTCO,1165,2026-09-02,hold,,found by the 2026-09-02 sweep: regular=3.829\n"
+
+
+class RecordingIssues:
+    def __init__(self):
+        self.bodies: list[str] = []
+
+    def ensure_open(self, title: str, body: str, labels=None) -> None:
+        self.bodies.append(body)
+
+
+def _checkout(tmp_path: Path, text: str | None = WATCH_HEADER + ON_HOLD) -> SimpleNamespace:
+    """_cfg() plus the checkout root and watch table load_config would give."""
+    root = tmp_path / "checkout"
+    (root / "config").mkdir(parents=True)
+    if text is not None:
+        (root / "config" / "watch.csv").write_text(text, encoding="utf-8")
+    cfg = _cfg()
+    cfg.root = root
+    cfg.watch = (
+        pl.read_csv(root / "config" / "watch.csv", infer_schema=False)
+        if text is not None
+        else pl.DataFrame(schema=WATCH_SCHEMA)
+    )
+    return cfg
+
+
+def _sweep(tmp_path, cfg, prices=None, issues=None):
+    store = _seed(
+        tmp_path,
+        entries={"2026-10-01T0617Z": _entry("2026-10-01T0617Z", "ok")},
+        bundles=["2026-10-01T0617Z"],
+    )
+    if prices is None:
+        prices = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    return discover(store, FakeClient(prices), cfg, issues or RecordingIssues(), now=NOW)
+
+
+def test_a_new_candidate_is_recorded_on_hold_from_the_next_capture(tmp_path):
+    cfg = _checkout(tmp_path)
+    result = _sweep(tmp_path, cfg)
+
+    assert result.watched == ["1364"]
+    text = (cfg.root / "config" / "watch.csv").read_text(encoding="utf-8")
+    # Rows a maintainer wrote are left exactly as they were.
+    assert text.startswith(WATCH_HEADER + ON_HOLD)
+    assert text.endswith(
+        "US-COSTCO,1364,2026-10-02,hold,,found by the 2026-10-02 sweep: "
+        "premium=4.629 regular=3.999\n"
+    )
+    # And the result loads: the row satisfies config validation.
+    shutil.copytree(REPO_ROOT / "config", tmp_path / "real" / "config")
+    shutil.copy(cfg.root / "config" / "watch.csv", tmp_path / "real" / "config" / "watch.csv")
+    loaded = load_config(tmp_path / "real")
+    assert loaded.watch.filter(pl.col("source_station_id") == "1364")["status"].to_list() == [
+        "hold"
+    ]
+
+
+def test_a_missing_watch_csv_is_created(tmp_path):
+    cfg = _checkout(tmp_path, text=None)
+    _sweep(tmp_path, cfg)
+    text = (cfg.root / "config" / "watch.csv").read_text(encoding="utf-8")
+    assert text.startswith(WATCH_HEADER + "US-COSTCO,1364,")
+
+
+def test_a_file_without_a_final_newline_gets_one_before_the_new_row(tmp_path):
+    cfg = _checkout(tmp_path, text=WATCH_HEADER + ON_HOLD.rstrip("\n"))
+    _sweep(tmp_path, cfg)
+    lines = (cfg.root / "config" / "watch.csv").read_text(encoding="utf-8").splitlines()
+    assert [line.split(",")[1] for line in lines[1:]] == ["1165", "1364"]
+
+
+def test_an_id_already_watched_is_not_added_again(tmp_path):
+    """Discover can run again before a capture has polled what it added."""
+    cfg = _checkout(tmp_path, text=WATCH_HEADER + "US-COSTCO,1364,2026-10-01,hold,,earlier\n")
+    result = _sweep(tmp_path, cfg)
+    assert [c["warehouse_id"] for c in result.candidates] == ["1364"]
+    assert result.watched == []
+    lines = (cfg.root / "config" / "watch.csv").read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 2
+
+
+def test_a_sams_row_with_the_same_number_does_not_count_as_watched(tmp_path):
+    cfg = _checkout(tmp_path, text=WATCH_HEADER + "US-SAMS,1364,2026-10-01,hold,,a club\n")
+    assert _sweep(tmp_path, cfg).watched == ["1364"]
+
+
+def test_a_sweep_adds_at_most_25_ids_and_the_issue_says_so(tmp_path):
+    cfg = _checkout(tmp_path)
+    prices = {str(value): {"regular": "3.499", "premium": "3.899"} for value in range(1, 41)}
+    issues = RecordingIssues()
+    result = _sweep(tmp_path, cfg, prices=prices, issues=issues)
+    assert len(result.candidates) > 25
+    assert len(result.watched) == 25
+    assert result.watched == [c["warehouse_id"] for c in result.candidates][:25]
+    assert f"Only the first 25 of {len(result.candidates)}" in issues.bodies[0]
+
+
+def test_the_issue_says_how_to_turn_a_station_on_and_what_is_still_held(tmp_path):
+    issues = RecordingIssues()
+    _sweep(tmp_path, _checkout(tmp_path), issues=issues)
+    body = issues.bodies[0]
+    assert "`config/watch.csv`" in body
+    assert "`status` to `on`" in body
+    assert "`publish_from`" in body
+    assert "Rebuild" in body
+    assert "Still on hold in `config/watch.csv`: 1165 (detected 2026-09-02)." in body
+
+
+def test_without_a_checkout_nothing_is_written(tmp_path):
+    result = _sweep(tmp_path, _cfg())
+    assert result.watched == []
