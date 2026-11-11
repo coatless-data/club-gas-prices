@@ -1038,3 +1038,38 @@ def test_held_rows_are_kept_with_the_capture_and_never_published(workspace: Path
         polled = pl.read_csv(tar.extractfile("inputs/us_id_set.csv"), infer_schema_length=0)
     origins = dict(zip(polled["source_station_id"], polled["id_origin"], strict=True))
     assert origins["729"] == "watch"
+
+
+def test_held_rows_that_break_the_schema_never_fail_the_feed(workspace: Path, monkeypatch):
+    """normalize checks held rows station by station; this is the backstop for
+    anything that still gets through. The held rows go, the published stay."""
+    real_normalize = capture_module.normalize
+
+    def normalize_with_a_bad_held_row(result, fx, ctx):
+        out = real_normalize(result, fx, ctx)
+        bad = out.rows.head(1).with_columns(
+            pl.lit(None, dtype=pl.String).alias("name"),
+            pl.lit("not_open").alias("hold_reason"),
+        )
+        out.held = bad
+        return out
+
+    monkeypatch.setattr(capture_module, "normalize", normalize_with_a_bad_held_row)
+    cfg = load_config(workspace)
+    result = run_capture(
+        cfg,
+        LocalReleaseStore(workspace / "releases"),
+        workspace / "out",
+        countries=["TW"],
+        force_fallback=set(),
+        now=NOW,
+        client=Client(cfg.http, transport=make_transport()),
+    )
+
+    block = result.status["feeds"]["TW-COSTCO"]
+    assert block["status"] == "ok"
+    assert block["rows"] == 7
+    assert block["held"] == {}
+    assert [w["code"] for w in block["warnings"]] == ["held_rows_invalid"]
+    held = read_held_csv_gz(workspace / "out" / "feeds" / "TW-COSTCO" / "held.csv.gz")
+    assert held.height == 0

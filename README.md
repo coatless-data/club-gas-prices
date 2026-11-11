@@ -178,7 +178,8 @@ go to `held.csv.gz` in the capture and its bundle, with a `hold_reason`, and the
 feed's `held` entry in the capture status lists it. The monthly Costco sweep appends
 each new id it finds to `watch.csv` with `status` `hold`. Sam's clubs are added there
 by hand. To publish a station once it checks out, set its row's `status` to `on` and
-its `publish_from` to the first capture date whose prices are real. A Costco id that
+its `publish_from` to the first `capture_date` whose prices are real. That is a UTC
+date, like the column, not the station's local one. A Costco id that
 Costco's locator does not list also needs a row in `us_extra_ids.csv`. Then run the
 Rebuild workflow for each month since `publish_from`, so the captures it was held in
 are published too. A `hold` row never holds back a station that its feed's own list

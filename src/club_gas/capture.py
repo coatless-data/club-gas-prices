@@ -321,7 +321,14 @@ def run_feed(
         # The rows are written after this guard, and the write validates them; a
         # bad row must fail this feed here, not escape and take the capture down.
         schema.validate_rows(normalized.rows)
-        schema.validate_held(normalized.held)
+        try:
+            schema.validate_held(normalized.held)
+        except schema.SchemaError as exc:
+            # Held rows are never published, so losing them must never cost
+            # the feed its published rows. normalize checks them station by
+            # station; this is the backstop.
+            normalized.warnings.append(Warning(code="held_rows_invalid", detail=str(exc)))
+            normalized.held = pl.DataFrame(schema=schema.HELD_SCHEMA)
         if fid == "US-COSTCO":
             us_id_set = us_source.polled_id_frame(ctx)
     except Exception as exc:  # isolation is the point

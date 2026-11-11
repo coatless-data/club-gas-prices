@@ -172,6 +172,7 @@ def cmd_discover(args) -> int:
         cfg,
         Issues(os.environ.get("GITHUB_REPOSITORY"), os.environ.get("GITHUB_TOKEN")),
         now=utc_now(),
+        watch=args.watch,
     )
     print(
         json.dumps(
@@ -244,6 +245,11 @@ def build_parser() -> argparse.ArgumentParser:
         "discover", help="sweep unpolled US warehouse ids for fuel prices (spec 10.4)"
     )
     discover_cmd.add_argument("--root", default=".", help="repository root holding config/")
+    discover_cmd.add_argument(
+        "--watch",
+        action="store_true",
+        help="append new candidates to config/watch.csv on hold (the Discover workflow does)",
+    )
     discover_cmd.set_defaults(func=cmd_discover)
 
     site_data_cmd = sub.add_parser(

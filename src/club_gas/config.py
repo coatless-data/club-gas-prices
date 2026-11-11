@@ -801,7 +801,10 @@ def _validate_watch(cfg: Config) -> None:
             if not publish_from:
                 # Turning a station on without a date would publish everything it
                 # ever answered with, the pre-opening placeholders included.
-                raise ConfigError(f"{where}: status on needs a publish_from date")
+                raise ConfigError(
+                    f"{where}: status on needs a publish_from date, the first UTC "
+                    "capture_date to publish"
+                )
             _iso_date(publish_from, f"{where} publish_from")
         elif publish_from:
             raise ConfigError(f"{where}: publish_from is set but status is {status!r}, not on")

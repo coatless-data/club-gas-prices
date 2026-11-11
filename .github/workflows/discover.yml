@@ -39,7 +39,7 @@ jobs:
 
       - name: Discover US station IDs
         timeout-minutes: 15
-        run: uv run club-gas discover
+        run: uv run club-gas discover --watch
 
       # The sweep appends each new id to config/watch.csv on hold, so every
       # capture from the next one records its prices without publishing them.
