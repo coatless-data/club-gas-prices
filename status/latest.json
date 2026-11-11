@@ -1,5 +1,5 @@
 {
-  "capture_id": "2026-11-10T1942Z",
+  "capture_id": "2026-11-11T0614Z",
   "close": {
     "outcome": "success"
   },
@@ -8,7 +8,7 @@
       "feeds": [
         "AU-COSTCO"
       ],
-      "last_success_capture_id": "2026-11-10T1942Z",
+      "last_success_capture_id": "2026-11-11T0614Z",
       "rows": 42,
       "stations": 14,
       "status": "ok"
@@ -17,16 +17,16 @@
       "feeds": [
         "CA-COSTCO"
       ],
-      "last_success_capture_id": "2026-11-10T1942Z",
-      "rows": 168,
-      "stations": 81,
+      "last_success_capture_id": "2026-11-11T0614Z",
+      "rows": 175,
+      "stations": 84,
       "status": "ok"
     },
     "GB": {
       "feeds": [
         "GB-COSTCO"
       ],
-      "last_success_capture_id": "2026-11-10T1942Z",
+      "last_success_capture_id": "2026-11-11T0614Z",
       "rows": 66,
       "stations": 22,
       "status": "ok"
@@ -35,7 +35,7 @@
       "feeds": [
         "JP-COSTCO"
       ],
-      "last_success_capture_id": "2026-11-10T1942Z",
+      "last_success_capture_id": "2026-11-11T0614Z",
       "rows": 105,
       "stations": 27,
       "status": "ok"
@@ -44,7 +44,7 @@
       "feeds": [
         "MX-COSTCO"
       ],
-      "last_success_capture_id": "2026-11-10T1942Z",
+      "last_success_capture_id": "2026-11-11T0614Z",
       "rows": 38,
       "stations": 19,
       "status": "ok"
@@ -53,7 +53,7 @@
       "feeds": [
         "TW-COSTCO"
       ],
-      "last_success_capture_id": "2026-11-10T1942Z",
+      "last_success_capture_id": "2026-11-11T0614Z",
       "rows": 7,
       "stations": 3,
       "status": "degraded"
@@ -63,9 +63,9 @@
         "US-COSTCO",
         "US-SAMS"
       ],
-      "last_success_capture_id": "2026-11-10T1942Z",
-      "rows": 2542,
-      "stations": 1132,
+      "last_success_capture_id": "2026-11-11T0614Z",
+      "rows": 2552,
+      "stations": 1136,
       "status": "ok"
     }
   },
@@ -77,35 +77,35 @@
     "AU-COSTCO": {
       "consecutive_failures": 0,
       "dropped": {},
-      "duration_s": 0.4,
+      "duration_s": 0.5,
       "errors": [],
-      "last_success_capture_id": "2026-11-10T1942Z",
-      "price_fingerprint": "sha256:364ca5e47a04c708efc16c4ed4ca7c841619370765e63a39eaea5e3d3937a075",
+      "last_success_capture_id": "2026-11-11T0614Z",
+      "price_fingerprint": "sha256:e19f766d20cf10ce09094ce1fa77524024fbbbee8c861049d0e15d7866ea1495",
       "recent_errors": [],
       "requests": 1,
       "rows": 42,
       "source": "costco-occ",
       "stations": 14,
       "status": "ok",
-      "unchanged_since_capture_id": "2026-11-08T2201Z",
+      "unchanged_since_capture_id": "2026-11-11T0614Z",
       "warnings": []
     },
     "CA-COSTCO": {
       "consecutive_failures": 0,
       "dropped": {
-        "not_open": 6
+        "not_open": 3
       },
-      "duration_s": 4.2,
+      "duration_s": 1.9,
       "errors": [],
-      "last_success_capture_id": "2026-11-10T1942Z",
-      "price_fingerprint": "sha256:46b57be2292e5a442d9f9b25148d101ee442be224defc804cc4b0910ff8632ea",
+      "last_success_capture_id": "2026-11-11T0614Z",
+      "price_fingerprint": "sha256:3c7956c818de77cd7f5a756d923fa2fdec53b2f89bd69ee32512f90bb409fcfc",
       "recent_errors": [],
       "requests": 1,
-      "rows": 168,
+      "rows": 175,
       "source": "costco-ca-lookup",
-      "stations": 81,
+      "stations": 84,
       "status": "ok",
-      "unchanged_since_capture_id": "2026-11-10T1942Z",
+      "unchanged_since_capture_id": "2026-11-11T0614Z",
       "warnings": [
         {
           "code": "timezone_from_region",
@@ -118,27 +118,15 @@
         {
           "code": "priced_before_open",
           "detail": "1811"
-        },
-        {
-          "code": "priced_before_open",
-          "detail": "1798"
-        },
-        {
-          "code": "priced_before_open",
-          "detail": "1790"
-        },
-        {
-          "code": "priced_before_open",
-          "detail": "1812"
         }
       ]
     },
     "GB-COSTCO": {
       "consecutive_failures": 0,
       "dropped": {},
-      "duration_s": 0.5,
+      "duration_s": 0.6,
       "errors": [],
-      "last_success_capture_id": "2026-11-10T1942Z",
+      "last_success_capture_id": "2026-11-11T0614Z",
       "price_fingerprint": "sha256:3c07e7dfe9cee02ee9b675eaedfa670874f661ab267f57bf7438412b958884b0",
       "recent_errors": [],
       "requests": 1,
@@ -154,23 +142,23 @@
       "dropped": {},
       "duration_s": 0.2,
       "errors": [],
-      "last_success_capture_id": "2026-11-10T1942Z",
-      "price_fingerprint": "sha256:18ce38b870d6e3ca0d87dabfdffefbc12ffbdb24c9b2c1e4b8612a841e61411d",
+      "last_success_capture_id": "2026-11-11T0614Z",
+      "price_fingerprint": "sha256:f2be69fae0d1bc04661c99083669f4e7f60abeb3fbd3472f6777b42e020e7979",
       "recent_errors": [],
       "requests": 1,
       "rows": 105,
       "source": "costco-occ",
       "stations": 27,
       "status": "ok",
-      "unchanged_since_capture_id": "2026-11-10T1942Z",
+      "unchanged_since_capture_id": "2026-11-11T0614Z",
       "warnings": []
     },
     "MX-COSTCO": {
       "consecutive_failures": 0,
       "dropped": {},
-      "duration_s": 0.3,
+      "duration_s": 0.5,
       "errors": [],
-      "last_success_capture_id": "2026-11-10T1942Z",
+      "last_success_capture_id": "2026-11-11T0614Z",
       "price_fingerprint": "sha256:486dcc68221abdc15ea5b768f25a160a1b5ca9b5c97a43c353b5759c52066ebe",
       "recent_errors": [],
       "requests": 1,
@@ -184,9 +172,9 @@
     "TW-COSTCO": {
       "consecutive_failures": 0,
       "dropped": {},
-      "duration_s": 0.6,
+      "duration_s": 0.5,
       "errors": [],
-      "last_success_capture_id": "2026-11-10T1942Z",
+      "last_success_capture_id": "2026-11-11T0614Z",
       "price_fingerprint": "sha256:98ec34adcfe4c47ed3611daded4071efe9d27b5c9f1e1e617d15bedc2542d5da",
       "recent_errors": [],
       "requests": 1,
@@ -201,31 +189,27 @@
       "consecutive_failures": 0,
       "dropped": {
         "no_price": 1,
-        "not_open": 2
+        "not_open": 3
       },
       "duration_s": 60.1,
       "errors": [],
-      "last_success_capture_id": "2026-11-10T1942Z",
-      "price_fingerprint": "sha256:1dfb1fe6730e15b83ddc109d24485f84a6cd3446a90d6e83efb4187af9fee82d",
+      "last_success_capture_id": "2026-11-11T0614Z",
+      "price_fingerprint": "sha256:dd81754ca42bcb32a6f41a00c05b614ed73c69acdec656b064cb3cbe356f5321",
       "recent_errors": [],
       "requests": 61,
-      "rows": 1272,
+      "rows": 1276,
       "source": "costco-us-gasprices",
-      "stations": 601,
+      "stations": 603,
       "status": "ok",
-      "unchanged_since_capture_id": "2026-11-10T1942Z",
+      "unchanged_since_capture_id": "2026-11-11T0614Z",
       "warnings": [
         {
-          "code": "not_in_ecom_api",
-          "detail": "1772"
+          "code": "priced_before_open",
+          "detail": "1799"
         },
         {
           "code": "priced_before_open",
           "detail": "1807"
-        },
-        {
-          "code": "priced_before_open",
-          "detail": "1808"
         }
       ]
     },
@@ -234,19 +218,23 @@
       "dropped": {},
       "duration_s": 0.0,
       "errors": [],
-      "last_success_capture_id": "2026-11-10T1942Z",
-      "price_fingerprint": "sha256:50fb917647af88a7233fa41fa9073d3bc1d824d8a97bc948db6fdfe1d1108011",
+      "last_success_capture_id": "2026-11-11T0614Z",
+      "price_fingerprint": "sha256:24f0fa4ca66db80d963113c8a5b66173ca63c448762b26b6117b019cc97456ee",
       "recent_errors": [],
-      "requests": 605,
-      "rows": 1270,
+      "requests": 607,
+      "rows": 1276,
       "source": "sams-fuel-center",
-      "stations": 531,
+      "stations": 533,
       "status": "ok",
-      "unchanged_since_capture_id": "2026-11-10T1942Z",
+      "unchanged_since_capture_id": "2026-11-11T0614Z",
       "warnings": [
         {
           "code": "below_regular",
           "detail": "6376:MIDGRAD=2.979"
+        },
+        {
+          "code": "timezone_from_region",
+          "detail": "7718"
         },
         {
           "code": "mislabeled_grade",
@@ -255,22 +243,22 @@
       ]
     }
   },
-  "finished_at_utc": "2026-11-10T19:42:26Z",
+  "finished_at_utc": "2026-11-11T06:14:30Z",
   "fx": {
-    "rate_date": "2026-11-10",
+    "rate_date": "2026-11-11",
     "source": "frankfurter-v2",
     "status": "ok"
   },
-  "git_sha": "f86862060f6fb781b8ab4cef14e3b3ed774a4966",
+  "git_sha": "9a7464f31b873efde4ff4a5c0253291cd8ce0630",
   "publish": {
     "consecutive_failures": 0,
     "outcome": "success",
     "unpublished": []
   },
   "run_attempt": 1,
-  "run_id": 42887907652,
-  "run_url": "https://github.com/coatless-data/club-gas-prices/actions/runs/42887907652",
+  "run_id": 42971009596,
+  "run_url": "https://github.com/coatless-data/club-gas-prices/actions/runs/42971009596",
   "schema_version": 1,
-  "started_at_utc": "2026-11-10T19:42:26Z",
+  "started_at_utc": "2026-11-11T06:14:30Z",
   "warnings": []
 }
