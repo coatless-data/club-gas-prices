@@ -734,6 +734,7 @@ class FakeGitHub:
         self.fail_promote: dict[str, int] = {}
         self.stale_downloads: dict[str, bytes] = {}
         self.rate_limit_queue: list[dict] = []
+        self.drops: list[tuple[str, str, str]] = []
         self.null_digest = False
         self._next_release = 1
         self._next_asset = 1000
@@ -824,6 +825,18 @@ class FakeGitHub:
     def label_of(self, tag: str, name: str) -> str:
         return self._asset(tag, name)["label"]
 
+    def drop_connection(self, method: str, fragment: str, *, landed: str = "nothing") -> None:
+        """Close the connection on the next `method` request whose URL holds `fragment`.
+
+        The client sees the same thing every time -- no response at all -- so
+        `landed` is what it cannot see, how far the server got first:
+        "nothing" (the request never arrived), "all" (it was carried out and
+        only the answer was lost) or "part" (an upload was cut off and left a
+        half-written asset holding the name).
+        """
+        assert landed in ("nothing", "all", "part")
+        self.drops.append((method, fragment, landed))
+
     def corrupt_body(self, tag: str, name: str, data: bytes) -> None:
         """Overwrite a stored asset's bytes in place, as a torn transfer would.
 
@@ -859,6 +872,26 @@ class FakeGitHub:
                 "auth": request.headers.get("authorization"),
             }
         )
+        for index, (method, fragment, landed) in enumerate(self.drops):
+            if request.method == method and fragment in str(request.url):
+                del self.drops[index]
+                if landed == "all":
+                    self._respond(request)
+                elif landed == "part":
+                    half = request.content[: len(request.content) // 2]
+                    self._store_asset(
+                        int(request.url.path.split("/")[-2]),
+                        request.url.params["name"],
+                        half,
+                        label=request.url.params.get("label"),
+                        state="starter",
+                    )
+                raise httpx.RemoteProtocolError(
+                    "Server disconnected without sending a response.", request=request
+                )
+        return self._respond(request)
+
+    def _respond(self, request: httpx.Request) -> httpx.Response:
         path = request.url.path
         if request.url.host == "downloads.invalid":
             asset_id = int(path.rsplit("/", 1)[-1])
@@ -1389,6 +1422,162 @@ def test_x_ratelimit_reset_is_honoured(writer_env):
 
     assert clock.slept == [45.0]
     assert fake.asset_names("current") == []
+
+
+def test_github_replace_atomic_survives_a_dropped_upload(tmp_path: Path, writer_env):
+    """One dropped connection used to cost a whole publish.
+
+    The publish of capture 2026-11-22T0644Z died here: GitHub's upload host
+    closed the connection without answering while `replace_atomic` was sending
+    a file to `current`, httpx raised, and nothing between it and the top of
+    the program caught it.
+    """
+    fake = FakeGitHub()
+    fake.add_release("current", latest=True)
+    fake.add_asset("current", "stations.csv", b"stations-v1\n")
+    fake.drop_connection("POST", "uploads.github.com")
+    s = _paced_store(fake, FakeClock())
+    payload = _write(tmp_path, "stations.csv", b"stations-v2\n")
+
+    s.replace_atomic("current", payload, "stations.csv", "2026-11-22T0644Z")
+
+    assert fake.asset_names("current") == ["stations.csv"]
+    assert fake.body_of("current", "stations.csv") == b"stations-v2\n"
+
+
+def test_github_retries_a_request_whose_connection_drops(writer_env):
+    fake = FakeGitHub()
+    fake.add_release("current")
+    fake.add_asset("current", "stations.csv", b"stations-v1\n")
+    fake.drop_connection("GET", "/releases/tags/current")
+    s = _paced_store(fake, FakeClock())
+
+    assert [a.name for a in s.list_assets("current")] == ["stations.csv"]
+
+
+def test_github_gives_up_on_a_connection_that_keeps_dropping(writer_env):
+    fake = FakeGitHub()
+    fake.add_release("current")
+    for _ in range(5):
+        fake.drop_connection("GET", "/releases/tags/current")
+    clock = FakeClock()
+    s = _paced_store(fake, clock)
+
+    with pytest.raises(store.StorageError, match="Server disconnected") as excinfo:
+        s.list_assets("current")
+
+    assert isinstance(excinfo.value.__cause__, httpx.RemoteProtocolError)
+    # One try and three retries, a little further apart each time. The fifth
+    # drop was never asked for.
+    assert len(fake.calls) == 4
+    assert clock.slept == [1.0, 2.0, 3.0]
+
+
+def test_github_upload_new_accepts_an_upload_whose_answer_was_lost(tmp_path: Path, writer_env):
+    """A dropped connection does not say whether the upload arrived.
+
+    When it did, the name is taken by the very bytes being sent, and sending
+    them again can only be refused as a duplicate.
+    """
+    fake = FakeGitHub()
+    fake.add_release("data-2026-11", prerelease=True)
+    fake.drop_connection("POST", "uploads.github.com", landed="all")
+    s = _paced_store(fake, FakeClock())
+    payload = _write(tmp_path, "bundle.tar.gz", b"bundle-bytes")
+
+    asset = s.upload_new("data-2026-11", payload, "capture-2026-11-22T0644Z.tar.gz", label="mine")
+
+    assert (asset.name, asset.state, asset.size, asset.label) == (
+        "capture-2026-11-22T0644Z.tar.gz",
+        "uploaded",
+        12,
+        "mine",
+    )
+    assert fake.body_of("data-2026-11", "capture-2026-11-22T0644Z.tar.gz") == b"bundle-bytes"
+    assert [c["method"] for c in fake.calls if "uploads.github.com" in c["url"]] == ["POST"]
+
+
+def test_github_upload_new_clears_a_half_written_upload_and_sends_it_again(
+    tmp_path: Path, writer_env
+):
+    """An upload cut off part-way leaves an asset that never reaches `uploaded`.
+
+    It holds the name, so the retry has to remove it first.
+    """
+    fake = FakeGitHub()
+    fake.add_release("data-2026-11", prerelease=True)
+    fake.drop_connection("POST", "uploads.github.com", landed="part")
+    s = _paced_store(fake, FakeClock())
+    payload = _write(tmp_path, "bundle.tar.gz", b"bundle-bytes")
+
+    asset = s.upload_new("data-2026-11", payload, "capture-2026-11-22T0644Z.tar.gz")
+
+    assert (asset.state, asset.size) == ("uploaded", 12)
+    assert fake.asset_names("data-2026-11") == ["capture-2026-11-22T0644Z.tar.gz"]
+    assert fake.body_of("data-2026-11", "capture-2026-11-22T0644Z.tar.gz") == b"bundle-bytes"
+
+
+def test_github_upload_new_leaves_a_finished_asset_alone_after_a_dropped_connection(
+    tmp_path: Path, writer_env
+):
+    """Only a half-written upload is ever removed to make room for a retry.
+
+    A finished asset under the name that holds other bytes is not this upload's
+    debris. It stays, and the caller hears what GitHub would have said.
+    """
+    fake = FakeGitHub()
+    fake.add_release("data-2026-11", prerelease=True)
+    fake.add_asset("data-2026-11", "capture-2026-11-22T0644Z.tar.gz", b"another-bundle")
+    fake.drop_connection("POST", "uploads.github.com")
+    s = _paced_store(fake, FakeClock())
+    payload = _write(tmp_path, "bundle.tar.gz", b"bundle-bytes")
+
+    with pytest.raises(store.StorageError) as excinfo:
+        s.upload_new("data-2026-11", payload, "capture-2026-11-22T0644Z.tar.gz")
+
+    assert excinfo.value.status == 422
+    assert fake.body_of("data-2026-11", "capture-2026-11-22T0644Z.tar.gz") == b"another-bundle"
+
+
+def test_github_upload_new_gives_up_on_a_connection_that_keeps_dropping(tmp_path: Path, writer_env):
+    fake = FakeGitHub()
+    fake.add_release("data-2026-11", prerelease=True)
+    for _ in range(5):
+        fake.drop_connection("POST", "uploads.github.com")
+    s = _paced_store(fake, FakeClock())
+    payload = _write(tmp_path, "bundle.tar.gz", b"bundle-bytes")
+
+    with pytest.raises(store.StorageError, match="Server disconnected"):
+        s.upload_new("data-2026-11", payload, "capture-2026-11-22T0644Z.tar.gz")
+
+    assert len([c for c in fake.calls if c["method"] == "POST"]) == 4
+    assert fake.asset_names("data-2026-11") == []
+
+
+def test_github_download_retries_a_dropped_connection(tmp_path: Path):
+    fake = FakeGitHub()
+    fake.add_release("current", latest=True)
+    fake.add_asset("current", "stations.csv", b"stations-v1\n")
+    fake.drop_connection("GET", "downloads.invalid")
+    s = _paced_store(fake, FakeClock())
+
+    out = s.download("current", "stations.csv", tmp_path / "stations.csv")
+
+    assert out.read_bytes() == b"stations-v1\n"
+
+
+def test_github_download_gives_up_on_a_connection_that_keeps_dropping(tmp_path: Path):
+    fake = FakeGitHub()
+    fake.add_release("current", latest=True)
+    fake.add_asset("current", "stations.csv", b"stations-v1\n")
+    for _ in range(5):
+        fake.drop_connection("GET", "downloads.invalid")
+    s = _paced_store(fake, FakeClock())
+
+    with pytest.raises(store.StorageError, match="Server disconnected"):
+        s.download("current", "stations.csv", tmp_path / "stations.csv")
+
+    assert len([c for c in fake.calls if "downloads.invalid" in c["url"]]) == 4
 
 
 def test_download_falls_back_to_the_asset_id_when_the_public_copy_is_stale(tmp_path: Path):

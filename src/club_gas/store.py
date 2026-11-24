@@ -41,6 +41,8 @@ RENAME_RETRY_DELAYS = (5.0, 10.0, 20.0, 40.0, 80.0)
 # After a replace, the public download can still serve old bytes while the
 # listing already describes the new ones. Retries ask by asset id instead.
 STALE_READ_RETRY_DELAYS = (2.0, 5.0, 10.0, 20.0)
+# How often a request is sent again after its connection failed with no response.
+DROPPED_CONNECTION_RETRIES = 3
 
 
 class AssetNotFound(Exception):
@@ -766,6 +768,18 @@ class GitHubReleaseStore(_BaseStore):
                     return None
         return None
 
+    def _wait_out_drop(self, attempt: int, what: str, exc: httpx.TransportError) -> None:
+        """Pause before retry number `attempt` of a dropped exchange, or give up.
+
+        GitHub now and then closes a connection without answering, and one such
+        drop used to end a whole publish. Three retries a little further apart
+        each time ride that out; a connection that is still failing after them
+        is reported as a `StorageError`, like every other storage failure.
+        """
+        if attempt > DROPPED_CONNECTION_RETRIES:
+            raise StorageError(f"{what} failed: {exc!r}") from exc
+        self._sleep(float(attempt))
+
     def _request(
         self,
         method: str,
@@ -776,6 +790,7 @@ class GitHubReleaseStore(_BaseStore):
         json_body: dict | None = None,
         content: bytes | None = None,
         extra_headers: dict[str, str] | None = None,
+        retry_dropped: bool = True,
     ) -> httpx.Response:
         if method in self.WRITE_METHODS:
             self._require_writer()
@@ -786,14 +801,23 @@ class GitHubReleaseStore(_BaseStore):
         while True:
             if method in self.WRITE_METHODS:
                 self._reserve_write_slot()
-            response = self._client.request(
-                method,
-                url,
-                params=params,
-                json=json_body,
-                content=content,
-                headers=headers,
-            )
+            try:
+                response = self._client.request(
+                    method,
+                    url,
+                    params=params,
+                    json=json_body,
+                    content=content,
+                    headers=headers,
+                )
+            except httpx.TransportError as exc:
+                # No response at all. Sending the request again is right for
+                # everything but an upload, which `upload_new` retries itself.
+                if not retry_dropped:
+                    raise
+                attempt += 1
+                self._wait_out_drop(attempt, f"{method} {url}", exc)
+                continue
             if response.status_code in ok:
                 return response
             attempt += 1
@@ -974,15 +998,35 @@ class GitHubReleaseStore(_BaseStore):
         params: dict[str, str] = {"name": name}
         if label:
             params["label"] = label
-        response = self._request(
-            "POST",
-            f"{self.UPLOADS}/repos/{self._owner}/{self._repo}/releases/{release_id}/assets",
-            ok=(201,),
-            params=params,
-            content=Path(path).read_bytes(),
-            extra_headers={"Content-Type": "application/octet-stream"},
-        )
-        return self._to_asset(response.json())
+        data = Path(path).read_bytes()
+        attempt = 0
+        while True:
+            try:
+                response = self._request(
+                    "POST",
+                    f"{self.UPLOADS}/repos/{self._owner}/{self._repo}/releases/{release_id}/assets",
+                    ok=(201,),
+                    params=params,
+                    content=data,
+                    extra_headers={"Content-Type": "application/octet-stream"},
+                    retry_dropped=False,
+                )
+                return self._to_asset(response.json())
+            except httpx.TransportError as exc:
+                attempt += 1
+                self._wait_out_drop(attempt, f"upload of {tag}:{name}", exc)
+            # A dropped connection does not say how far the upload got, and an
+            # upload cannot simply be sent again: whatever arrived holds the
+            # name, and a second copy is refused as a duplicate. So look first.
+            existing = self._asset_by_name(tag, name)
+            if existing is None:
+                continue
+            if self._verify_asset(tag, existing, sha256_label(Path(path)), len(data)):
+                return existing
+            if existing.state == "uploaded":
+                # Somebody else's bytes. Answer as GitHub would have.
+                raise StorageError(f"asset exists: {tag}:{name}", status=422)
+            self.delete(tag, existing.id)
 
     def rename(self, tag: str, asset_id: int, new_name: str, label: str | None = None) -> Asset:
         payload: dict = {"name": new_name}
@@ -1027,11 +1071,18 @@ class GitHubReleaseStore(_BaseStore):
         dest.parent.mkdir(parents=True, exist_ok=True)
         # No Authorization header here on purpose: browser_download_url is
         # public, costs no API quota, and the signed redirect rejects the header.
-        response = self._client.get(
-            asset.download_url,
-            headers={"User-Agent": self._user_agent},
-            follow_redirects=True,
-        )
+        attempt = 0
+        while True:
+            try:
+                response = self._client.get(
+                    asset.download_url,
+                    headers={"User-Agent": self._user_agent},
+                    follow_redirects=True,
+                )
+                break
+            except httpx.TransportError as exc:
+                attempt += 1
+                self._wait_out_drop(attempt, f"download {tag}:{asset.name}", exc)
         if response.status_code != 200:
             raise StorageError(
                 f"download {tag}:{asset.name} -> {response.status_code}",
